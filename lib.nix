@@ -252,12 +252,13 @@ rec {
             paths = lib.concatMap (uuid: tierFn (mkPkgsDeep uuid pkgs)) uuids;
           };
 
+          # Use flat dependencies directly instead of intermediate meta-packages
+          # This avoids issues with build monitoring tools that stop at "irrelevant" intermediate nodes
           mixedPkg = pkgs.symlinkJoin {
             name = "nix-bench-${tierName}-mixed${suffix}";
-            paths = [
-              shallowPkg
-              deepPkg
-            ];
+            paths =
+              lib.concatMap (uuid: map (mkUncached uuid) (tierFn pkgs)) uuids
+              ++ lib.concatMap (uuid: tierFn (mkPkgsDeep uuid pkgs)) uuids;
           };
         in
         {

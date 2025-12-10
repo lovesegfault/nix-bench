@@ -265,7 +265,8 @@ rec {
       mkTierVariants =
         tierName: tierFn: mult:
         let
-          uuids = lib.genList (i: impurity + i) mult;
+          # Use hash to avoid collision when builds run within `mult` seconds of each other
+          uuids = lib.genList (i: builtins.hashString "sha256" "${toString impurity}-${toString i}") mult;
           suffix = lib.optionalString (mult > 1) "-${toString mult}x";
 
           shallowPaths = lib.concatMap (uuid: map (mkUncached uuid) (tierFn pkgs)) uuids;

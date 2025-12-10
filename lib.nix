@@ -124,25 +124,44 @@ rec {
   */
   mkPkgsDeep =
     impurity: pkgs:
+    let
+      inherit (pkgs) lib;
+
+      injectEnv =
+        attrs:
+        attrs
+        // {
+          env = (attrs.env or { }) // {
+            __IMPURE_NIXBENCH = toString impurity;
+          };
+        };
+
+      # We override `mkDerivationFromStdenv` rather than just patching `stdenv.mkDerivation`
+      # because this parameter is preserved through stdenv.override(). This means stdenv
+      # variants like gccStdenv, clangStdenv, and llvmPackages.stdenv automatically inherit
+      # our cache-busting without needing to patch each one individually.
+      origMkDerivationFromStdenv =
+        stdenv:
+        (import "${pkgs.path}/pkgs/stdenv/generic/make-derivation.nix" {
+          inherit lib;
+          config = pkgs.config or { };
+        } stdenv).mkDerivation;
+
+      patchedMkDerivationFromStdenv =
+        stdenv:
+        let
+          origMkDeriv = origMkDerivationFromStdenv stdenv;
+        in
+        args:
+        let
+          newArgs =
+            if builtins.isFunction args then finalAttrs: injectEnv (args finalAttrs) else injectEnv args;
+        in
+        origMkDeriv newArgs;
+    in
     pkgs.extend (
       _final: prev: {
-        stdenv = prev.stdenv // {
-          mkDerivation =
-            args:
-            let
-              injectEnv =
-                attrs:
-                attrs
-                // {
-                  env = (attrs.env or { }) // {
-                    __IMPURE_NIXBENCH = toString impurity;
-                  };
-                };
-              newArgs =
-                if builtins.isFunction args then finalAttrs: injectEnv (args finalAttrs) else injectEnv args;
-            in
-            prev.stdenv.mkDerivation newArgs;
-        };
+        stdenv = prev.stdenv.override { mkDerivationFromStdenv = patchedMkDerivationFromStdenv; };
       }
     );
 

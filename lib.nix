@@ -125,7 +125,7 @@ rec {
   mkPkgsDeep =
     impurity: pkgs:
     pkgs.extend (
-      _: prev: {
+      _final: prev: {
         stdenv = prev.stdenv // {
           mkDerivation =
             args:

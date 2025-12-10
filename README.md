@@ -11,32 +11,6 @@ nix-bench provides two cache-busting strategies for benchmarking:
 
 Fixed-output derivations (fetchurl, fetchFromGitHub, etc.) are content-addressed and always use the cache - only actual builds are affected.
 
-## Quick Start
-
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nix-bench.url = "github:lovesegfault/nix-bench";
-  };
-
-  outputs = { nixpkgs, nix-bench, ... }:
-    let
-      pkgs = import nixpkgs { system = "x86_64-linux"; };
-      bench = nix-bench.lib.mkNixBench { inherit pkgs; };
-    in {
-      packages.x86_64-linux = {
-        # Individual packages with cache-busting
-        hello-shallow = bench.shallowPkgs.hello;
-        firefox-deep = bench.deepPkgs.firefox;
-        chromium-browser = bench.shallowPkgs.chromium.browser;
-
-        # Or use tiered benchmark sets
-      } // bench.mkTieredPackages { };
-    };
-}
-```
-
 ## Usage
 
 ### Building Individual Packages
@@ -80,6 +54,33 @@ Package naming: `{tier}-{kind}[-{multiplier}x]`
 | large  | medium + clang, gcc, firefox, rustc, chromium, kernel, libreoffice |
 
 ## API Reference
+
+### Quick Start
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nix-bench.url = "github:lovesegfault/nix-bench";
+  };
+
+  outputs = { nixpkgs, nix-bench, ... }:
+    let
+      pkgs = import nixpkgs { system = "x86_64-linux"; };
+      bench = nix-bench.lib.mkNixBench { inherit pkgs; };
+    in {
+      packages.x86_64-linux = {
+        # Individual packages with cache-busting
+        hello-shallow = bench.shallowPkgs.hello;
+        firefox-deep = bench.deepPkgs.firefox;
+        chromium-browser = bench.shallowPkgs.chromium.browser;
+
+        # Or use tiered benchmark sets
+      } // bench.mkTieredPackages { };
+    };
+}
+```
+
 
 ### `mkNixBench { pkgs, impurity? }`
 

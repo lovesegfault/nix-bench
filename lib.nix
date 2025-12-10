@@ -242,23 +242,24 @@ rec {
           uuids = lib.genList (i: impurity + i) mult;
           suffix = lib.optionalString (mult > 1) "-${toString mult}x";
 
+          shallowPaths = lib.concatMap (uuid: map (mkUncached uuid) (tierFn pkgs)) uuids;
+          deepPaths = lib.concatMap (uuid: tierFn (mkPkgsDeep uuid pkgs)) uuids;
+
           shallowPkg = pkgs.symlinkJoin {
             name = "nix-bench-${tierName}-shallow${suffix}";
-            paths = lib.concatMap (uuid: map (mkUncached uuid) (tierFn pkgs)) uuids;
+            paths = shallowPaths;
           };
 
           deepPkg = pkgs.symlinkJoin {
             name = "nix-bench-${tierName}-deep${suffix}";
-            paths = lib.concatMap (uuid: tierFn (mkPkgsDeep uuid pkgs)) uuids;
+            paths = deepPaths;
           };
 
           # Use flat dependencies directly instead of intermediate meta-packages
           # This avoids issues with build monitoring tools that stop at "irrelevant" intermediate nodes
           mixedPkg = pkgs.symlinkJoin {
             name = "nix-bench-${tierName}-mixed${suffix}";
-            paths =
-              lib.concatMap (uuid: map (mkUncached uuid) (tierFn pkgs)) uuids
-              ++ lib.concatMap (uuid: tierFn (mkPkgsDeep uuid pkgs)) uuids;
+            paths = shallowPaths ++ deepPaths;
           };
         in
         {

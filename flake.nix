@@ -87,11 +87,15 @@
             # Development shell
             devShells.default = pkgs.mkShell {
               name = "nix-bench";
-              nativeBuildInputs = [
-                config.treefmt.build.wrapper
-              ]
-              ++ (builtins.attrValues config.treefmt.build.programs)
-              ++ config.pre-commit.settings.enabledPackages;
+              nativeBuildInputs =
+                with pkgs;
+                [
+                  nix-eval-jobs
+
+                ]
+                ++ [ config.treefmt.build.wrapper ]
+                ++ (builtins.attrValues config.treefmt.build.programs)
+                ++ config.pre-commit.settings.enabledPackages;
               shellHook = ''
                 ${config.pre-commit.installationScript}
               '';

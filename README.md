@@ -4,10 +4,11 @@ A Nix library for benchmarking Nix build systems by generating cache-busted pack
 
 ## Overview
 
-nix-bench provides two cache-busting strategies for benchmarking:
+nix-bench provides three cache-busting strategies for benchmarking:
 
 - **Shallow**: Only the target package is rebuilt; dependencies use the cache
 - **Deep**: The target AND all its dependencies are rebuilt
+- **Mixed**: Combines shallow and deep variants in a single package
 
 Fixed-output derivations (fetchurl, fetchFromGitHub, etc.) are content-addressed and always use the cache - only actual builds are affected.
 
@@ -53,6 +54,38 @@ Package naming: `{tier}-{kind}[-{multiplier}x]`
 | medium | small + git, curl, vim, python3, openssh, cmake |
 | large  | medium + clang, gcc, firefox, rustc, chromium, kernel, libreoffice |
 
+### Multipliers
+
+Multipliers scale package count by duplicating packages with unique cache-busting values:
+
+| Tier   | Base | 2x  | 4x  | 8x   | 16x  |
+|--------|------|-----|-----|------|------|
+| small  | 5    | 10  | 20  | 40   | 80   |
+| medium | 11   | 22  | 44  | 88   | 176  |
+| large  | 18   | 36  | 72  | 144  | 288  |
+
+Each duplicated package has a unique impurity value, ensuring all instances rebuild independently.
+
+### Strategy Selection
+
+| Strategy | Use When | Build Cost |
+|----------|----------|------------|
+| **Shallow** | Measuring single-package build time | Low |
+| **Deep** | Benchmarking full dependency rebuilds | High |
+| **Mixed** | Strenuous stress testing | Extreme |
+
+### Direct Package Access
+
+Access any nixpkgs attribute directly with cache-busting via `legacyPackages`:
+
+```bash
+# Any package from nixpkgs with shallow cache-busting
+nix build .#legacyPackages.x86_64-linux.shallow.python3Packages.numpy --impure
+
+# Any package with deep cache-busting
+nix build .#legacyPackages.x86_64-linux.deep.nodePackages.typescript --impure
+```
+
 ## API Reference
 
 ### Quick Start
@@ -89,7 +122,7 @@ Create a nix-bench instance with captured pkgs and impurity value.
 Returns:
 - `shallowPkgs` - pkgs mirror; any access returns a shallow cache-busted package
 - `deepPkgs` - pkgs mirror; any access rebuilds the entire dependency tree
-- `cacheBust` - function: `pkg -> cache-busted pkg`
+- `cacheBust` - apply shallow cache-busting to a single derivation
 - `mkTieredPackages` - generate benchmark package sets
 - `defaultTiers` - default tier definitions
 
@@ -150,6 +183,7 @@ Source fetchers (fetchurl, fetchFromGitHub, etc.) produce fixed-output derivatio
 
 - Nix with flakes enabled
 - `--impure` flag required for cache-busting (uses `builtins.currentTime`)
+- **Supported systems**: x86_64-linux, aarch64-linux
 
 ## Development
 

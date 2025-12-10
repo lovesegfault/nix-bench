@@ -210,6 +210,10 @@ rec {
 
       # Lazy wrapper that cache-busts packages on access.
       # Handles nested attrs like chromium.browser correctly.
+      #
+      # The merge (`//`) below replaces sub-package attrs with wrapped versions.
+      # Without this, `shallowPkgs.chromium.browser` would return the original
+      # uncached browser since cacheBust only modifies the top-level derivation.
       shallowPkgs =
         let
           wrap =

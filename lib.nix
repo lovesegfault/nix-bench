@@ -229,11 +229,14 @@ rec {
         in
         wrap pkgs;
 
-      # Resolve "foo.bar.baz" -> pkgs.foo.bar.baz
-      resolvePkg = path: lib.getAttrFromPath (lib.splitString "." path) pkgs;
-
       # Normalize tier: accept list of attr paths or function
-      normalizeTier = tier: if builtins.isFunction tier then tier else _: map resolvePkg tier;
+      # Returns a function: pkgs -> [derivations]
+      normalizeTier =
+        tier:
+        if builtins.isFunction tier then
+          tier
+        else
+          p: map (path: lib.getAttrFromPath (lib.splitString "." path) p) tier;
 
       # Generate {shallow,deep,mixed} variants for one tier at one multiplier
       mkTierVariants =

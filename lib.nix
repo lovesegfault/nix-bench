@@ -253,7 +253,7 @@ rec {
         wrap pkgs;
 
       # Normalize tier: accept list of attr paths or function
-      # Returns a function: pkgs -> [derivations]
+      # Type: (List String | (Pkgs -> List Derivation)) -> (Pkgs -> List Derivation)
       normalizeTier =
         tier:
         if builtins.isFunction tier then

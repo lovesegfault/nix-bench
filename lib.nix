@@ -360,7 +360,7 @@ rec {
   /**
     Default impurity value using `builtins.currentTime`.
 
-    Falls back to 0 with a warning in pure evaluation mode.
+    Throws in pure evaluation mode to prevent silently broken benchmarks.
     Use `--impure` flag with nix commands for cache-busting to work.
 
     # Type
@@ -371,5 +371,5 @@ rec {
   */
   defaultImpurity =
     builtins.currentTime
-      or (builtins.warn "nix-bench: pure eval mode, pass --impure for cache-busting" 0);
+      or (throw "nix-bench: requires --impure flag (builtins.currentTime unavailable in pure eval mode)");
 }

@@ -16,58 +16,60 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             let symbol = status_symbol(state.status);
             let color = status_color(state.status);
 
-            // Progress bar
-            let progress = if state.total_runs > 0 {
-                let filled = (state.run_progress as f64 / state.total_runs as f64 * 10.0) as usize;
-                let empty = 10 - filled;
-                format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+            // Progress bar (10 chars)
+            let progress_pct = if state.total_runs > 0 {
+                state.run_progress as f64 / state.total_runs as f64
             } else {
-                "[░░░░░░░░░░]".to_string()
+                0.0
+            };
+            let filled = (progress_pct * 10.0) as usize;
+            let empty = 10 - filled;
+            let progress_bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+
+            // Arch indicator
+            let arch = if state.system.contains("aarch64") {
+                "ARM"
+            } else {
+                "x86"
             };
 
-            let text = format!(
-                "{} {:<20} {}",
-                symbol, instance_type, progress
-            );
+            // Format: symbol instance_type [progress] arch runs
+            let line = Line::from(vec![
+                Span::styled(format!("{} ", symbol), Style::default().fg(color)),
+                Span::raw(format!("{:<18} ", truncate_instance_type(instance_type))),
+                Span::styled(progress_bar, Style::default().fg(color)),
+                Span::raw(format!(" {} ", arch)),
+                Span::styled(
+                    format!("{}/{}", state.run_progress, state.total_runs),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
 
-            let style = Style::default().fg(color);
-            ListItem::new(text).style(style)
+            ListItem::new(line)
         })
         .collect();
 
+    let title = format!(" Instances ({}) ", app.instances.len());
     let list = List::new(items)
-        .block(
-            Block::default()
-                .title(" Instances ")
-                .borders(Borders::ALL),
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray).bold())
         .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
     list_state.select(Some(app.selected_index));
 
     frame.render_stateful_widget(list, area, &mut list_state);
+}
 
-    // Render legend at bottom of list area
-    let legend_area = Rect {
-        x: area.x + 1,
-        y: area.y + area.height - 2,
-        width: area.width - 2,
-        height: 1,
-    };
-
-    if legend_area.y > area.y + 2 {
-        let legend = Line::from(vec![
-            Span::styled("● ", Style::default().fg(Color::Blue)),
-            Span::raw("Running  "),
-            Span::styled("○ ", Style::default().fg(Color::Gray)),
-            Span::raw("Pending  "),
-            Span::styled("✓ ", Style::default().fg(Color::Green)),
-            Span::raw("Done  "),
-            Span::styled("✗ ", Style::default().fg(Color::Red)),
-            Span::raw("Failed"),
-        ]);
-        frame.render_widget(legend, legend_area);
+/// Truncate instance type to fit in display
+fn truncate_instance_type(s: &str) -> String {
+    if s.len() <= 18 {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..17])
     }
 }

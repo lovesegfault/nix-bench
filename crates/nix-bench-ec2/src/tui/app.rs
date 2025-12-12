@@ -9,7 +9,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 /// Application state
@@ -19,6 +19,9 @@ pub struct App {
     pub instance_order: Vec<String>,
     pub should_quit: bool,
     pub total_runs: u32,
+    pub start_time: Instant,
+    pub last_update: Instant,
+    pub show_help: bool,
 }
 
 impl App {
@@ -26,13 +29,82 @@ impl App {
         let mut instance_order: Vec<String> = instances.keys().cloned().collect();
         instance_order.sort();
 
+        let now = Instant::now();
         Self {
             instances,
             selected_index: 0,
             instance_order,
             should_quit: false,
             total_runs,
+            start_time: now,
+            last_update: now,
+            show_help: false,
         }
+    }
+
+    /// Get elapsed time since start
+    pub fn elapsed(&self) -> Duration {
+        self.start_time.elapsed()
+    }
+
+    /// Format elapsed time as HH:MM:SS
+    pub fn elapsed_str(&self) -> String {
+        let secs = self.elapsed().as_secs();
+        let hours = secs / 3600;
+        let mins = (secs % 3600) / 60;
+        let secs = secs % 60;
+        format!("{:02}:{:02}:{:02}", hours, mins, secs)
+    }
+
+    /// Calculate completion percentage
+    pub fn completion_percentage(&self) -> f64 {
+        let total: u32 = self.instances.len() as u32 * self.total_runs;
+        let completed: u32 = self.instances.values().map(|s| s.run_progress).sum();
+        if total == 0 {
+            0.0
+        } else {
+            (completed as f64 / total as f64) * 100.0
+        }
+    }
+
+    /// Estimate remaining time based on current progress
+    pub fn estimated_remaining(&self) -> Option<Duration> {
+        let completion = self.completion_percentage();
+        if completion <= 0.0 || completion >= 100.0 {
+            return None;
+        }
+
+        let elapsed = self.elapsed().as_secs_f64();
+        let total_estimated = elapsed / (completion / 100.0);
+        let remaining = total_estimated - elapsed;
+
+        if remaining > 0.0 {
+            Some(Duration::from_secs_f64(remaining))
+        } else {
+            None
+        }
+    }
+
+    /// Format estimated remaining as string
+    pub fn estimated_remaining_str(&self) -> String {
+        match self.estimated_remaining() {
+            Some(d) => {
+                let secs = d.as_secs();
+                let mins = secs / 60;
+                let secs = secs % 60;
+                if mins > 0 {
+                    format!("~{}m {}s", mins, secs)
+                } else {
+                    format!("~{}s", secs)
+                }
+            }
+            None => "-".to_string(),
+        }
+    }
+
+    /// Toggle help display
+    pub fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
     }
 
     pub fn selected_instance(&self) -> Option<&InstanceState> {
@@ -59,7 +131,10 @@ impl App {
         })
     }
 
-    pub fn update_from_metrics(&mut self, metrics: &HashMap<String, crate::aws::cloudwatch::InstanceMetrics>) {
+    pub fn update_from_metrics(
+        &mut self,
+        metrics: &HashMap<String, crate::aws::cloudwatch::InstanceMetrics>,
+    ) {
         for (instance_type, m) in metrics {
             if let Some(state) = self.instances.get_mut(instance_type) {
                 if let Some(status) = m.status {
@@ -76,6 +151,7 @@ impl App {
                 state.durations = m.durations.clone();
             }
         }
+        self.last_update = Instant::now();
     }
 
     /// Main event loop
@@ -86,6 +162,14 @@ impl App {
         config: &RunConfig,
     ) -> Result<()> {
         let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        // Set up Ctrl+C handler
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                cancel_clone.cancel();
+            }
+        });
 
         let mut event_stream = crossterm::event::EventStream::new();
         let mut tick_interval = tokio::time::interval(Duration::from_millis(100));
@@ -94,6 +178,11 @@ impl App {
 
         loop {
             tokio::select! {
+                // Check for cancellation (Ctrl+C)
+                _ = cancel.cancelled() => {
+                    self.should_quit = true;
+                }
+
                 // Handle terminal events
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(event)) = maybe_event {
@@ -108,6 +197,15 @@ impl App {
                                     }
                                     KeyCode::Down | KeyCode::Char('j') => {
                                         self.select_next();
+                                    }
+                                    KeyCode::Char('?') | KeyCode::F(1) => {
+                                        self.toggle_help();
+                                    }
+                                    KeyCode::Home => {
+                                        self.selected_index = 0;
+                                    }
+                                    KeyCode::End => {
+                                        self.selected_index = self.instance_order.len().saturating_sub(1);
                                     }
                                     _ => {}
                                 }

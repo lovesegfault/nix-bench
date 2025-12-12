@@ -1,0 +1,15 @@
+# nextest configuration for nix-bench
+
+[profile.default]
+# Increase timeout for integration tests that spin up AWS resources
+slow-timeout = { period = "60s", terminate-after = 3 }
+# Run tests serially to avoid AWS rate limiting
+test-threads = 1
+
+[profile.default.junit]
+path = "target/nextest/default/junit.xml"
+
+[profile.ci]
+# CI profile with longer timeouts
+slow-timeout = { period = "120s", terminate-after = 2 }
+fail-fast = false

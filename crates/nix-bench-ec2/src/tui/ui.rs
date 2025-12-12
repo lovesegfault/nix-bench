@@ -16,7 +16,6 @@ pub fn render(frame: &mut Frame, app: &App) {
             Constraint::Length(1),  // Header/title bar
             Constraint::Min(10),    // Main content
             Constraint::Length(3),  // Aggregate stats
-            Constraint::Length(8),  // Log panel
             Constraint::Length(1),  // Help bar
         ])
         .split(frame.area());
@@ -36,7 +35,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render instance list
     instance_list::render(frame, main_chunks[0], app);
 
-    // Render instance detail
+    // Render instance detail (now includes logs)
     if let Some(instance) = app.selected_instance() {
         instance_detail::render(frame, main_chunks[1], instance, app.total_runs);
     } else {
@@ -52,20 +51,12 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render aggregate stats
     aggregate_stats::render(frame, chunks[2], app);
 
-    // Render console output panel
-    render_log_panel(frame, chunks[3], app);
-
     // Render help bar
-    render_help_bar(frame, chunks[4]);
+    render_help_bar(frame, chunks[3]);
 
     // Render help popup if toggled
     if app.show_help {
         render_help_popup(frame);
-    }
-
-    // Render logs popup if toggled
-    if app.show_logs {
-        render_logs_popup(frame, app);
     }
 }
 
@@ -103,46 +94,6 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(header, area);
 }
 
-/// Render the log panel showing console output for selected instance
-fn render_log_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let instance = app.selected_instance();
-    let instance_type = app
-        .instance_order
-        .get(app.selected_index)
-        .map(|s| s.as_str())
-        .unwrap_or("none");
-
-    let title = format!(" Console: {} ", instance_type);
-
-    let content = if let Some(inst) = instance {
-        if let Some(ref output) = inst.console_output {
-            // Get last N lines of output
-            let lines: Vec<&str> = output.lines().collect();
-            let visible_lines = area.height.saturating_sub(2) as usize;
-            let start = lines.len().saturating_sub(visible_lines);
-            lines[start..].join("\n")
-        } else if inst.instance_id.is_empty() {
-            "Waiting for instance to launch...".to_string()
-        } else {
-            "Waiting for console output... (may take 1-2 minutes)".to_string()
-        }
-    } else {
-        "No instance selected".to_string()
-    };
-
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
-
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .style(Style::default().fg(Color::White))
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, area);
-}
-
 /// Render the help bar at the bottom
 fn render_help_bar(frame: &mut Frame, area: Rect) {
     let help_text = Line::from(vec![
@@ -150,8 +101,6 @@ fn render_help_bar(frame: &mut Frame, area: Rect) {
         Span::raw(" Up "),
         Span::styled(" ↓/j ", Style::default().fg(Color::Black).bg(Color::Gray)),
         Span::raw(" Down "),
-        Span::styled(" l ", Style::default().fg(Color::Black).bg(Color::Gray)),
-        Span::raw(" Logs "),
         Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::Gray)),
         Span::raw(" Help "),
         Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::Gray)),
@@ -217,91 +166,6 @@ fn render_help_popup(frame: &mut Frame) {
         .style(Style::default().bg(Color::Black));
 
     let paragraph = Paragraph::new(help_text).block(block).wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, area);
-}
-
-/// Render logs popup overlay
-fn render_logs_popup(frame: &mut Frame, app: &App) {
-    let area = centered_rect(70, 80, frame.area());
-
-    // Clear the area behind the popup
-    frame.render_widget(Clear, area);
-
-    let instance = app.selected_instance();
-    let instance_type = app
-        .instance_order
-        .get(app.selected_index)
-        .map(|s| s.as_str())
-        .unwrap_or("none");
-
-    let title = format!(" Logs: {} ", instance_type);
-
-    let log_lines = if let Some(inst) = instance {
-        if inst.instance_id.is_empty() {
-            vec![
-                Line::from(""),
-                Line::from("  Instance not yet launched."),
-                Line::from(""),
-                Line::from("  Waiting for initialization to complete..."),
-            ]
-        } else {
-            vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Instance ID: ", Style::default().bold()),
-                    Span::styled(&inst.instance_id, Style::default().fg(Color::Cyan)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  Public IP:   ", Style::default().bold()),
-                    Span::raw(inst.public_ip.as_deref().unwrap_or("pending...")),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  View bootstrap logs:", Style::default().bold()),
-                ]),
-                Line::from(""),
-                Line::from(format!(
-                    "    aws ssm start-session --target {}",
-                    inst.instance_id
-                )),
-                Line::from("    sudo tail -f /var/log/nix-bench-bootstrap.log"),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Or via SSH (if public IP available):", Style::default().bold()),
-                ]),
-                Line::from(""),
-                Line::from(format!(
-                    "    ssh ec2-user@{}",
-                    inst.public_ip.as_deref().unwrap_or("<pending>")
-                )),
-                Line::from("    sudo tail -f /var/log/nix-bench-bootstrap.log"),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  View nix build output:", Style::default().bold()),
-                ]),
-                Line::from(""),
-                Line::from("    journalctl -u nix-bench-agent -f"),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Press 'l' to close", Style::default().fg(Color::DarkGray)),
-                ]),
-            ]
-        }
-    } else {
-        vec![
-            Line::from(""),
-            Line::from("  No instance selected."),
-        ]
-    };
-
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .style(Style::default().bg(Color::Black));
-
-    let paragraph = Paragraph::new(log_lines).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
 }

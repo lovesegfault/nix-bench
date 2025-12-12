@@ -4,7 +4,7 @@ use crate::orchestrator::InstanceState;
 use crate::tui::ui::{status_color, status_symbol};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
 };
 
 pub fn render(frame: &mut Frame, area: Rect, instance: &InstanceState, total_runs: u32) {
@@ -15,13 +15,13 @@ pub fn render(frame: &mut Frame, area: Rect, instance: &InstanceState, total_run
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Split inner area
+    // Split inner area - info, run history, and logs
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5), // Info section
-            Constraint::Length(1), // Separator
-            Constraint::Min(5),    // Run history
+            Constraint::Length(5),  // Info section
+            Constraint::Length(8),  // Run history (compact)
+            Constraint::Min(5),     // Build logs
         ])
         .split(inner);
 
@@ -29,7 +29,10 @@ pub fn render(frame: &mut Frame, area: Rect, instance: &InstanceState, total_run
     render_info(frame, chunks[0], instance);
 
     // Run history table
-    render_run_history(frame, chunks[2], instance, total_runs);
+    render_run_history(frame, chunks[1], instance, total_runs);
+
+    // Build logs
+    render_logs(frame, chunks[2], instance);
 }
 
 fn render_info(frame: &mut Frame, area: Rect, instance: &InstanceState) {
@@ -181,4 +184,30 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
     );
 
     frame.render_widget(table, area);
+}
+
+fn render_logs(frame: &mut Frame, area: Rect, instance: &InstanceState) {
+    let content = if let Some(ref output) = instance.console_output {
+        // Get last N lines that fit
+        let lines: Vec<&str> = output.lines().collect();
+        let visible_lines = area.height.saturating_sub(2) as usize;
+        let start = lines.len().saturating_sub(visible_lines);
+        lines[start..].join("\n")
+    } else if instance.instance_id.is_empty() {
+        "Waiting for instance to launch...".to_string()
+    } else {
+        "Waiting for build logs...".to_string()
+    };
+
+    let block = Block::default()
+        .title(" Build Output ")
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let paragraph = Paragraph::new(content)
+        .block(block)
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(paragraph, area);
 }

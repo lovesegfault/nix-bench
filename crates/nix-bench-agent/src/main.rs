@@ -5,6 +5,7 @@
 
 mod benchmark;
 mod config;
+mod logs;
 mod metrics;
 mod nvme;
 mod results;
@@ -59,27 +60,34 @@ async fn main() -> Result<()> {
     // Initialize AWS clients
     let cloudwatch = metrics::CloudWatchClient::new(&config).await?;
     let s3 = results::S3Client::new(&config).await?;
+    let logs_client = std::sync::Arc::new(logs::LogsClient::new(&config).await?);
 
     // Signal that we're running
     cloudwatch.put_status(metrics::Status::Running).await?;
+    logs_client.write_line(&format!("Starting benchmark: {} runs of {}", config.runs, config.attr)).await?;
 
     let mut run_results = Vec::new();
 
     for run in 1..=config.runs {
         info!(run, total = config.runs, "Starting benchmark run");
         cloudwatch.put_progress(run).await?;
+        logs_client.write_line(&format!("=== Run {}/{} ===", run, config.runs)).await?;
 
         // Clean nix store for consistent baseline
         if let Err(e) = benchmark::nix_collect_garbage() {
             error!(?e, "Failed to collect garbage, continuing anyway");
+            logs_client.write_line(&format!("Warning: garbage collection failed: {}", e)).await?;
         }
 
-        // Run benchmark with timing
+        // Run benchmark with timing and streaming output
         let start = Instant::now();
-        match benchmark::run_nix_build(&config.attr) {
+        let logging_process = logs::LoggingProcess::new(logs_client.clone());
+
+        match benchmark::run_nix_build_with_logging(&config.attr, &logging_process).await {
             Ok(()) => {
                 let duration = start.elapsed();
                 info!(run, duration_secs = duration.as_secs_f64(), "Run completed");
+                logs_client.write_line(&format!("Run {} completed in {:.1}s", run, duration.as_secs_f64())).await?;
 
                 run_results.push(results::RunResult {
                     run,
@@ -91,6 +99,7 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 error!(?e, run, "Build failed");
+                logs_client.write_line(&format!("Run {} FAILED: {}", run, e)).await?;
                 cloudwatch.put_status(metrics::Status::Failed).await?;
                 return Err(e);
             }

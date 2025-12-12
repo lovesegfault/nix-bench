@@ -70,24 +70,26 @@ exec /usr/local/bin/nix-bench-agent --config /etc/nix-bench/config.json
 
 /// Try to find agent binary in common locations
 fn find_agent_binary(arch: &str) -> Option<String> {
+    let target_triple = match arch {
+        "x86_64" => "x86_64-unknown-linux-gnu",
+        "aarch64" => "aarch64-unknown-linux-gnu",
+        _ => return None,
+    };
+
     let candidates = [
-        // Cargo release build
-        format!("target/release/nix-bench-agent"),
-        // Cargo debug build
-        format!("target/debug/nix-bench-agent"),
+        // Cross-compiled release build (cargo build --target)
+        format!("target/{}/release/nix-bench-agent", target_triple),
         // Relative to crates directory
+        format!("../target/{}/release/nix-bench-agent", target_triple),
+        // Native build (only for x86_64 on x86_64 host)
+        format!("target/release/nix-bench-agent"),
         format!("../target/release/nix-bench-agent"),
-        format!("../target/debug/nix-bench-agent"),
     ];
 
     for path in &candidates {
         let p = std::path::Path::new(path);
         if p.exists() {
-            // For x86_64, any local build works
-            // For aarch64, we'd need cross-compiled binary (skip local detection)
-            if arch == "x86_64" {
-                return Some(p.canonicalize().ok()?.to_string_lossy().to_string());
-            }
+            return Some(p.canonicalize().ok()?.to_string_lossy().to_string());
         }
     }
     None

@@ -50,14 +50,16 @@ fn render_info(frame: &mut Frame, area: Rect, instance: &InstanceState) {
         .durations
         .iter()
         .cloned()
-        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .filter(|x| x.is_finite())
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(0.0);
 
     let max_duration = instance
         .durations
         .iter()
         .cloned()
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .filter(|x| x.is_finite())
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(0.0);
 
     let info_text = vec![

@@ -14,8 +14,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = app
         .instance_order
         .iter()
-        .map(|instance_type| {
-            let state = app.instances.get(instance_type).unwrap();
+        .filter_map(|instance_type| {
+            let state = app.instances.get(instance_type)?;
             let symbol = status_symbol(state.status);
             let color = status_color(state.status);
 
@@ -34,7 +34,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled(runs_str, Style::default().fg(Color::DarkGray)),
             ]);
 
-            ListItem::new(line)
+            Some(ListItem::new(line))
         })
         .collect();
 

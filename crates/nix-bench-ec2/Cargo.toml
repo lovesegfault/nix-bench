@@ -13,6 +13,7 @@ aws-sdk-ec2.workspace = true
 aws-sdk-cloudwatch.workspace = true
 aws-sdk-cloudwatchlogs.workspace = true
 aws-sdk-s3.workspace = true
+aws-sdk-iam.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -44,4 +45,6 @@ uuid = { version = "1", features = ["v7"] }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-ec2 = "1"
 aws-sdk-s3 = "1"
+aws-sdk-iam = "1"
 base64 = "0.22"
+urlencoding = "2"

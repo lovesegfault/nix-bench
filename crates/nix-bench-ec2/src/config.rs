@@ -2,6 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Default flake reference for nix-bench
+pub const DEFAULT_FLAKE_REF: &str = "github:lovesegfault/nix-bench";
+
+/// Default build timeout in seconds (2 hours)
+pub const DEFAULT_BUILD_TIMEOUT: u64 = 7200;
+
+/// Default max failures before giving up
+pub const DEFAULT_MAX_FAILURES: u32 = 3;
+
 /// Configuration for a benchmark run
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -47,6 +56,15 @@ pub struct RunConfig {
 
     /// Dry run mode - validate without launching
     pub dry_run: bool,
+
+    /// Flake reference base (e.g., "github:lovesegfault/nix-bench")
+    pub flake_ref: String,
+
+    /// Build timeout in seconds per run
+    pub build_timeout: u64,
+
+    /// Maximum number of build failures before giving up
+    pub max_failures: u32,
 }
 
 /// Configuration sent to the agent
@@ -59,6 +77,27 @@ pub struct AgentConfig {
     pub runs: u32,
     pub instance_type: String,
     pub system: String,
+    /// Flake reference base (e.g., "github:lovesegfault/nix-bench")
+    #[serde(default = "default_flake_ref")]
+    pub flake_ref: String,
+    /// Build timeout in seconds
+    #[serde(default = "default_build_timeout")]
+    pub build_timeout: u64,
+    /// Maximum number of build failures before giving up
+    #[serde(default = "default_max_failures")]
+    pub max_failures: u32,
+}
+
+fn default_flake_ref() -> String {
+    DEFAULT_FLAKE_REF.to_string()
+}
+
+fn default_build_timeout() -> u64 {
+    DEFAULT_BUILD_TIMEOUT
+}
+
+fn default_max_failures() -> u32 {
+    DEFAULT_MAX_FAILURES
 }
 
 /// Detect system architecture from instance type

@@ -5,7 +5,7 @@ use crate::config::RunConfig;
 use crate::orchestrator::{InstanceState, InstanceStatus};
 use crate::tui::ui;
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 pub enum InitPhase {
     Starting,
     CreatingBucket,
+    CreatingIamRole,
     UploadingAgents,
     LaunchingInstances,
     WaitingForInstances,
@@ -30,6 +31,7 @@ impl InitPhase {
         match self {
             InitPhase::Starting => "Starting...",
             InitPhase::CreatingBucket => "Creating S3 bucket...",
+            InitPhase::CreatingIamRole => "Creating IAM role...",
             InitPhase::UploadingAgents => "Uploading agent binaries...",
             InitPhase::LaunchingInstances => "Launching EC2 instances...",
             InitPhase::WaitingForInstances => "Waiting for instances to start...",
@@ -53,6 +55,8 @@ pub struct App {
     pub init_phase: InitPhase,
     pub run_id: Option<String>,
     pub bucket_name: Option<String>,
+    /// Area where the instance list is rendered (for mouse clicks)
+    pub instance_list_area: Option<Rect>,
 }
 
 impl App {
@@ -96,6 +100,7 @@ impl App {
             init_phase: InitPhase::Starting,
             run_id: None,
             bucket_name: None,
+            instance_list_area: None,
         }
     }
 
@@ -116,6 +121,7 @@ impl App {
             init_phase: InitPhase::Running,
             run_id: None,
             bucket_name: None,
+            instance_list_area: None,
         }
     }
 
@@ -209,6 +215,42 @@ impl App {
     pub fn select_previous(&mut self) {
         if self.selected_index > 0 {
             self.selected_index -= 1;
+        }
+    }
+
+    /// Handle a mouse click at the given position
+    /// Returns true if the click was in the instance list area
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
+        if let Some(area) = self.instance_list_area {
+            // Check if click is within the instance list area (excluding borders)
+            let content_x = area.x + 1;
+            let content_y = area.y + 1;
+            let content_width = area.width.saturating_sub(2);
+            let content_height = area.height.saturating_sub(2);
+
+            if x >= content_x
+                && x < content_x + content_width
+                && y >= content_y
+                && y < content_y + content_height
+            {
+                // Each instance is 1 row tall in the List widget
+                let clicked_index = (y - content_y) as usize;
+
+                if clicked_index < self.instance_order.len() {
+                    self.selected_index = clicked_index;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Handle mouse scroll - scrolls instance list
+    pub fn handle_mouse_scroll(&mut self, down: bool) {
+        if down {
+            self.select_next();
+        } else {
+            self.select_previous();
         }
     }
 
@@ -312,8 +354,8 @@ impl App {
                 // Handle terminal events
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(event)) = maybe_event {
-                        if let Event::Key(key) = event {
-                            if key.kind == KeyEventKind::Press {
+                        match event {
+                            Event::Key(key) if key.kind == KeyEventKind::Press => {
                                 match key.code {
                                     KeyCode::Char('q') | KeyCode::Esc => {
                                         self.should_quit = true;
@@ -336,6 +378,21 @@ impl App {
                                     _ => {}
                                 }
                             }
+                            Event::Mouse(mouse) => {
+                                match mouse.kind {
+                                    MouseEventKind::Down(MouseButton::Left) => {
+                                        self.handle_mouse_click(mouse.column, mouse.row);
+                                    }
+                                    MouseEventKind::ScrollDown => {
+                                        self.handle_mouse_scroll(true);
+                                    }
+                                    MouseEventKind::ScrollUp => {
+                                        self.handle_mouse_scroll(false);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }

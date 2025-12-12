@@ -7,7 +7,8 @@ use aws_sdk_ec2::{
     },
     Client,
 };
-use tracing::{debug, info};
+use std::time::Duration;
+use tracing::{debug, info, warn};
 
 /// EC2 client for managing benchmark instances
 #[allow(dead_code)]
@@ -195,10 +196,47 @@ impl Ec2Client {
         })
     }
 
-    /// Wait for an instance to be running and get its public IP
-    pub async fn wait_for_running(&self, instance_id: &str) -> Result<Option<String>> {
-        info!(instance_id = %instance_id, "Waiting for instance to be running");
+    /// Default timeout for waiting for instance to be running (10 minutes)
+    const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 600;
 
+    /// Wait for an instance to be running and get its public IP
+    ///
+    /// # Arguments
+    /// * `instance_id` - The instance ID to wait for
+    /// * `timeout_secs` - Optional timeout in seconds (default: 600 = 10 minutes)
+    pub async fn wait_for_running(
+        &self,
+        instance_id: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<Option<String>> {
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(Self::DEFAULT_WAIT_TIMEOUT_SECS));
+        info!(
+            instance_id = %instance_id,
+            timeout_secs = timeout.as_secs(),
+            "Waiting for instance to be running"
+        );
+
+        let result = tokio::time::timeout(timeout, self.wait_for_running_inner(instance_id)).await;
+
+        match result {
+            Ok(inner_result) => inner_result,
+            Err(_) => {
+                warn!(
+                    instance_id = %instance_id,
+                    timeout_secs = timeout.as_secs(),
+                    "Timed out waiting for instance to be running"
+                );
+                Err(anyhow::anyhow!(
+                    "Timeout waiting for instance {} to be running after {}s",
+                    instance_id,
+                    timeout.as_secs()
+                ))
+            }
+        }
+    }
+
+    /// Inner wait loop without timeout (used by wait_for_running)
+    async fn wait_for_running_inner(&self, instance_id: &str) -> Result<Option<String>> {
         loop {
             let response = self
                 .client
@@ -227,10 +265,14 @@ impl Ec2Client {
                 }
                 InstanceStateName::Pending => {
                     debug!(instance_id = %instance_id, "Instance still pending");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                 }
                 _ => {
-                    anyhow::bail!("Instance {} entered unexpected state: {:?}", instance_id, state);
+                    anyhow::bail!(
+                        "Instance {} entered unexpected state: {:?}",
+                        instance_id,
+                        state
+                    );
                 }
             }
         }

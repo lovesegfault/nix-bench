@@ -83,6 +83,18 @@ enum Command {
         /// Validate configuration without launching instances
         #[arg(long)]
         dry_run: bool,
+
+        /// Flake reference base (e.g., "github:lovesegfault/nix-bench")
+        #[arg(long, default_value = config::DEFAULT_FLAKE_REF)]
+        flake_ref: String,
+
+        /// Build timeout in seconds per run
+        #[arg(long, default_value_t = config::DEFAULT_BUILD_TIMEOUT)]
+        build_timeout: u64,
+
+        /// Maximum number of build failures before giving up
+        #[arg(long, default_value_t = config::DEFAULT_MAX_FAILURES)]
+        max_failures: u32,
     },
 
     /// Manage local state and AWS resources
@@ -147,6 +159,9 @@ async fn main() -> Result<()> {
             security_group_id,
             instance_profile,
             dry_run,
+            flake_ref,
+            build_timeout,
+            max_failures,
         } => {
             let instance_types: Vec<String> =
                 instances.split(',').map(|s| s.trim().to_string()).collect();
@@ -156,6 +171,9 @@ async fn main() -> Result<()> {
                 attr = %attr,
                 runs,
                 region = %region,
+                flake_ref = %flake_ref,
+                build_timeout,
+                max_failures,
                 "Starting benchmark run"
             );
 
@@ -174,6 +192,9 @@ async fn main() -> Result<()> {
                 security_group_id,
                 instance_profile,
                 dry_run,
+                flake_ref,
+                build_timeout,
+                max_failures,
             };
 
             orchestrator::run_benchmarks(config).await?;

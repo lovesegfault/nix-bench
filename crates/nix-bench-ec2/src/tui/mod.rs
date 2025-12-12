@@ -1,7 +1,6 @@
 //! TUI dashboard for benchmark monitoring
 
 mod app;
-mod events;
 mod ui;
 pub mod widgets;
 

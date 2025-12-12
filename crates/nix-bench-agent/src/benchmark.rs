@@ -23,11 +23,15 @@ pub fn nix_collect_garbage() -> Result<()> {
 }
 
 /// Run nix build for the specified attribute (blocking, no streaming)
+///
+/// # Arguments
+/// * `flake_base` - Base flake reference (e.g., "github:lovesegfault/nix-bench")
+/// * `attr` - Attribute to build (e.g., "large-deep")
 #[allow(dead_code)]
-pub fn run_nix_build(attr: &str) -> Result<()> {
-    info!(attr, "Running nix build");
+pub fn run_nix_build(flake_base: &str, attr: &str) -> Result<()> {
+    info!(flake_base, attr, "Running nix build");
 
-    let flake_ref = format!("github:lovesegfault/nix-bench#{}", attr);
+    let flake_ref = format!("{}#{}", flake_base, attr);
 
     let status = Command::new("nix")
         .args([
@@ -35,7 +39,9 @@ pub fn run_nix_build(attr: &str) -> Result<()> {
             &flake_ref,
             "--impure",
             "--no-link",
-            "--print-build-logs",
+            "-L",
+            "--log-format",
+            "raw",
         ])
         .status()
         .context("Failed to run nix build")?;
@@ -48,15 +54,35 @@ pub fn run_nix_build(attr: &str) -> Result<()> {
 }
 
 /// Run nix build with streaming output to CloudWatch Logs
-pub async fn run_nix_build_with_logging(attr: &str, logging: &LoggingProcess) -> Result<()> {
-    info!(attr, "Running nix build with log streaming");
+///
+/// # Arguments
+/// * `flake_base` - Base flake reference (e.g., "github:lovesegfault/nix-bench")
+/// * `attr` - Attribute to build (e.g., "large-deep")
+/// * `logging` - Logging process for streaming output
+/// * `timeout_secs` - Optional timeout in seconds
+pub async fn run_nix_build_with_logging(
+    flake_base: &str,
+    attr: &str,
+    logging: &LoggingProcess,
+    timeout_secs: Option<u64>,
+) -> Result<()> {
+    info!(flake_base, attr, "Running nix build with log streaming");
 
-    let flake_ref = format!("github:lovesegfault/nix-bench#{}", attr);
+    let flake_ref = format!("{}#{}", flake_base, attr);
 
     let success = logging
         .run_command(
             "nix",
-            &["build", &flake_ref, "--impure", "--no-link", "--print-build-logs"],
+            &[
+                "build",
+                &flake_ref,
+                "--impure",
+                "--no-link",
+                "-L",
+                "--log-format",
+                "raw",
+            ],
+            timeout_secs,
         )
         .await?;
 

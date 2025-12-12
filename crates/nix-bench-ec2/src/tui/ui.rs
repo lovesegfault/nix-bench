@@ -10,7 +10,7 @@ use ratatui::{
 use tui_logger::TuiLoggerWidget;
 
 /// Render the entire UI
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -34,6 +34,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         ])
         .split(chunks[1]);
 
+    // Store the instance list area for mouse click handling
+    app.instance_list_area = Some(main_chunks[0]);
+
     // Render instance list
     instance_list::render(frame, main_chunks[0], app);
 
@@ -53,7 +56,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render aggregate stats
     aggregate_stats::render(frame, chunks[2], app);
 
-    // Render tracing logs (scrollable)
+    // Render tracing logs (auto-scrolls to latest)
     render_tracing_logs(frame, chunks[3]);
 
     // Render help bar
@@ -99,7 +102,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(header, area);
 }
 
-/// Render tracing logs widget
+/// Render tracing logs widget (auto-scrolls to latest)
 fn render_tracing_logs(frame: &mut Frame, area: Rect) {
     let widget = TuiLoggerWidget::default()
         .block(
@@ -116,6 +119,8 @@ fn render_tracing_logs(frame: &mut Frame, area: Rect) {
 /// Render the help bar at the bottom
 fn render_help_bar(frame: &mut Frame, area: Rect) {
     let help_text = Line::from(vec![
+        Span::styled(" Mouse ", Style::default().fg(Color::Black).bg(Color::Gray)),
+        Span::raw(" Click/Scroll "),
         Span::styled(" ↑/k ", Style::default().fg(Color::Black).bg(Color::Gray)),
         Span::raw(" Up "),
         Span::styled(" ↓/j ", Style::default().fg(Color::Black).bg(Color::Gray)),
@@ -151,6 +156,13 @@ fn render_help_popup(frame: &mut Frame) {
         Line::from("  ? / F1       Toggle this help"),
         Line::from("  q / Esc      Quit (cleanup resources)"),
         Line::from("  Ctrl+C       Force quit (cleanup resources)"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Mouse", Style::default().bold()),
+        ]),
+        Line::from(""),
+        Line::from("  Left click   Select instance"),
+        Line::from("  Scroll       Navigate instances"),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Status Icons", Style::default().bold()),

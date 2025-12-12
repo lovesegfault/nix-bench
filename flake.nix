@@ -61,7 +61,9 @@
                 ];
                 targets = [
                   "x86_64-unknown-linux-gnu"
+                  "x86_64-unknown-linux-musl"
                   "aarch64-unknown-linux-gnu"
+                  "aarch64-unknown-linux-musl"
                 ];
               };
 
@@ -123,13 +125,13 @@
               }
             );
 
-            # Cross-compilation for aarch64 (only on x86_64)
+            # Cross-compilation for aarch64 with musl (static linking, only on x86_64)
             nix-bench-agent-aarch64 =
               if system == "x86_64-linux" then
                 let
                   crossPkgs = import nixpkgs {
                     inherit system;
-                    crossSystem.config = "aarch64-unknown-linux-gnu";
+                    crossSystem.config = "aarch64-unknown-linux-musl";
                     overlays = [ inputs.rust-overlay.overlays.default ];
                   };
                   crossCraneLib = (inputs.crane.mkLib crossPkgs).overrideToolchain mkRustToolchain;
@@ -138,11 +140,13 @@
                     strictDeps = true;
                     pname = "nix-bench-agent-aarch64";
                     version = "0.1.0";
-                    CARGO_BUILD_TARGET = "aarch64-unknown-linux-gnu";
-                    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "${crossPkgs.stdenv.cc.targetPrefix}cc";
+                    CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
+                    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "${crossPkgs.stdenv.cc.targetPrefix}cc";
+                    # Build static binary
+                    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-C target-feature=+crt-static";
                     HOST_CC = "${pkgs.stdenv.cc.nativePrefix}cc";
                     buildInputs = with crossPkgs; [
-                      openssl
+                      openssl.dev
                       sqlite
                     ];
                     nativeBuildInputs = with pkgs; [
@@ -151,6 +155,10 @@
                     depsBuildBuild = with pkgs; [
                       stdenv.cc
                     ];
+                    # Use static OpenSSL
+                    OPENSSL_STATIC = "1";
+                    OPENSSL_LIB_DIR = "${crossPkgs.openssl.out}/lib";
+                    OPENSSL_INCLUDE_DIR = "${crossPkgs.openssl.dev}/include";
                   };
                 in
                 crossCraneLib.buildPackage (
@@ -255,12 +263,14 @@
               };
             };
 
-            # Development shell with cross-compilation support
+            # Development shell with cross-compilation support (musl for static binaries)
             devShells.default =
               let
-                # Cross-compilation toolchain for aarch64
-                crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
-                aarch64Cc = crossPkgs.stdenv.cc;
+                # Musl cross-compilation toolchains for static binaries
+                aarch64MuslPkgs = pkgs.pkgsCross.aarch64-multiplatform-musl;
+                x86_64MuslPkgs = pkgs.pkgsCross.musl64;
+                aarch64MuslCc = aarch64MuslPkgs.stdenv.cc;
+                x86_64MuslCc = x86_64MuslPkgs.stdenv.cc;
               in
               pkgs.mkShell {
                 name = "nix-bench";
@@ -290,7 +300,7 @@
                   ${config.pre-commit.installationScript}
                   echo "nix-bench dev shell"
                   echo ""
-                  echo "  cargo agent      - Build agents (x86_64 + aarch64)"
+                  echo "  cargo agent      - Build agents (x86_64 + aarch64, static musl)"
                   echo "  cargo r run ...  - Run coordinator"
                   echo "  cargo t          - Run tests"
                   echo ""
@@ -298,11 +308,17 @@
 
                 RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
-                # Cross-compilation environment for aarch64
-                CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}cc";
-                CC_aarch64_unknown_linux_gnu = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}cc";
-                CXX_aarch64_unknown_linux_gnu = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}c++";
-                AR_aarch64_unknown_linux_gnu = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}ar";
+                # Cross-compilation environment for aarch64-musl (static linking)
+                CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "${aarch64MuslCc}/bin/${aarch64MuslCc.targetPrefix}cc";
+                CC_aarch64_unknown_linux_musl = "${aarch64MuslCc}/bin/${aarch64MuslCc.targetPrefix}cc";
+                CXX_aarch64_unknown_linux_musl = "${aarch64MuslCc}/bin/${aarch64MuslCc.targetPrefix}c++";
+                AR_aarch64_unknown_linux_musl = "${aarch64MuslCc}/bin/${aarch64MuslCc.targetPrefix}ar";
+
+                # Cross-compilation environment for x86_64-musl (static linking)
+                CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "${x86_64MuslCc}/bin/${x86_64MuslCc.targetPrefix}cc";
+                CC_x86_64_unknown_linux_musl = "${x86_64MuslCc}/bin/${x86_64MuslCc.targetPrefix}cc";
+                CXX_x86_64_unknown_linux_musl = "${x86_64MuslCc}/bin/${x86_64MuslCc.targetPrefix}c++";
+                AR_x86_64_unknown_linux_musl = "${x86_64MuslCc}/bin/${x86_64MuslCc.targetPrefix}ar";
 
                 # Ensure native CC is used for build scripts
                 HOST_CC = "${pkgs.stdenv.cc}/bin/cc";

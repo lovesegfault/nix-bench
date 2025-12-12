@@ -8,6 +8,9 @@ use ratatui::{
 };
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    // Calculate available width (minus borders and highlight symbol)
+    let available_width = area.width.saturating_sub(5) as usize;
+
     let items: Vec<ListItem> = app
         .instance_order
         .iter()
@@ -16,33 +19,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             let symbol = status_symbol(state.status);
             let color = status_color(state.status);
 
-            // Progress bar (10 chars)
-            let progress_pct = if state.total_runs > 0 {
-                state.run_progress as f64 / state.total_runs as f64
-            } else {
-                0.0
-            };
-            let filled = (progress_pct * 10.0) as usize;
-            let empty = 10 - filled;
-            let progress_bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+            // Compact format: symbol instance_type runs
+            // e.g., "● c8g.48xlarge 3/10"
+            let runs_str = format!("{}/{}", state.run_progress, state.total_runs);
+            let max_name_len = available_width.saturating_sub(runs_str.len() + 4); // symbol + spaces
 
-            // Arch indicator
-            let arch = if state.system.contains("aarch64") {
-                "ARM"
-            } else {
-                "x86"
-            };
-
-            // Format: symbol instance_type [progress] arch runs
             let line = Line::from(vec![
                 Span::styled(format!("{} ", symbol), Style::default().fg(color)),
-                Span::raw(format!("{:<18} ", truncate_instance_type(instance_type))),
-                Span::styled(progress_bar, Style::default().fg(color)),
-                Span::raw(format!(" {} ", arch)),
-                Span::styled(
-                    format!("{}/{}", state.run_progress, state.total_runs),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::raw(format!(
+                    "{:<width$} ",
+                    truncate_instance_type(instance_type, max_name_len),
+                    width = max_name_len
+                )),
+                Span::styled(runs_str, Style::default().fg(Color::DarkGray)),
             ]);
 
             ListItem::new(line)
@@ -66,10 +55,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Truncate instance type to fit in display
-fn truncate_instance_type(s: &str) -> String {
-    if s.len() <= 18 {
+fn truncate_instance_type(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
         s.to_string()
+    } else if max_len > 1 {
+        format!("{}…", &s[..max_len - 1])
     } else {
-        format!("{}…", &s[..17])
+        "…".to_string()
     }
 }

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["nix-bench-ec2", "nix-bench-agent"]
+default-members = ["nix-bench-ec2"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,6 +1,6 @@
 //! Main orchestration logic for benchmark runs
 
-use crate::aws::{CloudWatchClient, Ec2Client, S3Client};
+use crate::aws::{CloudWatchClient, Ec2Client, IamClient, S3Client};
 use crate::config::{detect_system, AgentConfig, RunConfig};
 use crate::state::{self, ResourceType, RunStatus};
 use crate::tui::{self, InitPhase, TuiMessage};
@@ -93,29 +93,43 @@ exec /usr/local/bin/nix-bench-agent --config /etc/nix-bench/config.json
 }
 
 /// Try to find agent binary in common locations
+/// Prefers musl (statically linked) over gnu (dynamically linked)
 fn find_agent_binary(arch: &str) -> Option<String> {
-    let target_triple = match arch {
-        "x86_64" => "x86_64-unknown-linux-gnu",
-        "aarch64" => "aarch64-unknown-linux-gnu",
+    // Prefer musl for static linking, fall back to gnu
+    let target_triples: &[&str] = match arch {
+        "x86_64" => &["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"],
+        "aarch64" => &["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"],
         _ => return None,
     };
 
-    let candidates = [
-        // Cross-compiled release build (cargo build --target)
-        format!("target/{}/release/nix-bench-agent", target_triple),
-        // Relative to crates directory
-        format!("../target/{}/release/nix-bench-agent", target_triple),
-        // Native build (only for x86_64 on x86_64 host)
-        format!("target/release/nix-bench-agent"),
-        format!("../target/release/nix-bench-agent"),
-    ];
+    for target_triple in target_triples {
+        let candidates = [
+            // Cross-compiled release build (cargo build --target)
+            format!("target/{}/release/nix-bench-agent", target_triple),
+            // Relative to crates directory
+            format!("../target/{}/release/nix-bench-agent", target_triple),
+        ];
 
-    for path in &candidates {
+        for path in &candidates {
+            let p = std::path::Path::new(path);
+            if p.exists() {
+                return Some(p.canonicalize().ok()?.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Also check native build (only useful for x86_64 on x86_64 host, but dynamically linked)
+    let native_candidates = [
+        "target/release/nix-bench-agent",
+        "../target/release/nix-bench-agent",
+    ];
+    for path in &native_candidates {
         let p = std::path::Path::new(path);
         if p.exists() {
             return Some(p.canonicalize().ok()?.to_string_lossy().to_string());
         }
     }
+
     None
 }
 
@@ -363,6 +377,22 @@ async fn run_init_task(
     s3.create_bucket(&bucket_name).await?;
     state::insert_resource(&db, &run_id, ResourceType::S3Bucket, &bucket_name, &config.region)?;
 
+    // Create IAM role and instance profile (if not provided)
+    let instance_profile_name = if config.instance_profile.is_some() {
+        config.instance_profile.clone()
+    } else {
+        let _ = tx.send(TuiMessage::Phase(InitPhase::CreatingIamRole)).await;
+        info!("Creating IAM role and instance profile for agent");
+        let iam = IamClient::new(&config.region).await?;
+        let (role_name, profile_name) = iam.create_benchmark_role(&run_id, &bucket_name).await?;
+
+        // Track the IAM resources
+        state::insert_resource(&db, &run_id, ResourceType::IamRole, &role_name, &config.region)?;
+        state::insert_resource(&db, &run_id, ResourceType::IamInstanceProfile, &profile_name, &config.region)?;
+
+        Some(profile_name)
+    };
+
     // Upload agent binaries
     let _ = tx.send(TuiMessage::Phase(InitPhase::UploadingAgents)).await;
     if let Some(agent_path) = &agent_x86_64 {
@@ -397,6 +427,9 @@ async fn run_init_task(
             runs: config.runs,
             instance_type: instance_type.clone(),
             system: system.to_string(),
+            flake_ref: config.flake_ref.clone(),
+            build_timeout: config.build_timeout,
+            max_failures: config.max_failures,
         };
 
         let config_json = serde_json::to_string_pretty(&agent_config)?;
@@ -421,7 +454,7 @@ async fn run_init_task(
                 &user_data,
                 config.subnet_id.as_deref(),
                 config.security_group_id.as_deref(),
-                config.instance_profile.as_deref(),
+                instance_profile_name.as_deref(),
             )
             .await
         {
@@ -486,7 +519,7 @@ async fn run_init_task(
     // Wait for instances to be running
     let _ = tx.send(TuiMessage::Phase(InitPhase::WaitingForInstances)).await;
     for (instance_type, state) in instances.iter_mut() {
-        match ec2.wait_for_running(&state.instance_id).await {
+        match ec2.wait_for_running(&state.instance_id, None).await {
             Ok(public_ip) => {
                 state.public_ip = public_ip.clone();
                 state.status = InstanceStatus::Running;
@@ -659,6 +692,21 @@ async fn run_benchmarks_no_tui(
     s3.create_bucket(&bucket_name).await?;
     state::insert_resource(&db, &run_id, ResourceType::S3Bucket, &bucket_name, &config.region)?;
 
+    // Create IAM role and instance profile (if not provided)
+    let instance_profile_name = if config.instance_profile.is_some() {
+        config.instance_profile.clone()
+    } else {
+        info!("Creating IAM role and instance profile for agent");
+        let iam = IamClient::new(&config.region).await?;
+        let (role_name, profile_name) = iam.create_benchmark_role(&run_id, &bucket_name).await?;
+
+        // Track the IAM resources
+        state::insert_resource(&db, &run_id, ResourceType::IamRole, &role_name, &config.region)?;
+        state::insert_resource(&db, &run_id, ResourceType::IamInstanceProfile, &profile_name, &config.region)?;
+
+        Some(profile_name)
+    };
+
     // Upload agent binaries
     if let Some(agent_path) = &agent_x86_64 {
         let key = format!("{}/agent-x86_64", run_id);
@@ -692,6 +740,9 @@ async fn run_benchmarks_no_tui(
             runs: config.runs,
             instance_type: instance_type.clone(),
             system: system.to_string(),
+            flake_ref: config.flake_ref.clone(),
+            build_timeout: config.build_timeout,
+            max_failures: config.max_failures,
         };
 
         let config_json = serde_json::to_string_pretty(&agent_config)?;
@@ -715,7 +766,7 @@ async fn run_benchmarks_no_tui(
                 &user_data,
                 config.subnet_id.as_deref(),
                 config.security_group_id.as_deref(),
-                config.instance_profile.as_deref(),
+                instance_profile_name.as_deref(),
             )
             .await
         {
@@ -755,7 +806,7 @@ async fn run_benchmarks_no_tui(
 
     // Wait for instances to be running
     for (instance_type, state) in instances.iter_mut() {
-        match ec2.wait_for_running(&state.instance_id).await {
+        match ec2.wait_for_running(&state.instance_id, None).await {
             Ok(public_ip) => {
                 state.public_ip = public_ip;
                 state.status = InstanceStatus::Running;
@@ -969,8 +1020,30 @@ async fn cleanup_resources(
                 }
             }
         }
+
+        // Delete IAM resources if we created them
+        if let Ok(db_resources) = state::get_run_resources(&db, run_id) {
+            let iam_roles: Vec<_> = db_resources
+                .iter()
+                .filter(|r| r.resource_type == ResourceType::IamRole && r.deleted_at.is_none())
+                .collect();
+
+            if !iam_roles.is_empty() {
+                info!("Deleting IAM resources...");
+                let iam = IamClient::new(&config.region).await?;
+                for resource in iam_roles {
+                    if let Err(e) = iam.delete_benchmark_role(&resource.resource_id).await {
+                        warn!(role = %resource.resource_id, error = ?e, "Failed to delete IAM role");
+                    } else {
+                        let _ = state::mark_resource_deleted(&db, ResourceType::IamRole, &resource.resource_id);
+                        // Instance profile has the same name as the role
+                        let _ = state::mark_resource_deleted(&db, ResourceType::IamInstanceProfile, &resource.resource_id);
+                    }
+                }
+            }
+        }
     } else {
-        info!("Keeping instances and bucket (--keep specified)");
+        info!("Keeping instances, bucket, and IAM resources (--keep specified)");
     }
 
     // Update run status
@@ -1067,4 +1140,73 @@ async fn write_results(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_bootstrap_failure_unbound_variable() {
+        let console = r#"
+[    5.123456] Starting nix-bench bootstrap
+[    5.234567] /var/lib/cloud/instance/scripts/user-data: line 15: BUCKET: unbound variable
+[    5.345678] Failed
+"#;
+        let result = detect_bootstrap_failure(console);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("unbound variable"));
+    }
+
+    #[test]
+    fn test_detect_bootstrap_failure_cloud_init() {
+        let console = r#"
+[   OK  ] Started cloud-init.service
+[FAILED] Failed to start cloud-final.service - Execute cloud user/final scripts
+"#;
+        let result = detect_bootstrap_failure(console);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Failed to start cloud-final"));
+    }
+
+    #[test]
+    fn test_detect_bootstrap_failure_agent_not_found() {
+        let console = "Starting nix-bench-agent...\nnix-bench-agent: command not found\n";
+        let result = detect_bootstrap_failure(console);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("nix-bench-agent: command not found"));
+    }
+
+    #[test]
+    fn test_detect_bootstrap_failure_no_such_file() {
+        let console = "/usr/local/bin/nix-bench-agent: No such file or directory";
+        let result = detect_bootstrap_failure(console);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_detect_bootstrap_failure_none() {
+        let console = r#"
+[   OK  ] Started cloud-init.service
+[   OK  ] Started cloud-final.service
+Starting nix-bench-agent...
+Agent started successfully
+"#;
+        let result = detect_bootstrap_failure(console);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_bootstrap_failure_empty() {
+        assert!(detect_bootstrap_failure("").is_none());
+    }
+
+    #[test]
+    fn test_detect_bootstrap_failure_priority() {
+        // First pattern should win
+        let console = "unbound variable\ncommand not found";
+        let result = detect_bootstrap_failure(console);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("unbound variable"));
+    }
 }

@@ -119,4 +119,26 @@ impl CloudWatchClient {
 
         Ok(())
     }
+
+    /// Push a custom metric with a count value
+    pub async fn put_metric(&self, name: &str, value: f64) -> Result<()> {
+        debug!(name, value, "Pushing custom metric");
+
+        let datum = MetricDatum::builder()
+            .metric_name(name)
+            .set_dimensions(Some(self.dimensions.clone()))
+            .value(value)
+            .unit(StandardUnit::Count)
+            .build();
+
+        self.client
+            .put_metric_data()
+            .namespace(NAMESPACE)
+            .metric_data(datum)
+            .send()
+            .await
+            .with_context(|| format!("Failed to put {} metric", name))?;
+
+        Ok(())
+    }
 }

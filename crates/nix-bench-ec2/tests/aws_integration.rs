@@ -570,3 +570,303 @@ mod ec2_tests {
         Ok(())
     }
 }
+
+mod iam_tests {
+    use super::*;
+
+    /// Test IAM role and instance profile lifecycle
+    #[tokio::test]
+    async fn test_iam_role_lifecycle() -> Result<()> {
+        let test_id = test_id();
+        let role_name = format!("nix-bench-test-{}", &test_id[..13]);
+        let bucket_name = format!("{}-bucket", test_id);
+        println!("Testing IAM role lifecycle with role: {}", role_name);
+
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(aws_config::Region::new(TEST_REGION))
+            .load()
+            .await;
+        let client = aws_sdk_iam::Client::new(&config);
+
+        // Trust policy for EC2
+        let assume_role_policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "ec2.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }"#;
+
+        // Cleanup function
+        let cleanup = |client: aws_sdk_iam::Client, role: String| async move {
+            // Remove role from instance profile
+            let _ = client
+                .remove_role_from_instance_profile()
+                .instance_profile_name(&role)
+                .role_name(&role)
+                .send()
+                .await;
+
+            // Delete instance profile
+            let _ = client
+                .delete_instance_profile()
+                .instance_profile_name(&role)
+                .send()
+                .await;
+
+            // Delete role policy
+            let _ = client
+                .delete_role_policy()
+                .role_name(&role)
+                .policy_name("test-policy")
+                .send()
+                .await;
+
+            // Delete role
+            let _ = client.delete_role().role_name(&role).send().await;
+        };
+
+        // Create role
+        let create_result = client
+            .create_role()
+            .role_name(&role_name)
+            .assume_role_policy_document(assume_role_policy)
+            .description("nix-bench integration test role")
+            .send()
+            .await;
+
+        if let Err(e) = create_result {
+            println!("Failed to create role: {:?}", e);
+            return Err(e.into());
+        }
+
+        println!("Created IAM role: {}", role_name);
+
+        // Create inline policy
+        let policy_document = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject"],
+                    "Resource": format!("arn:aws:s3:::{}/*", bucket_name)
+                }
+            ]
+        })
+        .to_string();
+
+        let policy_result = client
+            .put_role_policy()
+            .role_name(&role_name)
+            .policy_name("test-policy")
+            .policy_document(&policy_document)
+            .send()
+            .await;
+
+        if let Err(e) = policy_result {
+            cleanup(client.clone(), role_name.clone()).await;
+            return Err(e.into());
+        }
+
+        println!("Attached inline policy to role");
+
+        // Create instance profile
+        let profile_result = client
+            .create_instance_profile()
+            .instance_profile_name(&role_name)
+            .send()
+            .await;
+
+        if let Err(e) = profile_result {
+            cleanup(client.clone(), role_name.clone()).await;
+            return Err(e.into());
+        }
+
+        println!("Created instance profile: {}", role_name);
+
+        // Add role to instance profile
+        let add_result = client
+            .add_role_to_instance_profile()
+            .instance_profile_name(&role_name)
+            .role_name(&role_name)
+            .send()
+            .await;
+
+        if let Err(e) = add_result {
+            cleanup(client.clone(), role_name.clone()).await;
+            return Err(e.into());
+        }
+
+        println!("Added role to instance profile");
+
+        // Verify instance profile exists
+        let get_result = client
+            .get_instance_profile()
+            .instance_profile_name(&role_name)
+            .send()
+            .await;
+
+        match get_result {
+            Ok(resp) => {
+                let profile = resp.instance_profile();
+                assert!(profile.is_some());
+                let profile = profile.unwrap();
+                assert_eq!(profile.instance_profile_name(), &role_name);
+                assert!(!profile.roles().is_empty());
+                println!("Verified instance profile with role attached");
+            }
+            Err(e) => {
+                cleanup(client.clone(), role_name.clone()).await;
+                return Err(e.into());
+            }
+        }
+
+        // Cleanup
+        println!("Cleaning up IAM resources...");
+        cleanup(client, role_name).await;
+        println!("IAM role lifecycle test completed successfully");
+
+        Ok(())
+    }
+
+    /// Test IAM role creation with nix-bench specific policy
+    #[tokio::test]
+    async fn test_iam_nix_bench_policy() -> Result<()> {
+        let test_id = test_id();
+        let role_name = format!("nix-bench-test-{}", &test_id[..13]);
+        let bucket_name = format!("nix-bench-{}", test_id);
+        println!("Testing nix-bench IAM policy with role: {}", role_name);
+
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(aws_config::Region::new(TEST_REGION))
+            .load()
+            .await;
+        let client = aws_sdk_iam::Client::new(&config);
+
+        let assume_role_policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Service": "ec2.amazonaws.com"},
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }"#;
+
+        // Cleanup
+        let cleanup = |client: aws_sdk_iam::Client, role: String| async move {
+            let _ = client
+                .remove_role_from_instance_profile()
+                .instance_profile_name(&role)
+                .role_name(&role)
+                .send()
+                .await;
+            let _ = client
+                .delete_instance_profile()
+                .instance_profile_name(&role)
+                .send()
+                .await;
+            let _ = client
+                .delete_role_policy()
+                .role_name(&role)
+                .policy_name("nix-bench-agent-policy")
+                .send()
+                .await;
+            let _ = client.delete_role().role_name(&role).send().await;
+        };
+
+        // Create role
+        client
+            .create_role()
+            .role_name(&role_name)
+            .assume_role_policy_document(assume_role_policy)
+            .send()
+            .await?;
+
+        // Create the nix-bench specific policy
+        let nix_bench_policy = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "S3Access",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject"],
+                    "Resource": format!("arn:aws:s3:::{}/*", bucket_name)
+                },
+                {
+                    "Sid": "CloudWatchMetrics",
+                    "Effect": "Allow",
+                    "Action": ["cloudwatch:PutMetricData"],
+                    "Resource": "*",
+                    "Condition": {
+                        "StringEquals": {"cloudwatch:namespace": "NixBench"}
+                    }
+                },
+                {
+                    "Sid": "CloudWatchLogs",
+                    "Effect": "Allow",
+                    "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents",
+                        "logs:DescribeLogStreams"
+                    ],
+                    "Resource": "arn:aws:logs:*:*:log-group:/nix-bench/*"
+                }
+            ]
+        })
+        .to_string();
+
+        let policy_result = client
+            .put_role_policy()
+            .role_name(&role_name)
+            .policy_name("nix-bench-agent-policy")
+            .policy_document(&nix_bench_policy)
+            .send()
+            .await;
+
+        if let Err(e) = policy_result {
+            cleanup(client.clone(), role_name.clone()).await;
+            return Err(e.into());
+        }
+
+        println!("Created role with nix-bench policy");
+
+        // Verify the policy was attached
+        let get_policy_result = client
+            .get_role_policy()
+            .role_name(&role_name)
+            .policy_name("nix-bench-agent-policy")
+            .send()
+            .await;
+
+        match get_policy_result {
+            Ok(resp) => {
+                assert_eq!(resp.role_name(), &role_name);
+                assert_eq!(resp.policy_name(), "nix-bench-agent-policy");
+                // URL decode the policy document and verify it contains expected actions
+                let policy_doc = urlencoding::decode(resp.policy_document())?;
+                assert!(policy_doc.contains("s3:GetObject"));
+                assert!(policy_doc.contains("cloudwatch:PutMetricData"));
+                assert!(policy_doc.contains("logs:CreateLogGroup"));
+                println!("Verified policy document contains required permissions");
+            }
+            Err(e) => {
+                cleanup(client.clone(), role_name.clone()).await;
+                return Err(e.into());
+            }
+        }
+
+        // Cleanup
+        cleanup(client, role_name).await;
+        println!("nix-bench policy test completed successfully");
+
+        Ok(())
+    }
+}

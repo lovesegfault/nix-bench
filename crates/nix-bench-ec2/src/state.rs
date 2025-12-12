@@ -93,6 +93,8 @@ pub enum ResourceType {
     Ec2Instance,
     S3Bucket,
     S3Object,
+    IamRole,
+    IamInstanceProfile,
 }
 
 impl ResourceType {
@@ -101,6 +103,8 @@ impl ResourceType {
             ResourceType::Ec2Instance => "ec2_instance",
             ResourceType::S3Bucket => "s3_bucket",
             ResourceType::S3Object => "s3_object",
+            ResourceType::IamRole => "iam_role",
+            ResourceType::IamInstanceProfile => "iam_instance_profile",
         }
     }
 
@@ -110,6 +114,8 @@ impl ResourceType {
             "ec2_instance" => ResourceType::Ec2Instance,
             "s3_bucket" => ResourceType::S3Bucket,
             "s3_object" => ResourceType::S3Object,
+            "iam_role" => ResourceType::IamRole,
+            "iam_instance_profile" => ResourceType::IamInstanceProfile,
             _ => ResourceType::S3Object,
         }
     }
@@ -288,7 +294,7 @@ pub async fn list_resources() -> Result<()> {
 
 /// Cleanup orphaned resources by actually terminating/deleting them in AWS
 pub async fn cleanup_resources() -> Result<()> {
-    use crate::aws::{Ec2Client, S3Client};
+    use crate::aws::{Ec2Client, IamClient, S3Client};
     use std::collections::HashMap;
 
     let conn = open_db()?;
@@ -316,6 +322,7 @@ pub async fn cleanup_resources() -> Result<()> {
 
         let ec2 = Ec2Client::new(&region).await?;
         let s3 = S3Client::new(&region).await?;
+        let iam = IamClient::new(&region).await?;
 
         for resource in region_resources {
             println!(
@@ -334,6 +341,15 @@ pub async fn cleanup_resources() -> Result<()> {
                 }
                 ResourceType::S3Object => {
                     // S3 objects are deleted when bucket is deleted
+                    Ok(())
+                }
+                ResourceType::IamRole => {
+                    // Role name is the same as profile name
+                    iam.delete_benchmark_role(&resource.resource_id).await
+                }
+                ResourceType::IamInstanceProfile => {
+                    // Instance profiles are deleted when the role is deleted
+                    // (they have the same name)
                     Ok(())
                 }
             };

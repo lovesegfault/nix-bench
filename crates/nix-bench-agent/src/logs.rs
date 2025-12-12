@@ -4,8 +4,9 @@ use crate::config::Config;
 use anyhow::{Context, Result};
 use aws_sdk_cloudwatchlogs::Client;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 const LOG_GROUP_PREFIX: &str = "/nix-bench";
 
@@ -111,9 +112,32 @@ impl LoggingProcess {
     }
 
     /// Run a command and stream its output to CloudWatch Logs
-    pub async fn run_command(&self, cmd: &str, args: &[&str]) -> Result<bool> {
+    ///
+    /// # Arguments
+    /// * `cmd` - The command to run
+    /// * `args` - Command arguments
+    /// * `timeout_secs` - Optional timeout in seconds (default: 2 hours)
+    ///
+    /// # Returns
+    /// * `Ok(true)` if command succeeded
+    /// * `Ok(false)` if command failed with non-zero exit
+    /// * `Err` if timeout, spawn failure, or other error
+    pub async fn run_command(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        timeout_secs: Option<u64>,
+    ) -> Result<bool> {
         use tokio::io::{AsyncBufReadExt, BufReader};
         use tokio::process::Command;
+
+        // Default timeout: 2 hours
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(7200));
+        info!(
+            cmd = %cmd,
+            timeout_secs = timeout.as_secs(),
+            "Starting command with timeout"
+        );
 
         let mut child = Command::new(cmd)
             .args(args)
@@ -156,17 +180,48 @@ impl LoggingProcess {
             }
         });
 
-        // Wait for command to complete
-        let status = child.wait().await?;
+        // Wait for command to complete with timeout
+        let wait_result = tokio::time::timeout(timeout, child.wait()).await;
 
-        // Wait for log streaming to finish
-        if let Err(e) = stdout_handle.await {
-            warn!(error = %e, "stdout streaming task panicked");
+        // Handle timeout or completion
+        let success = match wait_result {
+            Ok(Ok(status)) => {
+                // Command completed normally
+                status.success()
+            }
+            Ok(Err(e)) => {
+                // Error waiting for child
+                return Err(e).context("Failed waiting for command");
+            }
+            Err(_) => {
+                // Timeout - kill the child process
+                warn!(
+                    cmd = %cmd,
+                    timeout_secs = timeout.as_secs(),
+                    "Command timed out, killing process"
+                );
+                if let Err(e) = child.kill().await {
+                    warn!(error = %e, "Failed to kill timed-out process");
+                }
+                // Give streaming tasks a moment to flush remaining output
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                return Err(anyhow::anyhow!(
+                    "Command '{}' timed out after {}s",
+                    cmd,
+                    timeout.as_secs()
+                ));
+            }
+        };
+
+        // Wait for log streaming to finish (with a short timeout to avoid blocking forever)
+        let stream_timeout = Duration::from_secs(5);
+        if let Err(e) = tokio::time::timeout(stream_timeout, stdout_handle).await {
+            warn!(error = %e, "Timed out waiting for stdout streaming to finish");
         }
-        if let Err(e) = stderr_handle.await {
-            warn!(error = %e, "stderr streaming task panicked");
+        if let Err(e) = tokio::time::timeout(stream_timeout, stderr_handle).await {
+            warn!(error = %e, "Timed out waiting for stderr streaming to finish");
         }
 
-        Ok(status.success())
+        Ok(success)
     }
 }

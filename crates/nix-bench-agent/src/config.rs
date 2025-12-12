@@ -5,6 +5,21 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
+/// Default flake reference for nix-bench
+fn default_flake_ref() -> String {
+    "github:lovesegfault/nix-bench".to_string()
+}
+
+/// Default build timeout in seconds (2 hours)
+fn default_build_timeout() -> u64 {
+    7200
+}
+
+/// Default max failures before giving up
+fn default_max_failures() -> u32 {
+    3
+}
+
 /// Agent configuration loaded from JSON
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -28,6 +43,19 @@ pub struct Config {
 
     /// System architecture (e.g., "x86_64-linux")
     pub system: String,
+
+    /// Flake reference base (e.g., "github:lovesegfault/nix-bench")
+    /// Defaults to the official nix-bench repository
+    #[serde(default = "default_flake_ref")]
+    pub flake_ref: String,
+
+    /// Build timeout in seconds (default: 7200 = 2 hours)
+    #[serde(default = "default_build_timeout")]
+    pub build_timeout: u64,
+
+    /// Maximum number of build failures before giving up (default: 3)
+    #[serde(default = "default_max_failures")]
+    pub max_failures: u32,
 }
 
 impl Config {
@@ -36,8 +64,59 @@ impl Config {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
-        serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {}", path.display()))
+        let config: Self = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate configuration values
+    fn validate(&self) -> Result<()> {
+        if self.run_id.is_empty() {
+            anyhow::bail!("Config error: run_id cannot be empty");
+        }
+
+        if self.bucket.is_empty() {
+            anyhow::bail!("Config error: bucket cannot be empty");
+        }
+
+        if self.region.is_empty() {
+            anyhow::bail!("Config error: region cannot be empty");
+        }
+
+        if self.attr.is_empty() {
+            anyhow::bail!("Config error: attr cannot be empty");
+        }
+
+        if self.runs == 0 {
+            anyhow::bail!("Config error: runs must be at least 1");
+        }
+
+        if self.instance_type.is_empty() {
+            anyhow::bail!("Config error: instance_type cannot be empty");
+        }
+
+        if self.system != "x86_64-linux" && self.system != "aarch64-linux" {
+            anyhow::bail!(
+                "Config error: system must be 'x86_64-linux' or 'aarch64-linux', got: {}",
+                self.system
+            );
+        }
+
+        if self.flake_ref.is_empty() {
+            anyhow::bail!("Config error: flake_ref cannot be empty");
+        }
+
+        if self.build_timeout == 0 {
+            anyhow::bail!("Config error: build_timeout must be greater than 0");
+        }
+
+        if self.max_failures == 0 {
+            anyhow::bail!("Config error: max_failures must be at least 1");
+        }
+
+        Ok(())
     }
 }
 
@@ -68,5 +147,109 @@ mod tests {
         assert_eq!(config.run_id, "abc123");
         assert_eq!(config.runs, 10);
         assert_eq!(config.attr, "large-deep");
+        // Verify defaults are applied
+        assert_eq!(config.flake_ref, "github:lovesegfault/nix-bench");
+        assert_eq!(config.build_timeout, 7200);
+        assert_eq!(config.max_failures, 3);
+    }
+
+    #[test]
+    fn test_load_config_with_custom_fields() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 5,
+                "instance_type": "c7id.metal",
+                "system": "aarch64-linux",
+                "flake_ref": "github:myorg/my-bench",
+                "build_timeout": 3600,
+                "max_failures": 5
+            }}"#
+        )
+        .unwrap();
+
+        let config = Config::load(file.path()).unwrap();
+        assert_eq!(config.flake_ref, "github:myorg/my-bench");
+        assert_eq!(config.build_timeout, 3600);
+        assert_eq!(config.max_failures, 5);
+        assert_eq!(config.system, "aarch64-linux");
+    }
+
+    #[test]
+    fn test_validation_empty_run_id() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux"
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("run_id"));
+    }
+
+    #[test]
+    fn test_validation_zero_runs() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 0,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux"
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("runs"));
+    }
+
+    #[test]
+    fn test_validation_invalid_system() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "windows"
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("system"));
+    }
+
+    #[test]
+    fn test_load_missing_file() {
+        let result = Config::load(Path::new("/nonexistent/config.json"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to read"));
     }
 }

@@ -497,46 +497,48 @@ async fn run_init_task(
     // Switch to running phase
     let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
 
-    // Spawn a task to poll console output
-    let instances_for_console = instances.clone();
-    let tx_console = tx.clone();
+    // Spawn a task to poll CloudWatch Logs for real-time build output
+    let instances_for_logs = instances.clone();
+    let tx_logs = tx.clone();
     let region = config.region.clone();
+    let run_id_for_logs = run_id.clone();
     tokio::spawn(async move {
-        poll_console_output(instances_for_console, tx_console, region).await;
+        poll_cloudwatch_logs(instances_for_logs, tx_logs, region, run_id_for_logs).await;
     });
 
     Ok(instances)
 }
 
-/// Poll console output for all instances and send to TUI
-async fn poll_console_output(
+/// Poll CloudWatch Logs for all instances and send to TUI
+async fn poll_cloudwatch_logs(
     instances: HashMap<String, InstanceState>,
     tx: mpsc::Sender<TuiMessage>,
     region: String,
+    run_id: String,
 ) {
-    let ec2 = match Ec2Client::new(&region).await {
+    use crate::aws::LogsClient;
+
+    let logs = match LogsClient::new(&region, &run_id).await {
         Ok(c) => c,
         Err(_) => return,
     };
 
     loop {
-        for (instance_type, state) in &instances {
-            if state.instance_id.is_empty() {
-                continue;
-            }
-
-            if let Ok(Some(output)) = ec2.get_console_output(&state.instance_id).await {
-                let _ = tx
-                    .send(TuiMessage::ConsoleOutput {
-                        instance_type: instance_type.clone(),
-                        output,
-                    })
-                    .await;
+        for (instance_type, _state) in &instances {
+            if let Ok(output) = logs.get_recent_logs(instance_type, 50).await {
+                if !output.is_empty() {
+                    let _ = tx
+                        .send(TuiMessage::ConsoleOutput {
+                            instance_type: instance_type.clone(),
+                            output,
+                        })
+                        .await;
+                }
             }
         }
 
-        // Poll every 10 seconds
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        // Poll every 2 seconds for near real-time updates
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 }
 

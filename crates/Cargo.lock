@@ -215,6 +215,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-cloudwatchlogs"
+version = "1.113.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19aa0eeb70761e63acc917f8f7eb84c3f08756305e57d2d412b20cc35fd0e9b8"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-eventstream",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-ec2"
 version = "1.196.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1997,6 +2020,7 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-sdk-cloudwatch",
+ "aws-sdk-cloudwatchlogs",
  "aws-sdk-s3",
  "chrono",
  "clap",
@@ -2017,6 +2041,7 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-sdk-cloudwatch",
+ "aws-sdk-cloudwatchlogs",
  "aws-sdk-ec2",
  "aws-sdk-s3",
  "base64",

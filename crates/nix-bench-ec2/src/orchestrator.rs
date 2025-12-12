@@ -68,6 +68,31 @@ exec /usr/local/bin/nix-bench-agent --config /etc/nix-bench/config.json
     )
 }
 
+/// Try to find agent binary in common locations
+fn find_agent_binary(arch: &str) -> Option<String> {
+    let candidates = [
+        // Cargo release build
+        format!("target/release/nix-bench-agent"),
+        // Cargo debug build
+        format!("target/debug/nix-bench-agent"),
+        // Relative to crates directory
+        format!("../target/release/nix-bench-agent"),
+        format!("../target/debug/nix-bench-agent"),
+    ];
+
+    for path in &candidates {
+        let p = std::path::Path::new(path);
+        if p.exists() {
+            // For x86_64, any local build works
+            // For aarch64, we'd need cross-compiled binary (skip local detection)
+            if arch == "x86_64" {
+                return Some(p.canonicalize().ok()?.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Run benchmarks on the specified instances
 pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
     // Determine which architectures we need
@@ -80,18 +105,36 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         .iter()
         .any(|t| detect_system(t) == "aarch64-linux");
 
+    // Try to auto-detect agent binaries if not provided
+    let agent_x86_64 = config.agent_x86_64.clone().or_else(|| {
+        let found = find_agent_binary("x86_64");
+        if let Some(ref path) = found {
+            info!(path = %path, "Auto-detected x86_64 agent");
+        }
+        found
+    });
+
+    let agent_aarch64 = config.agent_aarch64.clone().or_else(|| {
+        let found = find_agent_binary("aarch64");
+        if let Some(ref path) = found {
+            info!(path = %path, "Auto-detected aarch64 agent");
+        }
+        found
+    });
+
     // Validate agent binaries are provided (unless dry-run)
     if !config.dry_run {
-        if needs_x86_64 && config.agent_x86_64.is_none() {
+        if needs_x86_64 && agent_x86_64.is_none() {
             anyhow::bail!(
-                "x86_64 instance types specified but --agent-x86_64 not provided. \
-                 Build with: nix build .#nix-bench-agent"
+                "x86_64 instance types specified but agent not found.\n\
+                 Build with: cargo agent\n\
+                 Or use nix: nix build .#nix-bench-agent"
             );
         }
-        if needs_aarch64 && config.agent_aarch64.is_none() {
+        if needs_aarch64 && agent_aarch64.is_none() {
             anyhow::bail!(
-                "aarch64 instance types specified but --agent-aarch64 not provided. \
-                 Cross-compile with: nix build .#nix-bench-agent --system aarch64-linux"
+                "aarch64 instance types specified but agent not found.\n\
+                 Cross-compile with: nix build .#nix-bench-agent-aarch64"
             );
         }
     }
@@ -112,14 +155,14 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         println!();
         println!("  Agent binaries:");
         if needs_x86_64 {
-            if let Some(path) = &config.agent_x86_64 {
+            if let Some(path) = &agent_x86_64 {
                 println!("    - x86_64:  {}", path);
             } else {
                 println!("    - x86_64:  NOT PROVIDED (required)");
             }
         }
         if needs_aarch64 {
-            if let Some(path) = &config.agent_aarch64 {
+            if let Some(path) = &agent_aarch64 {
                 println!("    - aarch64: {}", path);
             } else {
                 println!("    - aarch64: NOT PROVIDED (required)");
@@ -170,13 +213,13 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
     state::insert_resource(&db, &run_id, ResourceType::S3Bucket, &bucket_name, &config.region)?;
 
     // Upload agent binaries
-    if let Some(agent_path) = &config.agent_x86_64 {
+    if let Some(agent_path) = &agent_x86_64 {
         let key = format!("{}/agent-x86_64", run_id);
         info!(path = %agent_path, key = %key, "Uploading x86_64 agent binary");
         s3.upload_file(&bucket_name, &key, std::path::Path::new(agent_path))
             .await?;
     }
-    if let Some(agent_path) = &config.agent_aarch64 {
+    if let Some(agent_path) = &agent_aarch64 {
         let key = format!("{}/agent-aarch64", run_id);
         info!(path = %agent_path, key = %key, "Uploading aarch64 agent binary");
         s3.upload_file(&bucket_name, &key, std::path::Path::new(agent_path))

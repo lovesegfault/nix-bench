@@ -17,14 +17,42 @@ use crossterm::{
 use ratatui::prelude::*;
 use std::collections::HashMap;
 use std::io;
+use tokio::sync::mpsc;
 
-pub use app::App;
+pub use app::{App, InitPhase};
 
-/// Run the TUI dashboard
+/// Message sent to TUI to update state
+#[derive(Debug, Clone)]
+pub enum TuiMessage {
+    /// Update init phase
+    Phase(InitPhase),
+    /// Set run ID and bucket name
+    RunInfo { run_id: String, bucket_name: String },
+    /// Update instance state
+    InstanceUpdate {
+        instance_type: String,
+        instance_id: String,
+        status: crate::orchestrator::InstanceStatus,
+        public_ip: Option<String>,
+    },
+}
+
+/// Run the TUI dashboard (legacy, for after-init usage)
 pub async fn run_tui(
     instances: &mut HashMap<String, InstanceState>,
     cloudwatch: &CloudWatchClient,
     config: &RunConfig,
+) -> Result<()> {
+    let (tx, rx) = mpsc::channel(100);
+    run_tui_with_channel(instances, cloudwatch, config, rx).await
+}
+
+/// Run the TUI dashboard with a channel for receiving updates
+pub async fn run_tui_with_channel(
+    instances: &mut HashMap<String, InstanceState>,
+    cloudwatch: &CloudWatchClient,
+    config: &RunConfig,
+    mut rx: mpsc::Receiver<TuiMessage>,
 ) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -34,10 +62,14 @@ pub async fn run_tui(
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(instances.clone(), config.runs);
+    let mut app = if instances.is_empty() {
+        App::new_loading(&config.instance_types, config.runs)
+    } else {
+        App::new(instances.clone(), config.runs)
+    };
 
-    // Run the app
-    let result = app.run(&mut terminal, cloudwatch, config).await;
+    // Run the app with channel
+    let result = app.run_with_channel(&mut terminal, cloudwatch, config, &mut rx).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -56,4 +88,9 @@ pub async fn run_tui(
     }
 
     result
+}
+
+/// Create a TUI message sender for the orchestrator
+pub fn create_channel() -> (mpsc::Sender<TuiMessage>, mpsc::Receiver<TuiMessage>) {
+    mpsc::channel(100)
 }

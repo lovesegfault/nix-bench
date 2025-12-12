@@ -67,19 +67,32 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 /// Render the header bar with title and elapsed time
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let completion = app.completion_percentage();
+    use crate::tui::app::InitPhase;
+
     let elapsed = app.elapsed_str();
-    let remaining = app.estimated_remaining_str();
 
-    let header_text = format!(
-        " nix-bench-ec2 │ Elapsed: {} │ Progress: {:.1}% │ ETA: {} ",
-        elapsed, completion, remaining
-    );
-
-    let style = if app.all_complete() {
-        Style::default().fg(Color::Black).bg(Color::Green)
+    let header_text = if app.is_initializing() {
+        format!(
+            " nix-bench-ec2 │ {} │ Elapsed: {} ",
+            app.init_phase.message(),
+            elapsed
+        )
     } else {
-        Style::default().fg(Color::White).bg(Color::Blue)
+        let completion = app.completion_percentage();
+        let remaining = app.estimated_remaining_str();
+        format!(
+            " nix-bench-ec2 │ Elapsed: {} │ Progress: {:.1}% │ ETA: {} ",
+            elapsed, completion, remaining
+        )
+    };
+
+    let style = match &app.init_phase {
+        InitPhase::Completed => Style::default().fg(Color::Black).bg(Color::Green),
+        InitPhase::Failed(_) => Style::default().fg(Color::White).bg(Color::Red),
+        InitPhase::Running if app.all_complete() => {
+            Style::default().fg(Color::Black).bg(Color::Green)
+        }
+        _ => Style::default().fg(Color::White).bg(Color::Blue),
     };
 
     let header = Paragraph::new(header_text).style(style);

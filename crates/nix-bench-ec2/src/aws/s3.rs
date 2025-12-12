@@ -88,6 +88,7 @@ impl S3Client {
     }
 
     /// Download an object from S3
+    #[allow(dead_code)]
     pub async fn download_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>> {
         debug!(bucket = %bucket, key = %key, "Downloading object");
 
@@ -158,6 +159,7 @@ impl S3Client {
     }
 
     /// Check if a bucket exists
+    #[allow(dead_code)]
     pub async fn bucket_exists(&self, bucket: &str) -> Result<bool> {
         match self.client.head_bucket().bucket(bucket).send().await {
             Ok(_) => Ok(true),

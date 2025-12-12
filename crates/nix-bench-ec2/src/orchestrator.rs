@@ -23,6 +23,7 @@ pub struct InstanceState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum InstanceStatus {
     Pending,
     Launching,
@@ -79,18 +80,70 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         .iter()
         .any(|t| detect_system(t) == "aarch64-linux");
 
-    // Validate agent binaries are provided
-    if needs_x86_64 && config.agent_x86_64.is_none() {
-        anyhow::bail!(
-            "x86_64 instance types specified but --agent-x86_64 not provided. \
-             Build with: nix build .#nix-bench-agent"
-        );
+    // Validate agent binaries are provided (unless dry-run)
+    if !config.dry_run {
+        if needs_x86_64 && config.agent_x86_64.is_none() {
+            anyhow::bail!(
+                "x86_64 instance types specified but --agent-x86_64 not provided. \
+                 Build with: nix build .#nix-bench-agent"
+            );
+        }
+        if needs_aarch64 && config.agent_aarch64.is_none() {
+            anyhow::bail!(
+                "aarch64 instance types specified but --agent-aarch64 not provided. \
+                 Cross-compile with: nix build .#nix-bench-agent --system aarch64-linux"
+            );
+        }
     }
-    if needs_aarch64 && config.agent_aarch64.is_none() {
-        anyhow::bail!(
-            "aarch64 instance types specified but --agent-aarch64 not provided. \
-             Cross-compile with: nix build .#nix-bench-agent --system aarch64-linux"
-        );
+
+    // Dry-run mode: validate and print what would happen
+    if config.dry_run {
+        println!("\n=== DRY RUN ===\n");
+        println!("This would launch the following benchmark:\n");
+        println!("  Region:         {}", config.region);
+        println!("  Attribute:      {}", config.attr);
+        println!("  Runs/instance:  {}", config.runs);
+        println!();
+        println!("  Instance types:");
+        for instance_type in &config.instance_types {
+            let system = detect_system(instance_type);
+            println!("    - {} ({})", instance_type, system);
+        }
+        println!();
+        println!("  Agent binaries:");
+        if needs_x86_64 {
+            if let Some(path) = &config.agent_x86_64 {
+                println!("    - x86_64:  {}", path);
+            } else {
+                println!("    - x86_64:  NOT PROVIDED (required)");
+            }
+        }
+        if needs_aarch64 {
+            if let Some(path) = &config.agent_aarch64 {
+                println!("    - aarch64: {}", path);
+            } else {
+                println!("    - aarch64: NOT PROVIDED (required)");
+            }
+        }
+        println!();
+        println!("  Options:");
+        println!("    - Keep instances: {}", config.keep);
+        println!("    - TUI mode:       {}", !config.no_tui);
+        if let Some(output) = &config.output {
+            println!("    - Output file:    {}", output);
+        }
+        if let Some(subnet) = &config.subnet_id {
+            println!("    - Subnet ID:      {}", subnet);
+        }
+        if let Some(sg) = &config.security_group_id {
+            println!("    - Security group: {}", sg);
+        }
+        if let Some(profile) = &config.instance_profile {
+            println!("    - IAM profile:    {}", profile);
+        }
+        println!();
+        println!("To run for real, remove the --dry-run flag.");
+        return Ok(());
     }
 
     // Generate run ID
@@ -229,14 +282,25 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         }
     }
 
+    // Track start time for reporting
+    let start_time = chrono::Utc::now();
+
     // Run TUI or poll mode
     if config.no_tui {
-        // Simple polling mode
-        info!("Running in non-TUI mode, polling for progress...");
+        // Simple polling mode with better formatting
+        println!("\n=== nix-bench-ec2 ===");
+        println!("Run ID: {}", run_id);
+        println!("Instances: {}", config.instance_types.join(", "));
+        println!("Benchmark: {} ({} runs each)", config.attr, config.runs);
+        println!("Started: {}\n", start_time.format("%Y-%m-%d %H:%M:%S UTC"));
+
         loop {
             let metrics = cloudwatch.poll_metrics(&config.instance_types).await?;
 
             let mut all_complete = true;
+            let mut total_runs = 0u32;
+            let mut completed_runs = 0u32;
+
             for (instance_type, state) in instances.iter_mut() {
                 if let Some(m) = metrics.get(instance_type) {
                     if let Some(status) = m.status {
@@ -258,20 +322,53 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
                     all_complete = false;
                 }
 
+                total_runs += state.total_runs;
+                completed_runs += state.run_progress;
+            }
+
+            // Print progress update
+            let elapsed = chrono::Utc::now() - start_time;
+            let elapsed_str = format!(
+                "{:02}:{:02}:{:02}",
+                elapsed.num_hours(),
+                elapsed.num_minutes() % 60,
+                elapsed.num_seconds() % 60
+            );
+
+            println!(
+                "[{}] Progress: {}/{} runs ({:.1}%)",
+                elapsed_str,
+                completed_runs,
+                total_runs,
+                if total_runs > 0 {
+                    completed_runs as f64 / total_runs as f64 * 100.0
+                } else {
+                    0.0
+                }
+            );
+
+            for (instance_type, state) in instances.iter() {
+                let status_str = match state.status {
+                    InstanceStatus::Pending => "⏳ pending",
+                    InstanceStatus::Launching => "🚀 launching",
+                    InstanceStatus::Running => "▶ running",
+                    InstanceStatus::Complete => "✓ complete",
+                    InstanceStatus::Failed => "✗ failed",
+                };
+                let avg = if !state.durations.is_empty() {
+                    format!(
+                        " (avg: {:.1}s)",
+                        state.durations.iter().sum::<f64>() / state.durations.len() as f64
+                    )
+                } else {
+                    String::new()
+                };
                 println!(
-                    "{}: {} ({}/{})",
-                    instance_type,
-                    match state.status {
-                        InstanceStatus::Pending => "pending",
-                        InstanceStatus::Launching => "launching",
-                        InstanceStatus::Running => "running",
-                        InstanceStatus::Complete => "complete",
-                        InstanceStatus::Failed => "failed",
-                    },
-                    state.run_progress,
-                    state.total_runs
+                    "  {} {}: {}/{}{}",
+                    status_str, instance_type, state.run_progress, state.total_runs, avg
                 );
             }
+            println!();
 
             if all_complete {
                 break;
@@ -320,17 +417,47 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         },
     )?;
 
+    // Calculate end time and duration
+    let end_time = chrono::Utc::now();
+    let duration = end_time - start_time;
+
     // Output results
     if let Some(output_path) = &config.output {
         let results: HashMap<String, serde_json::Value> = instances
             .iter()
             .map(|(k, v)| {
+                let avg = if !v.durations.is_empty() {
+                    v.durations.iter().sum::<f64>() / v.durations.len() as f64
+                } else {
+                    0.0
+                };
+                let min = v
+                    .durations
+                    .iter()
+                    .cloned()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0);
+                let max = v
+                    .durations
+                    .iter()
+                    .cloned()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(0.0);
+
                 (
                     k.clone(),
                     serde_json::json!({
+                        "instance_id": v.instance_id,
+                        "system": v.system,
                         "status": format!("{:?}", v.status),
                         "runs_completed": v.run_progress,
-                        "durations": v.durations,
+                        "runs_total": v.total_runs,
+                        "durations_seconds": v.durations,
+                        "stats": {
+                            "avg_seconds": avg,
+                            "min_seconds": min,
+                            "max_seconds": max,
+                        }
                     }),
                 )
             })
@@ -338,8 +465,14 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
 
         let output = serde_json::json!({
             "run_id": run_id,
+            "region": config.region,
             "attr": config.attr,
-            "total_runs": config.runs,
+            "runs_per_instance": config.runs,
+            "instance_types": config.instance_types,
+            "start_time": start_time.to_rfc3339(),
+            "end_time": end_time.to_rfc3339(),
+            "duration_seconds": duration.num_seconds(),
+            "success": all_complete,
             "results": results,
         });
 

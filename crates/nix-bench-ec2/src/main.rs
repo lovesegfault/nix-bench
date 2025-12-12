@@ -77,6 +77,10 @@ enum Command {
         /// IAM instance profile name for EC2 instances
         #[arg(long)]
         instance_profile: Option<String>,
+
+        /// Validate configuration without launching instances
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Manage local state and AWS resources
@@ -125,6 +129,7 @@ async fn main() -> Result<()> {
             subnet_id,
             security_group_id,
             instance_profile,
+            dry_run,
         } => {
             let instance_types: Vec<String> =
                 instances.split(',').map(|s| s.trim().to_string()).collect();
@@ -151,6 +156,7 @@ async fn main() -> Result<()> {
                 subnet_id,
                 security_group_id,
                 instance_profile,
+                dry_run,
             };
 
             orchestrator::run_benchmarks(config).await?;

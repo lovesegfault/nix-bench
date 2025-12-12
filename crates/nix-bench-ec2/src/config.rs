@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Configuration for a benchmark run
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RunConfig {
     /// EC2 instance types to benchmark
     pub instance_types: Vec<String>,
@@ -43,6 +44,9 @@ pub struct RunConfig {
 
     /// IAM instance profile name
     pub instance_profile: Option<String>,
+
+    /// Dry run mode - validate without launching
+    pub dry_run: bool,
 }
 
 /// Configuration sent to the agent

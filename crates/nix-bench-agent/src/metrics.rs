@@ -10,6 +10,7 @@ use tracing::debug;
 
 /// Status values for the benchmark
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum Status {
     Pending = 0,
     Running = 1,

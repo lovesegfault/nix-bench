@@ -1,4 +1,9 @@
 //! Event handling for TUI
+//!
+//! This module provides event handling utilities that can be used
+//! for more complex event processing in the future.
+
+#![allow(dead_code)]
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 

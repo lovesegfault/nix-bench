@@ -51,19 +51,24 @@
           let
             nixBench = self.lib.mkNixBench { inherit pkgs; };
 
-            # Rust toolchain
-            rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-              extensions = [
-                "rust-src"
-                "rust-analyzer"
-              ];
-              targets = [
-                "x86_64-unknown-linux-gnu"
-                "aarch64-unknown-linux-gnu"
-              ];
-            };
+            # Rust toolchain builder function (for cross-compilation support)
+            mkRustToolchain =
+              p:
+              p.rust-bin.stable.latest.default.override {
+                extensions = [
+                  "rust-src"
+                  "rust-analyzer"
+                ];
+                targets = [
+                  "x86_64-unknown-linux-gnu"
+                  "aarch64-unknown-linux-gnu"
+                ];
+              };
 
-            craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
+            # Pre-built toolchain for native builds and devShell
+            rustToolchain = mkRustToolchain pkgs;
+
+            craneLib = (inputs.crane.mkLib pkgs).overrideToolchain mkRustToolchain;
 
             # Common build inputs for Rust crates
             src = craneLib.cleanCargoSource ./crates;
@@ -111,8 +116,9 @@
                   crossPkgs = import nixpkgs {
                     inherit system;
                     crossSystem.config = "aarch64-unknown-linux-gnu";
+                    overlays = [ inputs.rust-overlay.overlays.default ];
                   };
-                  crossCraneLib = (inputs.crane.mkLib crossPkgs).overrideToolchain rustToolchain;
+                  crossCraneLib = (inputs.crane.mkLib crossPkgs).overrideToolchain mkRustToolchain;
                   crossArgs = {
                     inherit src;
                     strictDeps = true;

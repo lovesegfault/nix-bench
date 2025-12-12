@@ -148,7 +148,8 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
 
     // Generate run ID
     let run_id = Uuid::now_v7().to_string();
-    let bucket_name = format!("nix-bench-{}", &run_id[..8]);
+    // Use full UUID for bucket name (S3 names are globally unique)
+    let bucket_name = format!("nix-bench-{}", run_id);
 
     info!(run_id = %run_id, bucket = %bucket_name, "Starting benchmark run");
 

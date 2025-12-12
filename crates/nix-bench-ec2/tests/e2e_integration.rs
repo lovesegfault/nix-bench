@@ -27,7 +27,8 @@ fn test_id() -> String {
 #[ignore = "Launches real EC2 instance - costs money - run with --run-ignored all"]
 async fn test_orchestration_flow() -> Result<()> {
     let test_id = test_id();
-    let bucket_name = format!("nix-bench-{}", &test_id[..16]);
+    // Use full UUID for bucket name (S3 names are globally unique)
+    let bucket_name = format!("nix-bench-{}", test_id);
     println!("Starting E2E test with ID: {}", test_id);
     println!("Bucket: {}", bucket_name);
 
@@ -263,7 +264,8 @@ echo "Done"
 #[tokio::test]
 async fn test_s3_lifecycle_isolated() -> Result<()> {
     let test_id = test_id();
-    let bucket_name = format!("nix-bench-{}", &test_id[..16]);
+    // Use full UUID for bucket name (S3 names are globally unique)
+    let bucket_name = format!("nix-bench-{}", test_id);
     println!("Testing S3 lifecycle with bucket: {}", bucket_name);
 
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())

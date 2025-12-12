@@ -162,6 +162,34 @@
                 )
               else
                 null;
+
+            # Combined package with coordinator + agents
+            nixBenchCombined = pkgs.symlinkJoin {
+              name = "nix-bench";
+              paths = [ nix-bench-ec2 ];
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              postBuild = ''
+                # Create lib directory for agent binaries
+                mkdir -p $out/lib/nix-bench
+                cp ${nix-bench-agent}/bin/nix-bench-agent $out/lib/nix-bench/agent-x86_64
+                ${
+                  if nix-bench-agent-aarch64 != null then
+                    "cp ${nix-bench-agent-aarch64}/bin/nix-bench-agent $out/lib/nix-bench/agent-aarch64"
+                  else
+                    ""
+                }
+
+                # Wrap the binary to set default agent paths
+                wrapProgram $out/bin/nix-bench-ec2 \
+                  --set NIX_BENCH_AGENT_X86_64 "$out/lib/nix-bench/agent-x86_64" \
+                  ${
+                    if nix-bench-agent-aarch64 != null then
+                      ''--set NIX_BENCH_AGENT_AARCH64 "$out/lib/nix-bench/agent-aarch64"''
+                    else
+                      ""
+                  }
+              '';
+            };
           in
           {
             _module.args.pkgs = import nixpkgs {
@@ -174,10 +202,18 @@
             packages =
               nixBench.mkTieredPackages { }
               // {
-                inherit nix-bench-ec2 nix-bench-agent nix-bench-nextest;
-                default = nix-bench-ec2;
+                "nix-bench" = nixBenchCombined;
+                "nix-bench-ec2" = nix-bench-ec2;
+                "nix-bench-agent" = nix-bench-agent;
+                "nix-bench-nextest" = nix-bench-nextest;
+                default = nixBenchCombined;
               }
-              // (if nix-bench-agent-aarch64 != null then { inherit nix-bench-agent-aarch64; } else { });
+              // (
+                if nix-bench-agent-aarch64 != null then
+                  { "nix-bench-agent-aarch64" = nix-bench-agent-aarch64; }
+                else
+                  { }
+              );
 
             # Checks (run unit tests via nextest)
             checks = {

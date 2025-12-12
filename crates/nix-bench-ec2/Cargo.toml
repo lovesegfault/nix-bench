@@ -27,6 +27,8 @@ ratatui = "0.29"
 crossterm = { version = "0.29", features = ["event-stream"] }
 tokio-util = "0.7"
 futures = "0.3"
+tui-logger = { version = "0.17", features = ["tracing-support"] }
+log = "0.4"
 
 # State management
 rusqlite = { version = "0.37", features = ["bundled"] }

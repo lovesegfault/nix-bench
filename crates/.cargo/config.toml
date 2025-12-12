@@ -1,0 +1,26 @@
+# Cargo configuration for nix-bench
+
+[alias]
+# Build commands
+b = "build"
+br = "build --release"
+
+# Build agent for current platform
+agent = "build -p nix-bench-agent --release"
+
+# Build coordinator
+ec2 = "build -p nix-bench-ec2 --release"
+
+# Build everything
+all = "build --release"
+
+# Run coordinator
+run-ec2 = "run -p nix-bench-ec2 --release --"
+
+# Test commands
+t = "nextest run"
+ta = "nextest run --run-ignored all"  # Run all tests including ignored
+
+# Check/clippy
+c = "check"
+cl = "clippy"

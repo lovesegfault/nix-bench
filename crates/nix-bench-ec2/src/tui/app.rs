@@ -226,6 +226,8 @@ impl App {
 
                 // Render UI
                 _ = render_interval.tick() => {
+                    // Move log events from hot buffer to main buffer
+                    tui_logger::move_events();
                     terminal.draw(|f| ui::render(f, self))?;
                 }
 

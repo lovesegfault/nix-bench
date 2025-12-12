@@ -28,6 +28,21 @@ pub struct RunConfig {
 
     /// Disable TUI mode
     pub no_tui: bool,
+
+    /// Path to pre-built agent binary for x86_64-linux
+    pub agent_x86_64: Option<String>,
+
+    /// Path to pre-built agent binary for aarch64-linux
+    pub agent_aarch64: Option<String>,
+
+    /// VPC subnet ID
+    pub subnet_id: Option<String>,
+
+    /// Security group ID
+    pub security_group_id: Option<String>,
+
+    /// IAM instance profile name
+    pub instance_profile: Option<String>,
 }
 
 /// Configuration sent to the agent

@@ -103,6 +103,45 @@
                 cargoExtraArgs = "-p nix-bench-agent";
               }
             );
+
+            # Cross-compilation for aarch64 (only on x86_64)
+            nix-bench-agent-aarch64 =
+              if system == "x86_64-linux" then
+                let
+                  crossPkgs = import nixpkgs {
+                    inherit system;
+                    crossSystem.config = "aarch64-unknown-linux-gnu";
+                  };
+                  crossCraneLib = (inputs.crane.mkLib crossPkgs).overrideToolchain rustToolchain;
+                  crossArgs = {
+                    inherit src;
+                    strictDeps = true;
+                    pname = "nix-bench-agent-aarch64";
+                    version = "0.1.0";
+                    CARGO_BUILD_TARGET = "aarch64-unknown-linux-gnu";
+                    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "${crossPkgs.stdenv.cc.targetPrefix}cc";
+                    HOST_CC = "${pkgs.stdenv.cc.nativePrefix}cc";
+                    buildInputs = with crossPkgs; [
+                      openssl
+                      sqlite
+                    ];
+                    nativeBuildInputs = with pkgs; [
+                      pkg-config
+                    ];
+                    depsBuildBuild = with pkgs; [
+                      stdenv.cc
+                    ];
+                  };
+                in
+                crossCraneLib.buildPackage (
+                  crossArgs
+                  // {
+                    cargoArtifacts = crossCraneLib.buildDepsOnly crossArgs;
+                    cargoExtraArgs = "-p nix-bench-agent";
+                  }
+                )
+              else
+                null;
           in
           {
             _module.args.pkgs = import nixpkgs {
@@ -112,10 +151,13 @@
             };
 
             # Tiered benchmark packages + Rust binaries
-            packages = nixBench.mkTieredPackages { } // {
-              inherit nix-bench-ec2 nix-bench-agent;
-              default = nix-bench-ec2;
-            };
+            packages =
+              nixBench.mkTieredPackages { }
+              // {
+                inherit nix-bench-ec2 nix-bench-agent;
+                default = nix-bench-ec2;
+              }
+              // (if nix-bench-agent-aarch64 != null then { inherit nix-bench-agent-aarch64; } else { });
 
             # Magic attrsets: .#shallow.hello, .#deep.firefox
             legacyPackages = {

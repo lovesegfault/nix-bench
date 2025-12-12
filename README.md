@@ -58,11 +58,17 @@ Package naming: `{tier}-{kind}[-{multiplier}x]`
 
 Multipliers scale package count by duplicating packages with unique cache-busting values:
 
-| Tier   | Base | 2x  | 4x  | 8x   | 16x  |
-|--------|------|-----|-----|------|------|
-| small  | 5    | 10  | 20  | 40   | 80   |
-| medium | 11   | 22  | 44  | 88   | 176  |
-| large  | 18   | 36  | 72  | 144  | 288  |
+| Tier   | Kind    | Base | 2x   | 4x   | 8x    | 16x   |
+|--------|---------|------|------|------|-------|-------|
+| small  | shallow | 5    | 10   | 20   | 40    | 80    |
+| small  | deep    | 118  | 236  | 472  | 944   | 1888  |
+| small  | mixed   | 123  | 246  | 492  | 984   | 1968  |
+| medium | shallow | 11   | 22   | 44   | 88    | 176   |
+| medium | deep    | 409  | 818  | 1636 | 3272  | 6544  |
+| medium | mixed   | 420  | 840  | 1680 | 3360  | 6720  |
+| large  | shallow | 18   | 36   | 72   | 144   | 288   |
+| large  | deep    | 1407 | 2814 | 5628 | 11256 | 22512 |
+| large  | mixed   | 1425 | 2850 | 5700 | 11400 | 22800 |
 
 Each duplicated package has a unique impurity value, ensuring all instances rebuild independently.
 

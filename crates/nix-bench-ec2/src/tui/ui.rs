@@ -29,8 +29,8 @@ pub fn render(frame: &mut Frame, app: &App) {
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(35), // Instance list
-            Constraint::Percentage(65), // Instance detail
+            Constraint::Min(30),        // Instance list (fixed width)
+            Constraint::Percentage(100), // Instance detail (fill remaining)
         ])
         .split(chunks[1]);
 

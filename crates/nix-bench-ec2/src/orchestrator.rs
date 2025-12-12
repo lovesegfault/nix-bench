@@ -22,6 +22,7 @@ pub struct InstanceState {
     pub total_runs: u32,
     pub durations: Vec<f64>,
     pub public_ip: Option<String>,
+    pub console_output: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -418,6 +419,7 @@ async fn run_init_task(
                         instance_id: launched.instance_id.clone(),
                         status: InstanceStatus::Launching,
                         public_ip: None,
+
                     })
                     .await;
 
@@ -432,6 +434,7 @@ async fn run_init_task(
                         total_runs: config.runs,
                         durations: Vec::new(),
                         public_ip: None,
+                        console_output: None,
                     },
                 );
             }
@@ -443,6 +446,7 @@ async fn run_init_task(
                         instance_id: String::new(),
                         status: InstanceStatus::Failed,
                         public_ip: None,
+
                     })
                     .await;
             }
@@ -483,6 +487,7 @@ async fn run_init_task(
                         instance_id: state.instance_id.clone(),
                         status: InstanceStatus::Failed,
                         public_ip: None,
+
                     })
                     .await;
             }
@@ -492,7 +497,47 @@ async fn run_init_task(
     // Switch to running phase
     let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
 
+    // Spawn a task to poll console output
+    let instances_for_console = instances.clone();
+    let tx_console = tx.clone();
+    let region = config.region.clone();
+    tokio::spawn(async move {
+        poll_console_output(instances_for_console, tx_console, region).await;
+    });
+
     Ok(instances)
+}
+
+/// Poll console output for all instances and send to TUI
+async fn poll_console_output(
+    instances: HashMap<String, InstanceState>,
+    tx: mpsc::Sender<TuiMessage>,
+    region: String,
+) {
+    let ec2 = match Ec2Client::new(&region).await {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    loop {
+        for (instance_type, state) in &instances {
+            if state.instance_id.is_empty() {
+                continue;
+            }
+
+            if let Ok(Some(output)) = ec2.get_console_output(&state.instance_id).await {
+                let _ = tx
+                    .send(TuiMessage::ConsoleOutput {
+                        instance_type: instance_type.clone(),
+                        output,
+                    })
+                    .await;
+            }
+        }
+
+        // Poll every 10 seconds
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    }
 }
 
 /// Run benchmarks without TUI (--no-tui mode)
@@ -599,6 +644,7 @@ async fn run_benchmarks_no_tui(
                         total_runs: config.runs,
                         durations: Vec::new(),
                         public_ip: None,
+                        console_output: None,
                     },
                 );
             }

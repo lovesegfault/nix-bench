@@ -78,6 +78,7 @@ impl App {
                     total_runs,
                     durations: Vec::new(),
                     public_ip: None,
+                        console_output: None,
                 },
             );
         }
@@ -312,6 +313,11 @@ impl App {
                                 state.instance_id = instance_id;
                                 state.status = status;
                                 state.public_ip = public_ip;
+                            }
+                        }
+                        TuiMessage::ConsoleOutput { instance_type, output } => {
+                            if let Some(state) = self.instances.get_mut(&instance_type) {
+                                state.console_output = Some(output);
                             }
                         }
                     }

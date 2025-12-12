@@ -7,7 +7,6 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use tui_logger::TuiLoggerWidget;
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &App) {
@@ -53,8 +52,8 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render aggregate stats
     aggregate_stats::render(frame, chunks[2], app);
 
-    // Render log panel
-    render_log_panel(frame, chunks[3]);
+    // Render console output panel
+    render_log_panel(frame, chunks[3], app);
 
     // Render help bar
     render_help_bar(frame, chunks[4]);
@@ -104,18 +103,44 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(header, area);
 }
 
-/// Render the log panel
-fn render_log_panel(frame: &mut Frame, area: Rect) {
-    let log_widget = TuiLoggerWidget::default()
-        .block(
-            Block::default()
-                .title(" Logs ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        )
-        .style(Style::default().fg(Color::White));
+/// Render the log panel showing console output for selected instance
+fn render_log_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let instance = app.selected_instance();
+    let instance_type = app
+        .instance_order
+        .get(app.selected_index)
+        .map(|s| s.as_str())
+        .unwrap_or("none");
 
-    frame.render_widget(log_widget, area);
+    let title = format!(" Console: {} ", instance_type);
+
+    let content = if let Some(inst) = instance {
+        if let Some(ref output) = inst.console_output {
+            // Get last N lines of output
+            let lines: Vec<&str> = output.lines().collect();
+            let visible_lines = area.height.saturating_sub(2) as usize;
+            let start = lines.len().saturating_sub(visible_lines);
+            lines[start..].join("\n")
+        } else if inst.instance_id.is_empty() {
+            "Waiting for instance to launch...".to_string()
+        } else {
+            "Waiting for console output... (may take 1-2 minutes)".to_string()
+        }
+    } else {
+        "No instance selected".to_string()
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let paragraph = Paragraph::new(content)
+        .block(block)
+        .style(Style::default().fg(Color::White))
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(paragraph, area);
 }
 
 /// Render the help bar at the bottom

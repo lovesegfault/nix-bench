@@ -35,6 +35,11 @@ pub enum TuiMessage {
         status: crate::orchestrator::InstanceStatus,
         public_ip: Option<String>,
     },
+    /// Update console output for an instance
+    ConsoleOutput {
+        instance_type: String,
+        output: String,
+    },
 }
 
 /// Run the TUI dashboard (legacy, for after-init usage)

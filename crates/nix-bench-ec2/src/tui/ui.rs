@@ -7,6 +7,7 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+use tui_logger::TuiLoggerWidget;
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &App) {
@@ -16,6 +17,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             Constraint::Length(1),  // Header/title bar
             Constraint::Min(10),    // Main content
             Constraint::Length(3),  // Aggregate stats
+            Constraint::Length(8),  // Tracing logs
             Constraint::Length(1),  // Help bar
         ])
         .split(frame.area());
@@ -35,7 +37,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render instance list
     instance_list::render(frame, main_chunks[0], app);
 
-    // Render instance detail (now includes logs)
+    // Render instance detail (now includes build output logs)
     if let Some(instance) = app.selected_instance() {
         instance_detail::render(frame, main_chunks[1], instance, app.total_runs);
     } else {
@@ -51,8 +53,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render aggregate stats
     aggregate_stats::render(frame, chunks[2], app);
 
+    // Render tracing logs (scrollable)
+    render_tracing_logs(frame, chunks[3]);
+
     // Render help bar
-    render_help_bar(frame, chunks[3]);
+    render_help_bar(frame, chunks[4]);
 
     // Render help popup if toggled
     if app.show_help {
@@ -92,6 +97,20 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
     let header = Paragraph::new(header_text).style(style);
     frame.render_widget(header, area);
+}
+
+/// Render tracing logs widget
+fn render_tracing_logs(frame: &mut Frame, area: Rect) {
+    let widget = TuiLoggerWidget::default()
+        .block(
+            Block::default()
+                .title(" Logs ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(widget, area);
 }
 
 /// Render the help bar at the bottom

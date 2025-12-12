@@ -3,7 +3,9 @@
 [alias]
 # Build commands
 b = "build --release"
-agent = "build -p nix-bench-agent --release"
+
+# Build agents for both x86_64 and aarch64
+agent = ["build", "-p", "nix-bench-agent", "--release", "--target", "x86_64-unknown-linux-gnu", "--target", "aarch64-unknown-linux-gnu"]
 
 # Run coordinator (default binary)
 r = "run --release --"

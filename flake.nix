@@ -255,39 +255,58 @@
               };
             };
 
-            # Development shell
-            devShells.default = pkgs.mkShell {
-              name = "nix-bench";
-              nativeBuildInputs =
-                with pkgs;
-                [
-                  nix-eval-jobs
+            # Development shell with cross-compilation support
+            devShells.default =
+              let
+                # Cross-compilation toolchain for aarch64
+                crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+                aarch64Cc = crossPkgs.stdenv.cc;
+              in
+              pkgs.mkShell {
+                name = "nix-bench";
+                nativeBuildInputs =
+                  with pkgs;
+                  [
+                    nix-eval-jobs
 
-                  # Rust development
-                  rustToolchain
-                  pkg-config
-                  openssl
-                  sqlite
-                  cargo-nextest
+                    # Rust development
+                    rustToolchain
+                    pkg-config
+                    openssl
+                    sqlite
+                    cargo-nextest
 
-                  # AWS CLI for testing
-                  awscli2
-                ]
-                ++ [ config.treefmt.build.wrapper ]
-                ++ (builtins.attrValues config.treefmt.build.programs)
-                ++ config.pre-commit.settings.enabledPackages;
-              shellHook = ''
-                ${config.pre-commit.installationScript}
-                echo "nix-bench dev shell"
-                echo ""
-                echo "  cargo b          - Build (release)"
-                echo "  cargo r run ...  - Run coordinator"
-                echo "  cargo t          - Run tests"
-                echo ""
-              '';
+                    # AWS CLI for testing
+                    awscli2
+                  ]
+                  ++ [ config.treefmt.build.wrapper ]
+                  ++ (builtins.attrValues config.treefmt.build.programs)
+                  ++ config.pre-commit.settings.enabledPackages;
 
-              RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
-            };
+                # Cross-compilation dependencies
+                depsBuildBuild = [ pkgs.stdenv.cc ];
+
+                shellHook = ''
+                  ${config.pre-commit.installationScript}
+                  echo "nix-bench dev shell"
+                  echo ""
+                  echo "  cargo agent      - Build agents (x86_64 + aarch64)"
+                  echo "  cargo r run ...  - Run coordinator"
+                  echo "  cargo t          - Run tests"
+                  echo ""
+                '';
+
+                RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+
+                # Cross-compilation environment for aarch64
+                CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}cc";
+                CC_aarch64_unknown_linux_gnu = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}cc";
+                CXX_aarch64_unknown_linux_gnu = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}c++";
+                AR_aarch64_unknown_linux_gnu = "${aarch64Cc}/bin/${aarch64Cc.targetPrefix}ar";
+
+                # Ensure native CC is used for build scripts
+                HOST_CC = "${pkgs.stdenv.cc}/bin/cc";
+              };
           };
       }
     );

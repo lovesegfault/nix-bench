@@ -7,16 +7,18 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+use tui_logger::TuiLoggerWidget;
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Header/title bar
-            Constraint::Min(10),   // Main content
-            Constraint::Length(3), // Aggregate stats
-            Constraint::Length(1), // Help bar
+            Constraint::Length(1),  // Header/title bar
+            Constraint::Min(10),    // Main content
+            Constraint::Length(3),  // Aggregate stats
+            Constraint::Length(8),  // Log panel
+            Constraint::Length(1),  // Help bar
         ])
         .split(frame.area());
 
@@ -51,8 +53,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Render aggregate stats
     aggregate_stats::render(frame, chunks[2], app);
 
+    // Render log panel
+    render_log_panel(frame, chunks[3]);
+
     // Render help bar
-    render_help_bar(frame, chunks[3]);
+    render_help_bar(frame, chunks[4]);
 
     // Render help popup if toggled
     if app.show_help {
@@ -79,6 +84,20 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
     let header = Paragraph::new(header_text).style(style);
     frame.render_widget(header, area);
+}
+
+/// Render the log panel
+fn render_log_panel(frame: &mut Frame, area: Rect) {
+    let log_widget = TuiLoggerWidget::default()
+        .block(
+            Block::default()
+                .title(" Logs ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(log_widget, area);
 }
 
 /// Render the help bar at the bottom

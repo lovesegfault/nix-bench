@@ -278,6 +278,18 @@
                 ++ config.pre-commit.settings.enabledPackages;
               shellHook = ''
                 ${config.pre-commit.installationScript}
+                echo "nix-bench development shell"
+                echo ""
+                echo "Commands:"
+                echo "  cargo agent      - Build agent (x86_64)"
+                echo "  cargo ec2        - Build coordinator"
+                echo "  cargo run-ec2    - Run coordinator"
+                echo "  cargo t          - Run unit tests"
+                echo "  cargo ta         - Run all tests (needs AWS_PROFILE)"
+                echo ""
+                echo "Cross-compilation (use nix build):"
+                echo "  nix build .#nix-bench-agent-aarch64"
+                echo ""
               '';
 
               RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";

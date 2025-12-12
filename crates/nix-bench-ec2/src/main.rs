@@ -106,15 +106,30 @@ enum StateAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
     let args = Args::parse();
+
+    // Check if we're in TUI mode (run command without --no-tui)
+    let use_tui = matches!(&args.command, Command::Run { no_tui, .. } if !no_tui);
+
+    if use_tui {
+        // Initialize tui-logger for TUI mode
+        tui_logger::init_logger(log::LevelFilter::Info)?;
+        tui_logger::set_default_level(log::LevelFilter::Info);
+
+        // Set up tracing to route to tui-logger
+        use tracing_subscriber::prelude::*;
+        tracing_subscriber::registry()
+            .with(tui_logger::TuiTracingSubscriberLayer)
+            .init();
+    } else {
+        // Standard tracing for non-TUI mode
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+    }
 
     match args.command {
         Command::Run {

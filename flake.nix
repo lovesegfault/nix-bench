@@ -188,7 +188,11 @@
                     else
                       ""
                   }
+
+                # Create nix-bench symlink for nix run
+                ln -s nix-bench-ec2 $out/bin/nix-bench
               '';
+              meta.mainProgram = "nix-bench";
             };
           in
           {

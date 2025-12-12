@@ -63,6 +63,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.show_help {
         render_help_popup(frame);
     }
+
+    // Render logs popup if toggled
+    if app.show_logs {
+        render_logs_popup(frame, app);
+    }
 }
 
 /// Render the header bar with title and elapsed time
@@ -120,6 +125,8 @@ fn render_help_bar(frame: &mut Frame, area: Rect) {
         Span::raw(" Up "),
         Span::styled(" ↓/j ", Style::default().fg(Color::Black).bg(Color::Gray)),
         Span::raw(" Down "),
+        Span::styled(" l ", Style::default().fg(Color::Black).bg(Color::Gray)),
+        Span::raw(" Logs "),
         Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::Gray)),
         Span::raw(" Help "),
         Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::Gray)),
@@ -185,6 +192,91 @@ fn render_help_popup(frame: &mut Frame) {
         .style(Style::default().bg(Color::Black));
 
     let paragraph = Paragraph::new(help_text).block(block).wrap(Wrap { trim: false });
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Render logs popup overlay
+fn render_logs_popup(frame: &mut Frame, app: &App) {
+    let area = centered_rect(70, 80, frame.area());
+
+    // Clear the area behind the popup
+    frame.render_widget(Clear, area);
+
+    let instance = app.selected_instance();
+    let instance_type = app
+        .instance_order
+        .get(app.selected_index)
+        .map(|s| s.as_str())
+        .unwrap_or("none");
+
+    let title = format!(" Logs: {} ", instance_type);
+
+    let log_lines = if let Some(inst) = instance {
+        if inst.instance_id.is_empty() {
+            vec![
+                Line::from(""),
+                Line::from("  Instance not yet launched."),
+                Line::from(""),
+                Line::from("  Waiting for initialization to complete..."),
+            ]
+        } else {
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Instance ID: ", Style::default().bold()),
+                    Span::styled(&inst.instance_id, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(vec![
+                    Span::styled("  Public IP:   ", Style::default().bold()),
+                    Span::raw(inst.public_ip.as_deref().unwrap_or("pending...")),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  View bootstrap logs:", Style::default().bold()),
+                ]),
+                Line::from(""),
+                Line::from(format!(
+                    "    aws ssm start-session --target {}",
+                    inst.instance_id
+                )),
+                Line::from("    sudo tail -f /var/log/nix-bench-bootstrap.log"),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Or via SSH (if public IP available):", Style::default().bold()),
+                ]),
+                Line::from(""),
+                Line::from(format!(
+                    "    ssh ec2-user@{}",
+                    inst.public_ip.as_deref().unwrap_or("<pending>")
+                )),
+                Line::from("    sudo tail -f /var/log/nix-bench-bootstrap.log"),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  View nix build output:", Style::default().bold()),
+                ]),
+                Line::from(""),
+                Line::from("    journalctl -u nix-bench-agent -f"),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Press 'l' to close", Style::default().fg(Color::DarkGray)),
+                ]),
+            ]
+        }
+    } else {
+        vec![
+            Line::from(""),
+            Line::from("  No instance selected."),
+        ]
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black));
+
+    let paragraph = Paragraph::new(log_lines).block(block).wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
 }

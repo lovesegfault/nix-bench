@@ -50,6 +50,7 @@ pub struct App {
     pub start_time: Instant,
     pub last_update: Instant,
     pub show_help: bool,
+    pub show_logs: bool,
     pub init_phase: InitPhase,
     pub run_id: Option<String>,
     pub bucket_name: Option<String>,
@@ -92,6 +93,7 @@ impl App {
             start_time: now,
             last_update: now,
             show_help: false,
+            show_logs: false,
             init_phase: InitPhase::Starting,
             run_id: None,
             bucket_name: None,
@@ -112,6 +114,7 @@ impl App {
             start_time: now,
             last_update: now,
             show_help: false,
+            show_logs: false,
             init_phase: InitPhase::Running,
             run_id: None,
             bucket_name: None,
@@ -191,6 +194,17 @@ impl App {
     /// Toggle help display
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+        if self.show_help {
+            self.show_logs = false;
+        }
+    }
+
+    /// Toggle logs display
+    pub fn toggle_logs(&mut self) {
+        self.show_logs = !self.show_logs;
+        if self.show_logs {
+            self.show_help = false;
+        }
     }
 
     pub fn selected_instance(&self) -> Option<&InstanceState> {
@@ -320,6 +334,9 @@ impl App {
                                     }
                                     KeyCode::Char('?') | KeyCode::F(1) => {
                                         self.toggle_help();
+                                    }
+                                    KeyCode::Char('l') => {
+                                        self.toggle_logs();
                                     }
                                     KeyCode::Home => {
                                         self.selected_index = 0;

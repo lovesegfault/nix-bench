@@ -69,6 +69,30 @@ exec /usr/local/bin/nix-bench-agent --config /etc/nix-bench/config.json
 
 /// Run benchmarks on the specified instances
 pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
+    // Determine which architectures we need
+    let needs_x86_64 = config
+        .instance_types
+        .iter()
+        .any(|t| detect_system(t) == "x86_64-linux");
+    let needs_aarch64 = config
+        .instance_types
+        .iter()
+        .any(|t| detect_system(t) == "aarch64-linux");
+
+    // Validate agent binaries are provided
+    if needs_x86_64 && config.agent_x86_64.is_none() {
+        anyhow::bail!(
+            "x86_64 instance types specified but --agent-x86_64 not provided. \
+             Build with: nix build .#nix-bench-agent"
+        );
+    }
+    if needs_aarch64 && config.agent_aarch64.is_none() {
+        anyhow::bail!(
+            "aarch64 instance types specified but --agent-aarch64 not provided. \
+             Cross-compile with: nix build .#nix-bench-agent --system aarch64-linux"
+        );
+    }
+
     // Generate run ID
     let run_id = Uuid::now_v7().to_string();
     let bucket_name = format!("nix-bench-{}", &run_id[..8]);
@@ -91,13 +115,36 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
     s3.create_bucket(&bucket_name).await?;
     state::insert_resource(&db, &run_id, ResourceType::S3Bucket, &bucket_name, &config.region)?;
 
-    // Upload agent binaries (placeholder - in real implementation, these would be pre-built)
-    // For now, we'll note that the agent needs to be cross-compiled and uploaded
-    info!("Note: Agent binaries should be uploaded to s3://{}/{}/agent-x86_64 and agent-aarch64", bucket_name, run_id);
+    // Upload agent binaries
+    if let Some(agent_path) = &config.agent_x86_64 {
+        let key = format!("{}/agent-x86_64", run_id);
+        info!(path = %agent_path, key = %key, "Uploading x86_64 agent binary");
+        s3.upload_file(&bucket_name, &key, std::path::Path::new(agent_path))
+            .await?;
+    }
+    if let Some(agent_path) = &config.agent_aarch64 {
+        let key = format!("{}/agent-aarch64", run_id);
+        info!(path = %agent_path, key = %key, "Uploading aarch64 agent binary");
+        s3.upload_file(&bucket_name, &key, std::path::Path::new(agent_path))
+            .await?;
+    }
 
-    // Upload configs for each instance type
+    // Upload configs for each architecture (deduplicated)
+    let mut uploaded_configs = std::collections::HashSet::new();
     for instance_type in &config.instance_types {
         let system = detect_system(instance_type);
+        let arch = if system == "aarch64-linux" {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+
+        // Skip if we already uploaded config for this arch
+        if uploaded_configs.contains(arch) {
+            continue;
+        }
+        uploaded_configs.insert(arch.to_string());
+
         let agent_config = AgentConfig {
             run_id: run_id.clone(),
             bucket: bucket_name.clone(),
@@ -109,13 +156,9 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         };
 
         let config_json = serde_json::to_string_pretty(&agent_config)?;
-        let arch = if system == "aarch64-linux" {
-            "aarch64"
-        } else {
-            "x86_64"
-        };
         let key = format!("{}/config-{}.json", run_id, arch);
 
+        info!(key = %key, "Uploading agent config");
         s3.upload_bytes(&bucket_name, &key, config_json.into_bytes(), "application/json")
             .await?;
     }
@@ -128,7 +171,15 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         let user_data = generate_user_data(&bucket_name, &run_id);
 
         match ec2
-            .launch_instance(&run_id, instance_type, system, &user_data, None, None, None)
+            .launch_instance(
+                &run_id,
+                instance_type,
+                system,
+                &user_data,
+                config.subnet_id.as_deref(),
+                config.security_group_id.as_deref(),
+                config.instance_profile.as_deref(),
+            )
             .await
         {
             Ok(launched) => {

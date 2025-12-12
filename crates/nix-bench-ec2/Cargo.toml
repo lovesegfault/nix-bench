@@ -37,3 +37,8 @@ base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"
+uuid = { version = "1", features = ["v7"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-ec2 = "1"
+aws-sdk-s3 = "1"
+base64 = "0.22"

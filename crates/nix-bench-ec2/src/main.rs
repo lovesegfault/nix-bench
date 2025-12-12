@@ -57,6 +57,26 @@ enum Command {
         /// Disable TUI, print progress to stdout
         #[arg(long)]
         no_tui: bool,
+
+        /// Path to pre-built agent binary for x86_64-linux
+        #[arg(long)]
+        agent_x86_64: Option<String>,
+
+        /// Path to pre-built agent binary for aarch64-linux
+        #[arg(long)]
+        agent_aarch64: Option<String>,
+
+        /// VPC subnet ID for launching instances (uses default VPC if not specified)
+        #[arg(long)]
+        subnet_id: Option<String>,
+
+        /// Security group ID for instances
+        #[arg(long)]
+        security_group_id: Option<String>,
+
+        /// IAM instance profile name for EC2 instances
+        #[arg(long)]
+        instance_profile: Option<String>,
     },
 
     /// Manage local state and AWS resources
@@ -100,6 +120,11 @@ async fn main() -> Result<()> {
             keep,
             timeout,
             no_tui,
+            agent_x86_64,
+            agent_aarch64,
+            subnet_id,
+            security_group_id,
+            instance_profile,
         } => {
             let instance_types: Vec<String> =
                 instances.split(',').map(|s| s.trim().to_string()).collect();
@@ -121,6 +146,11 @@ async fn main() -> Result<()> {
                 keep,
                 timeout,
                 no_tui,
+                agent_x86_64,
+                agent_aarch64,
+                subnet_id,
+                security_group_id,
+                instance_profile,
             };
 
             orchestrator::run_benchmarks(config).await?;

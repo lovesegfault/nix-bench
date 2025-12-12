@@ -12,6 +12,34 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+/// Initialization phase
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitPhase {
+    Starting,
+    CreatingBucket,
+    UploadingAgents,
+    LaunchingInstances,
+    WaitingForInstances,
+    Running,
+    Completed,
+    Failed(String),
+}
+
+impl InitPhase {
+    pub fn message(&self) -> &str {
+        match self {
+            InitPhase::Starting => "Starting...",
+            InitPhase::CreatingBucket => "Creating S3 bucket...",
+            InitPhase::UploadingAgents => "Uploading agent binaries...",
+            InitPhase::LaunchingInstances => "Launching EC2 instances...",
+            InitPhase::WaitingForInstances => "Waiting for instances to start...",
+            InitPhase::Running => "Running benchmarks...",
+            InitPhase::Completed => "Completed!",
+            InitPhase::Failed(msg) => msg,
+        }
+    }
+}
+
 /// Application state
 pub struct App {
     pub instances: HashMap<String, InstanceState>,
@@ -22,9 +50,54 @@ pub struct App {
     pub start_time: Instant,
     pub last_update: Instant,
     pub show_help: bool,
+    pub init_phase: InitPhase,
+    pub run_id: Option<String>,
+    pub bucket_name: Option<String>,
 }
 
 impl App {
+    /// Create a new app in early/loading state
+    pub fn new_loading(instance_types: &[String], total_runs: u32) -> Self {
+        let now = Instant::now();
+
+        // Create placeholder instances
+        let mut instances = HashMap::new();
+        let mut instance_order = Vec::new();
+
+        for instance_type in instance_types {
+            instance_order.push(instance_type.clone());
+            instances.insert(
+                instance_type.clone(),
+                InstanceState {
+                    instance_id: String::new(),
+                    instance_type: instance_type.clone(),
+                    system: crate::config::detect_system(instance_type).to_string(),
+                    status: InstanceStatus::Pending,
+                    run_progress: 0,
+                    total_runs,
+                    durations: Vec::new(),
+                    public_ip: None,
+                },
+            );
+        }
+
+        instance_order.sort();
+
+        Self {
+            instances,
+            selected_index: 0,
+            instance_order,
+            should_quit: false,
+            total_runs,
+            start_time: now,
+            last_update: now,
+            show_help: false,
+            init_phase: InitPhase::Starting,
+            run_id: None,
+            bucket_name: None,
+        }
+    }
+
     pub fn new(instances: HashMap<String, InstanceState>, total_runs: u32) -> Self {
         let mut instance_order: Vec<String> = instances.keys().cloned().collect();
         instance_order.sort();
@@ -39,7 +112,20 @@ impl App {
             start_time: now,
             last_update: now,
             show_help: false,
+            init_phase: InitPhase::Running,
+            run_id: None,
+            bucket_name: None,
         }
+    }
+
+    /// Update init phase
+    pub fn set_phase(&mut self, phase: InitPhase) {
+        self.init_phase = phase;
+    }
+
+    /// Check if we're still initializing
+    pub fn is_initializing(&self) -> bool {
+        !matches!(self.init_phase, InitPhase::Running | InitPhase::Completed | InitPhase::Failed(_))
     }
 
     /// Get elapsed time since start
@@ -161,6 +247,20 @@ impl App {
         cloudwatch: &CloudWatchClient,
         config: &RunConfig,
     ) -> Result<()> {
+        let (_tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.run_with_channel(terminal, cloudwatch, config, &mut rx).await
+    }
+
+    /// Main event loop with channel for receiving updates
+    pub async fn run_with_channel<B: Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        cloudwatch: &CloudWatchClient,
+        config: &RunConfig,
+        rx: &mut tokio::sync::mpsc::Receiver<crate::tui::TuiMessage>,
+    ) -> Result<()> {
+        use crate::tui::TuiMessage;
+
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
@@ -181,6 +281,26 @@ impl App {
                 // Check for cancellation (Ctrl+C)
                 _ = cancel.cancelled() => {
                     self.should_quit = true;
+                }
+
+                // Receive messages from orchestrator
+                Some(msg) = rx.recv() => {
+                    match msg {
+                        TuiMessage::Phase(phase) => {
+                            self.init_phase = phase;
+                        }
+                        TuiMessage::RunInfo { run_id, bucket_name } => {
+                            self.run_id = Some(run_id);
+                            self.bucket_name = Some(bucket_name);
+                        }
+                        TuiMessage::InstanceUpdate { instance_type, instance_id, status, public_ip } => {
+                            if let Some(state) = self.instances.get_mut(&instance_type) {
+                                state.instance_id = instance_id;
+                                state.status = status;
+                                state.public_ip = public_ip;
+                            }
+                        }
+                    }
                 }
 
                 // Handle terminal events
@@ -216,8 +336,9 @@ impl App {
 
                 // Tick for app logic
                 _ = tick_interval.tick() => {
-                    // Check if all complete
-                    if self.all_complete() {
+                    // Check if all complete (only when running)
+                    if matches!(self.init_phase, InitPhase::Running) && self.all_complete() {
+                        self.init_phase = InitPhase::Completed;
                         // Give user a moment to see final state
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         self.should_quit = true;
@@ -231,10 +352,12 @@ impl App {
                     terminal.draw(|f| ui::render(f, self))?;
                 }
 
-                // Poll CloudWatch
+                // Poll CloudWatch (only when running)
                 _ = cloudwatch_interval.tick() => {
-                    if let Ok(metrics) = cloudwatch.poll_metrics(&config.instance_types).await {
-                        self.update_from_metrics(&metrics);
+                    if matches!(self.init_phase, InitPhase::Running) {
+                        if let Ok(metrics) = cloudwatch.poll_metrics(&config.instance_types).await {
+                            self.update_from_metrics(&metrics);
+                        }
                     }
                 }
             }

@@ -39,7 +39,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    instances_with_avg.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    instances_with_avg.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let best = instances_with_avg
         .first()

@@ -69,7 +69,10 @@ pub fn setup_raid_and_mount(devices: &[PathBuf]) -> Result<()> {
         // Create RAID0 across all devices
         info!(count = devices.len(), "Creating RAID0 array");
 
-        let device_args: Vec<&str> = devices.iter().map(|p| p.to_str().unwrap()).collect();
+        let device_args: Vec<&str> = devices
+            .iter()
+            .map(|p| p.to_str().context("Device path contains invalid UTF-8"))
+            .collect::<Result<Vec<_>>>()?;
 
         let status = Command::new("mdadm")
             .args([
@@ -95,8 +98,11 @@ pub fn setup_raid_and_mount(devices: &[PathBuf]) -> Result<()> {
 
     // Format with ext4
     info!(device = %device_to_mount.display(), "Formatting with ext4");
+    let device_str = device_to_mount
+        .to_str()
+        .context("Device path contains invalid UTF-8")?;
     let status = Command::new("mkfs.ext4")
-        .args(["-F", device_to_mount.to_str().unwrap()])
+        .args(["-F", device_str])
         .status()
         .context("Failed to run mkfs.ext4")?;
 
@@ -106,8 +112,11 @@ pub fn setup_raid_and_mount(devices: &[PathBuf]) -> Result<()> {
 
     // Mount the device
     info!(device = %device_to_mount.display(), mount = %mount_point.display(), "Mounting");
+    let mount_str = mount_point
+        .to_str()
+        .context("Mount point contains invalid UTF-8")?;
     let status = Command::new("mount")
-        .args([device_to_mount.to_str().unwrap(), mount_point.to_str().unwrap()])
+        .args([device_str, mount_str])
         .status()
         .context("Failed to mount device")?;
 
@@ -132,9 +141,13 @@ pub fn setup_raid_and_mount(devices: &[PathBuf]) -> Result<()> {
         // Ensure target exists
         fs::create_dir_all(target)?;
 
+        let source_str = source_path
+            .to_str()
+            .with_context(|| format!("Source path {} contains invalid UTF-8", source))?;
+
         info!(source = %source_path.display(), target, "Bind mounting");
         let status = Command::new("mount")
-            .args(["--bind", source_path.to_str().unwrap(), target])
+            .args(["--bind", source_str, target])
             .status()
             .with_context(|| format!("Failed to bind mount {} to {}", source, target))?;
 

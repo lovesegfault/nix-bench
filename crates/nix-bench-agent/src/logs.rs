@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use aws_sdk_cloudwatchlogs::Client;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::debug;
+use tracing::{debug, warn};
 
 const LOG_GROUP_PREFIX: &str = "/nix-bench";
 
@@ -61,7 +61,7 @@ impl LogsClient {
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .context("System time is before UNIX epoch")?
             .as_millis() as i64;
 
         let event = InputLogEvent::builder()
@@ -122,8 +122,14 @@ impl LoggingProcess {
             .spawn()
             .context("Failed to spawn command")?;
 
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
+        let stdout = child
+            .stdout
+            .take()
+            .context("Failed to capture stdout - was Stdio::piped() used?")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("Failed to capture stderr - was Stdio::piped() used?")?;
 
         let logs_stdout = self.logs.clone();
         let logs_stderr = self.logs.clone();
@@ -133,7 +139,9 @@ impl LoggingProcess {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = logs_stdout.write_line(&format!("[stdout] {}", line)).await;
+                if let Err(e) = logs_stdout.write_line(&format!("[stdout] {}", line)).await {
+                    warn!(error = %e, "Failed to write stdout line to CloudWatch");
+                }
             }
         });
 
@@ -142,7 +150,9 @@ impl LoggingProcess {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = logs_stderr.write_line(&format!("[stderr] {}", line)).await;
+                if let Err(e) = logs_stderr.write_line(&format!("[stderr] {}", line)).await {
+                    warn!(error = %e, "Failed to write stderr line to CloudWatch");
+                }
             }
         });
 
@@ -150,8 +160,12 @@ impl LoggingProcess {
         let status = child.wait().await?;
 
         // Wait for log streaming to finish
-        let _ = stdout_handle.await;
-        let _ = stderr_handle.await;
+        if let Err(e) = stdout_handle.await {
+            warn!(error = %e, "stdout streaming task panicked");
+        }
+        if let Err(e) = stderr_handle.await {
+            warn!(error = %e, "stderr streaming task panicked");
+        }
 
         Ok(status.success())
     }

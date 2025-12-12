@@ -190,6 +190,41 @@ pub fn update_run_status(conn: &Connection, run_id: &str, status: RunStatus) -> 
     Ok(())
 }
 
+/// Get undeleted resources for a specific run
+pub fn get_run_resources(conn: &Connection, run_id: &str) -> Result<Vec<Resource>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, run_id, resource_type, resource_id, region, created_at, deleted_at
+         FROM resources WHERE run_id = ?1 AND deleted_at IS NULL",
+    )?;
+
+    let resources = stmt
+        .query_map(params![run_id], |row| {
+            let created_at_str: String = row.get(5)?;
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
+                .with_timezone(&Utc);
+
+            Ok(Resource {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                resource_type: ResourceType::from_str(&row.get::<_, String>(2)?),
+                resource_id: row.get(3)?,
+                region: row.get(4)?,
+                created_at,
+                deleted_at: None,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    Ok(resources)
+}
+
 /// Get all undeleted resources
 pub fn get_undeleted_resources(conn: &Connection) -> Result<Vec<Resource>> {
     let mut stmt = conn.prepare(
@@ -199,15 +234,24 @@ pub fn get_undeleted_resources(conn: &Connection) -> Result<Vec<Resource>> {
 
     let resources = stmt
         .query_map([], |row| {
+            let created_at_str: String = row.get(5)?;
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
+                .with_timezone(&Utc);
+
             Ok(Resource {
                 id: row.get(0)?,
                 run_id: row.get(1)?,
                 resource_type: ResourceType::from_str(&row.get::<_, String>(2)?),
                 resource_id: row.get(3)?,
                 region: row.get(4)?,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
-                    .unwrap()
-                    .with_timezone(&Utc),
+                created_at,
                 deleted_at: None,
             })
         })?
@@ -242,8 +286,11 @@ pub async fn list_resources() -> Result<()> {
     Ok(())
 }
 
-/// Cleanup orphaned resources
+/// Cleanup orphaned resources by actually terminating/deleting them in AWS
 pub async fn cleanup_resources() -> Result<()> {
+    use crate::aws::{Ec2Client, S3Client};
+    use std::collections::HashMap;
+
     let conn = open_db()?;
     let resources = get_undeleted_resources(&conn)?;
 
@@ -254,17 +301,62 @@ pub async fn cleanup_resources() -> Result<()> {
 
     println!("Found {} undeleted resources", resources.len());
 
-    for resource in resources {
-        println!(
-            "Checking {} {}...",
-            resource.resource_type.as_str(),
-            resource.resource_id
-        );
+    // Group resources by region for efficient client reuse
+    let mut by_region: HashMap<String, Vec<&Resource>> = HashMap::new();
+    for resource in &resources {
+        by_region
+            .entry(resource.region.clone())
+            .or_default()
+            .push(resource);
+    }
 
-        // TODO: Check if resource exists in AWS and delete it
-        // For now, just mark as deleted in DB
-        mark_resource_deleted(&conn, resource.resource_type, &resource.resource_id)?;
-        println!("  Marked as deleted");
+    // Process each region
+    for (region, region_resources) in by_region {
+        println!("Processing region {}...", region);
+
+        let ec2 = Ec2Client::new(&region).await?;
+        let s3 = S3Client::new(&region).await?;
+
+        for resource in region_resources {
+            println!(
+                "  Cleaning up {} {}...",
+                resource.resource_type.as_str(),
+                resource.resource_id
+            );
+
+            let result = match resource.resource_type {
+                ResourceType::Ec2Instance => {
+                    ec2.terminate_instance(&resource.resource_id).await
+                }
+                ResourceType::S3Bucket => {
+                    // S3 bucket deletion requires emptying first
+                    s3.delete_bucket(&resource.resource_id).await
+                }
+                ResourceType::S3Object => {
+                    // S3 objects are deleted when bucket is deleted
+                    Ok(())
+                }
+            };
+
+            match result {
+                Ok(()) => {
+                    mark_resource_deleted(&conn, resource.resource_type, &resource.resource_id)?;
+                    println!("    Deleted successfully");
+                }
+                Err(e) => {
+                    // Check if resource already doesn't exist
+                    let error_str = format!("{:?}", e);
+                    if error_str.contains("InvalidInstanceID.NotFound")
+                        || error_str.contains("NoSuchBucket")
+                    {
+                        mark_resource_deleted(&conn, resource.resource_type, &resource.resource_id)?;
+                        println!("    Already deleted (marking in DB)");
+                    } else {
+                        println!("    Failed to delete: {}", e);
+                    }
+                }
+            }
+        }
     }
 
     // Update orphaned runs to completed

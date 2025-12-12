@@ -6,10 +6,30 @@ use crate::state::{self, ResourceType, RunStatus};
 use crate::tui::{self, InitPhase, TuiMessage};
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+/// Patterns that indicate cloud-init/bootstrap failure
+const BOOTSTRAP_FAILURE_PATTERNS: &[&str] = &[
+    "unbound variable",
+    "Failed to start cloud-final",
+    "FAILED] Failed to start",
+    "cc_scripts_user.py[WARNING]: Failed to run module scripts-user",
+    "nix-bench-agent: command not found",
+    "No such file or directory",
+];
+
+/// Check if console output indicates a bootstrap failure
+fn detect_bootstrap_failure(console_output: &str) -> Option<String> {
+    for pattern in BOOTSTRAP_FAILURE_PATTERNS {
+        if console_output.contains(pattern) {
+            return Some(pattern.to_string());
+        }
+    }
+    None
+}
 
 /// Instance state during a run
 #[derive(Debug, Clone)]
@@ -54,6 +74,7 @@ curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix 
     sh -s -- install --no-confirm --nix-package-url "https://releases.nixos.org/nix/nix-2.24.10/nix-2.24.10-${{ARCH}}-linux.tar.xz"
 
 echo "Sourcing nix profile..."
+export HOME=/root
 . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 
 echo "Fetching agent from S3..."
@@ -497,34 +518,74 @@ async fn run_init_task(
     // Switch to running phase
     let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
 
-    // Spawn a task to poll CloudWatch Logs for real-time build output
+    // Spawn a task to poll CloudWatch Logs and detect bootstrap failures
     let instances_for_logs = instances.clone();
     let tx_logs = tx.clone();
     let region = config.region.clone();
     let run_id_for_logs = run_id.clone();
+    let timeout_secs = config.timeout;
+    let start_time = Instant::now();
     tokio::spawn(async move {
-        poll_cloudwatch_logs(instances_for_logs, tx_logs, region, run_id_for_logs).await;
+        poll_instance_output(instances_for_logs, tx_logs, region, run_id_for_logs, timeout_secs, start_time).await;
     });
 
     Ok(instances)
 }
 
-/// Poll CloudWatch Logs for all instances and send to TUI
-async fn poll_cloudwatch_logs(
+/// Poll CloudWatch Logs and EC2 console output for all instances
+/// Detects bootstrap failures from console output
+async fn poll_instance_output(
     instances: HashMap<String, InstanceState>,
     tx: mpsc::Sender<TuiMessage>,
     region: String,
     run_id: String,
+    timeout_secs: u64,
+    start_time: Instant,
 ) {
     use crate::aws::LogsClient;
+    use std::collections::HashSet;
 
     let logs = match LogsClient::new(&region, &run_id).await {
         Ok(c) => c,
         Err(_) => return,
     };
 
+    let ec2 = match Ec2Client::new(&region).await {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // Track which instances have already been marked as failed
+    let mut failed_instances: HashSet<String> = HashSet::new();
+
     loop {
-        for (instance_type, _state) in &instances {
+        // Check for timeout
+        let elapsed = start_time.elapsed().as_secs();
+        if timeout_secs > 0 && elapsed > timeout_secs {
+            warn!(elapsed_secs = elapsed, timeout_secs = timeout_secs, "Run timeout exceeded");
+            for (instance_type, state) in &instances {
+                if !failed_instances.contains(instance_type) {
+                    error!(instance_type = %instance_type, "Instance timed out");
+                    let _ = tx
+                        .send(TuiMessage::InstanceUpdate {
+                            instance_type: instance_type.clone(),
+                            instance_id: state.instance_id.clone(),
+                            status: InstanceStatus::Failed,
+                            public_ip: state.public_ip.clone(),
+                        })
+                        .await;
+                }
+            }
+            break;
+        }
+
+        for (instance_type, state) in &instances {
+            // Skip already failed instances
+            if failed_instances.contains(instance_type) {
+                continue;
+            }
+
+            // Try CloudWatch Logs first (agent is running)
             if let Ok(output) = logs.get_recent_logs(instance_type, 50).await {
                 if !output.is_empty() {
                     let _ = tx
@@ -533,12 +594,44 @@ async fn poll_cloudwatch_logs(
                             output,
                         })
                         .await;
+                    continue; // Agent is running, skip console check
+                }
+            }
+
+            // Fall back to EC2 console output (for bootstrap phase)
+            if !state.instance_id.is_empty() {
+                if let Ok(Some(console_output)) = ec2.get_console_output(&state.instance_id).await {
+                    // Check for bootstrap failures
+                    if let Some(failure_pattern) = detect_bootstrap_failure(&console_output) {
+                        error!(
+                            instance_type = %instance_type,
+                            instance_id = %state.instance_id,
+                            pattern = %failure_pattern,
+                            "Bootstrap failure detected"
+                        );
+                        failed_instances.insert(instance_type.clone());
+                        let _ = tx
+                            .send(TuiMessage::InstanceUpdate {
+                                instance_type: instance_type.clone(),
+                                instance_id: state.instance_id.clone(),
+                                status: InstanceStatus::Failed,
+                                public_ip: state.public_ip.clone(),
+                            })
+                            .await;
+                        // Send console output so user can see what happened
+                        let _ = tx
+                            .send(TuiMessage::ConsoleOutput {
+                                instance_type: instance_type.clone(),
+                                output: console_output,
+                            })
+                            .await;
+                    }
                 }
             }
         }
 
-        // Poll every 2 seconds for near real-time updates
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Poll every 5 seconds
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
 }
 
@@ -674,17 +767,35 @@ async fn run_benchmarks_no_tui(
         }
     }
 
-    // Track start time for reporting
+    // Track start time for reporting and timeout
     let start_time = chrono::Utc::now();
+    let start_instant = Instant::now();
 
     // Simple polling mode
     println!("\n=== nix-bench-ec2 ===");
     println!("Run ID: {}", run_id);
     println!("Instances: {}", config.instance_types.join(", "));
     println!("Benchmark: {} ({} runs each)", config.attr, config.runs);
+    if config.timeout > 0 {
+        println!("Timeout: {}s", config.timeout);
+    }
     println!("Started: {}\n", start_time.format("%Y-%m-%d %H:%M:%S UTC"));
 
     loop {
+        // Check for timeout
+        let elapsed_secs = start_instant.elapsed().as_secs();
+        if config.timeout > 0 && elapsed_secs > config.timeout {
+            warn!(elapsed_secs = elapsed_secs, timeout = config.timeout, "Run timeout exceeded");
+            println!("\n⚠️  TIMEOUT: Run exceeded {}s limit", config.timeout);
+            for (instance_type, state) in instances.iter_mut() {
+                if state.status != InstanceStatus::Complete && state.status != InstanceStatus::Failed {
+                    error!(instance_type = %instance_type, "Instance timed out");
+                    state.status = InstanceStatus::Failed;
+                }
+            }
+            break;
+        }
+
         let metrics = cloudwatch.poll_metrics(&config.instance_types).await?;
 
         let mut all_complete = true;
@@ -692,6 +803,12 @@ async fn run_benchmarks_no_tui(
         let mut completed_runs = 0u32;
 
         for (instance_type, state) in instances.iter_mut() {
+            // Skip already failed instances
+            if state.status == InstanceStatus::Failed {
+                total_runs += state.total_runs;
+                continue;
+            }
+
             if let Some(m) = metrics.get(instance_type) {
                 if let Some(status) = m.status {
                     match status {
@@ -705,6 +822,22 @@ async fn run_benchmarks_no_tui(
                     state.run_progress = progress;
                 }
                 state.durations = m.durations.clone();
+            } else {
+                // No metrics yet - check console output for bootstrap failures
+                if !state.instance_id.is_empty() && state.status == InstanceStatus::Running {
+                    if let Ok(Some(console_output)) = ec2.get_console_output(&state.instance_id).await {
+                        if let Some(failure_pattern) = detect_bootstrap_failure(&console_output) {
+                            error!(
+                                instance_type = %instance_type,
+                                instance_id = %state.instance_id,
+                                pattern = %failure_pattern,
+                                "Bootstrap failure detected"
+                            );
+                            println!("\n❌ Bootstrap failure on {}: {}", instance_type, failure_pattern);
+                            state.status = InstanceStatus::Failed;
+                        }
+                    }
+                }
             }
 
             if state.status != InstanceStatus::Complete && state.status != InstanceStatus::Failed {
@@ -786,31 +919,65 @@ async fn cleanup_resources(
     let s3 = S3Client::new(&config.region).await?;
 
     if !config.keep {
-        info!("Terminating instances...");
-        for (instance_type, state) in instances {
-            if !state.instance_id.is_empty() {
-                if let Err(e) = ec2.terminate_instance(&state.instance_id).await {
-                    warn!(instance_type = %instance_type, error = ?e, "Failed to terminate instance");
-                } else {
-                    let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, &state.instance_id);
+        // Collect instance IDs from the HashMap
+        let mut instance_ids: std::collections::HashSet<String> = instances
+            .values()
+            .filter(|s| !s.instance_id.is_empty())
+            .map(|s| s.instance_id.clone())
+            .collect();
+
+        // Also check the database for any instances that might have been created
+        // but not tracked in the HashMap (e.g., if user quit early during init)
+        if let Ok(db_resources) = state::get_run_resources(&db, run_id) {
+            for resource in db_resources {
+                if resource.resource_type == ResourceType::Ec2Instance {
+                    instance_ids.insert(resource.resource_id);
+                }
+            }
+        }
+
+        info!(count = instance_ids.len(), "Terminating instances...");
+        for instance_id in &instance_ids {
+            match ec2.terminate_instance(instance_id).await {
+                Ok(()) => {
+                    info!(instance_id = %instance_id, "Instance terminated");
+                    let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id);
+                }
+                Err(e) => {
+                    let error_str = format!("{:?}", e);
+                    if error_str.contains("InvalidInstanceID.NotFound") {
+                        // Already terminated
+                        let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id);
+                    } else {
+                        warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
+                    }
                 }
             }
         }
 
         info!("Deleting S3 bucket...");
-        if let Err(e) = s3.delete_bucket(bucket_name).await {
-            warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
-        } else {
-            let _ = state::mark_resource_deleted(&db, ResourceType::S3Bucket, bucket_name);
+        match s3.delete_bucket(bucket_name).await {
+            Ok(()) => {
+                let _ = state::mark_resource_deleted(&db, ResourceType::S3Bucket, bucket_name);
+            }
+            Err(e) => {
+                let error_str = format!("{:?}", e);
+                if error_str.contains("NoSuchBucket") {
+                    let _ = state::mark_resource_deleted(&db, ResourceType::S3Bucket, bucket_name);
+                } else {
+                    warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
+                }
+            }
         }
     } else {
         info!("Keeping instances and bucket (--keep specified)");
     }
 
     // Update run status
-    let all_complete = instances
-        .values()
-        .all(|s| s.status == InstanceStatus::Complete);
+    let all_complete = !instances.is_empty()
+        && instances
+            .values()
+            .all(|s| s.status == InstanceStatus::Complete);
 
     state::update_run_status(
         &db,
@@ -852,13 +1019,15 @@ async fn write_results(
                     .durations
                     .iter()
                     .cloned()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .filter(|x| x.is_finite())
+                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(0.0);
                 let max = v
                     .durations
                     .iter()
                     .cloned()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .filter(|x| x.is_finite())
+                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(0.0);
 
                 (

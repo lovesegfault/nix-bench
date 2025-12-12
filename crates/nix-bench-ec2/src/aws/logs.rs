@@ -1,6 +1,6 @@
 //! CloudWatch Logs polling for real-time build output
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use aws_sdk_cloudwatchlogs::Client;
 use tracing::debug;
 

@@ -250,6 +250,29 @@ impl Ec2Client {
         Ok(())
     }
 
+    /// Get console output from an instance
+    pub async fn get_console_output(&self, instance_id: &str) -> Result<Option<String>> {
+        let response = self
+            .client
+            .get_console_output()
+            .instance_id(instance_id)
+            .send()
+            .await
+            .context("Failed to get console output")?;
+
+        // Console output is base64 encoded
+        if let Some(encoded) = response.output() {
+            use base64::Engine;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok());
+            Ok(decoded)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get instance state
     #[allow(dead_code)]
     pub async fn get_instance_state(&self, instance_id: &str) -> Result<Option<InstanceStateName>> {

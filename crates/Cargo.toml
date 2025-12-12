@@ -19,7 +19,7 @@ aws-sdk-cloudwatch = "1"
 aws-sdk-s3 = "1"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

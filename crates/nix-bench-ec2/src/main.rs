@@ -59,11 +59,13 @@ enum Command {
         no_tui: bool,
 
         /// Path to pre-built agent binary for x86_64-linux
-        #[arg(long)]
+        /// (default: $NIX_BENCH_AGENT_X86_64)
+        #[arg(long, env = "NIX_BENCH_AGENT_X86_64")]
         agent_x86_64: Option<String>,
 
         /// Path to pre-built agent binary for aarch64-linux
-        #[arg(long)]
+        /// (default: $NIX_BENCH_AGENT_AARCH64)
+        #[arg(long, env = "NIX_BENCH_AGENT_AARCH64")]
         agent_aarch64: Option<String>,
 
         /// VPC subnet ID for launching instances (uses default VPC if not specified)

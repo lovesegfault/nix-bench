@@ -90,6 +90,16 @@
             # Build dependencies (for caching)
             cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+            # Test with nextest using nix profile (skips AWS integration tests)
+            nix-bench-nextest = craneLib.cargoNextest (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                nativeBuildInputs = (commonArgs.nativeBuildInputs or [ ]) ++ [ pkgs.cargo-nextest ];
+                cargoNextestExtraArgs = "--profile nix";
+              }
+            );
+
             # Individual crates
             nix-bench-ec2 = craneLib.buildPackage (
               commonArgs
@@ -97,6 +107,8 @@
                 inherit cargoArtifacts;
                 pname = "nix-bench-ec2";
                 cargoExtraArgs = "-p nix-bench-ec2";
+                # Skip default cargo test, we use nextest separately
+                doCheck = false;
               }
             );
 
@@ -106,6 +118,8 @@
                 inherit cargoArtifacts;
                 pname = "nix-bench-agent";
                 cargoExtraArgs = "-p nix-bench-agent";
+                # Skip default cargo test, we use nextest separately
+                doCheck = false;
               }
             );
 
@@ -160,10 +174,15 @@
             packages =
               nixBench.mkTieredPackages { }
               // {
-                inherit nix-bench-ec2 nix-bench-agent;
+                inherit nix-bench-ec2 nix-bench-agent nix-bench-nextest;
                 default = nix-bench-ec2;
               }
               // (if nix-bench-agent-aarch64 != null then { inherit nix-bench-agent-aarch64; } else { });
+
+            # Checks (run unit tests via nextest)
+            checks = {
+              nextest = nix-bench-nextest;
+            };
 
             # Magic attrsets: .#shallow.hello, .#deep.firefox
             legacyPackages = {

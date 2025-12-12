@@ -14,6 +14,7 @@ const NAMESPACE: &str = "NixBench";
 
 /// Metrics for an instance
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct InstanceMetrics {
     pub status: Option<i32>,
     pub run_progress: Option<u32>,

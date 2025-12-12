@@ -13,3 +13,9 @@ path = "target/nextest/default/junit.xml"
 # CI profile with longer timeouts
 slow-timeout = { period = "120s", terminate-after = 2 }
 fail-fast = false
+
+# Profile for nix builds - skip integration tests that need AWS credentials
+[profile.nix]
+test-threads = 1
+# Run all tests except integration test binaries (in tests/ directory)
+default-filter = 'not kind(test)'

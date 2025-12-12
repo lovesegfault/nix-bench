@@ -10,6 +10,7 @@ use aws_sdk_ec2::{
 use tracing::{debug, info};
 
 /// EC2 client for managing benchmark instances
+#[allow(dead_code)]
 pub struct Ec2Client {
     client: Client,
     region: String,
@@ -17,6 +18,7 @@ pub struct Ec2Client {
 
 /// Launched instance info
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LaunchedInstance {
     pub instance_id: String,
     pub instance_type: String,
@@ -249,6 +251,7 @@ impl Ec2Client {
     }
 
     /// Get instance state
+    #[allow(dead_code)]
     pub async fn get_instance_state(&self, instance_id: &str) -> Result<Option<InstanceStateName>> {
         let response = self
             .client

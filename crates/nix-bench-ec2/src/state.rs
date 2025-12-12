@@ -57,6 +57,7 @@ pub fn open_db() -> Result<Connection> {
 
 /// Run status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum RunStatus {
     Running,
     Completed,
@@ -74,6 +75,7 @@ impl RunStatus {
         }
     }
 
+    #[allow(dead_code)]
     fn from_str(s: &str) -> Self {
         match s {
             "running" => RunStatus::Running,
@@ -102,6 +104,7 @@ impl ResourceType {
         }
     }
 
+    #[allow(dead_code)]
     fn from_str(s: &str) -> Self {
         match s {
             "ec2_instance" => ResourceType::Ec2Instance,
@@ -114,6 +117,7 @@ impl ResourceType {
 
 /// A tracked resource
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Resource {
     pub id: i64,
     pub run_id: String,

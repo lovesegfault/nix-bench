@@ -2,7 +2,8 @@
 
 pub mod benchmark;
 pub mod config;
+pub mod error;
+pub mod grpc;
 pub mod logs;
 pub mod metrics;
-pub mod nvme;
 pub mod results;

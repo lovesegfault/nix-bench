@@ -1,5 +1,6 @@
 //! Configuration types for the coordinator
 
+use crate::tui::LogCapture;
 use serde::{Deserialize, Serialize};
 
 /// Default flake reference for nix-bench
@@ -13,7 +14,6 @@ pub const DEFAULT_MAX_FAILURES: u32 = 3;
 
 /// Configuration for a benchmark run
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RunConfig {
     /// EC2 instance types to benchmark
     pub instance_types: Vec<String>,
@@ -65,6 +65,9 @@ pub struct RunConfig {
 
     /// Maximum number of build failures before giving up
     pub max_failures: u32,
+
+    /// Log capture for printing errors/warnings after TUI exit
+    pub log_capture: Option<LogCapture>,
 }
 
 /// Configuration sent to the agent
@@ -86,6 +89,15 @@ pub struct AgentConfig {
     /// Maximum number of build failures before giving up
     #[serde(default = "default_max_failures")]
     pub max_failures: u32,
+    /// CA certificate (PEM) for mTLS
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_cert_pem: Option<String>,
+    /// Agent certificate (PEM) for mTLS
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_cert_pem: Option<String>,
+    /// Agent private key (PEM) for mTLS
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_key_pem: Option<String>,
 }
 
 fn default_flake_ref() -> String {
@@ -103,15 +115,21 @@ fn default_max_failures() -> u32 {
 /// Detect system architecture from instance type
 pub fn detect_system(instance_type: &str) -> &'static str {
     // Graviton instances have a 'g' after the generation number
-    // e.g., c7g, m7g, r7g, c6g, etc.
-    if instance_type.contains("6g")
-        || instance_type.contains("7g")
-        || instance_type.contains("8g")
-    {
-        "aarch64-linux"
-    } else {
-        "x86_64-linux"
+    // e.g., c7g, m7g, r7g, c6g, m7gd, c8g, m9g, etc.
+    // Pattern: family + generation + 'g' (optionally followed by 'd' for NVMe)
+    // We look for a digit followed by 'g' (and optionally 'd') before the dot
+    let prefix = instance_type.split('.').next().unwrap_or("");
+
+    // Check if there's a digit followed by 'g' (with optional 'd' suffix)
+    // This matches: c7g, m7gd, r8g, c9g, etc.
+    let chars: Vec<char> = prefix.chars().collect();
+    for i in 0..chars.len().saturating_sub(1) {
+        if chars[i].is_ascii_digit() && chars[i + 1] == 'g' {
+            return "aarch64-linux";
+        }
     }
+
+    "x86_64-linux"
 }
 
 #[cfg(test)]
@@ -120,11 +138,19 @@ mod tests {
 
     #[test]
     fn test_detect_system() {
+        // x86_64 instances
         assert_eq!(detect_system("c7i.metal"), "x86_64-linux");
         assert_eq!(detect_system("m8a.48xlarge"), "x86_64-linux");
+        assert_eq!(detect_system("c5.xlarge"), "x86_64-linux");
+        assert_eq!(detect_system("r6i.large"), "x86_64-linux");
+
+        // Graviton (aarch64) instances
         assert_eq!(detect_system("c7g.metal"), "aarch64-linux");
         assert_eq!(detect_system("m7gd.16xlarge"), "aarch64-linux");
         assert_eq!(detect_system("c6gd.metal"), "aarch64-linux");
+        assert_eq!(detect_system("m9g.xlarge"), "aarch64-linux");
+        assert_eq!(detect_system("r8g.large"), "aarch64-linux");
+        assert_eq!(detect_system("c9gd.metal"), "aarch64-linux");
     }
 
     #[test]

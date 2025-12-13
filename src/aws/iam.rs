@@ -1,7 +1,11 @@
 //! IAM role and instance profile management for nix-bench agents
 
+use crate::aws_context::AwsContext;
+use crate::wait::{wait_for_resource, WaitConfig};
 use anyhow::{Context, Result};
 use aws_sdk_iam::Client;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 /// IAM client for managing roles and instance profiles
@@ -64,23 +68,27 @@ fn generate_agent_policy(bucket_name: &str) -> String {
 impl IamClient {
     /// Create a new IAM client
     pub async fn new(region: &str) -> Result<Self> {
-        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(region.to_string()))
-            .load()
-            .await;
+        let ctx = AwsContext::new(region).await;
+        Ok(Self::from_context(&ctx))
+    }
 
-        let client = Client::new(&config);
-
-        Ok(Self { client })
+    /// Create an IAM client from a pre-loaded AWS context
+    pub fn from_context(ctx: &AwsContext) -> Self {
+        Self {
+            client: ctx.iam_client(),
+        }
     }
 
     /// Create a role and instance profile for a benchmark run
     ///
     /// Returns (role_name, instance_profile_name)
+    ///
+    /// The optional `cancel` token allows cancelling the wait for IAM propagation.
     pub async fn create_benchmark_role(
         &self,
         run_id: &str,
         bucket_name: &str,
+        cancel: Option<&CancellationToken>,
     ) -> Result<(String, String)> {
         let role_name = format!("nix-bench-agent-{}", &run_id[..13]); // Truncate for IAM limits
         let profile_name = role_name.clone();
@@ -120,6 +128,17 @@ impl IamClient {
 
         debug!(role_name = %role_name, "Inline policy attached");
 
+        // Attach SSM managed policy for Session Manager access
+        self.client
+            .attach_role_policy()
+            .role_name(&role_name)
+            .policy_arn("arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
+            .send()
+            .await
+            .context("Failed to attach SSM managed policy")?;
+
+        debug!(role_name = %role_name, "SSM managed policy attached");
+
         // Create instance profile
         self.client
             .create_instance_profile()
@@ -152,8 +171,49 @@ impl IamClient {
             "IAM role and instance profile created"
         );
 
-        // Wait a bit for IAM propagation
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        // Wait for instance profile to be ready (role attached) with exponential backoff
+        // This is more responsive than a fixed 10-second sleep and can be cancelled.
+        let client = self.client.clone();
+        let profile_name_clone = profile_name.clone();
+
+        wait_for_resource(
+            WaitConfig {
+                initial_delay: Duration::from_millis(500),
+                max_delay: Duration::from_secs(5),
+                timeout: Duration::from_secs(60), // Increased timeout for IAM propagation
+                jitter: 0.25,
+            },
+            cancel,
+            || {
+                let c = client.clone();
+                let p = profile_name_clone.clone();
+                async move {
+                    match c
+                        .get_instance_profile()
+                        .instance_profile_name(&p)
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            // Check if role is attached to the profile
+                            let has_role = resp
+                                .instance_profile()
+                                .map(|profile| !profile.roles().is_empty())
+                                .unwrap_or(false);
+                            Ok(has_role)
+                        }
+                        Err(_) => Ok(false), // Profile not ready yet
+                    }
+                }
+            },
+            "IAM instance profile",
+        )
+        .await
+        .context("Waiting for IAM instance profile to be ready")?;
+
+        // Note: EC2 may still not recognize the profile due to eventual consistency.
+        // The launch_instance function handles this with retry logic.
+        debug!(profile_name = %profile_name, "IAM instance profile visible in IAM API");
 
         Ok((role_name, profile_name))
     }
@@ -200,6 +260,18 @@ impl IamClient {
             .await
         {
             debug!(error = ?e, "Failed to delete role policy (may already be deleted)");
+        }
+
+        // Detach SSM managed policy
+        if let Err(e) = self
+            .client
+            .detach_role_policy()
+            .role_name(role_name)
+            .policy_arn("arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
+            .send()
+            .await
+        {
+            debug!(error = ?e, "Failed to detach SSM managed policy (may already be detached)");
         }
 
         // Delete role

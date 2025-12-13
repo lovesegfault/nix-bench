@@ -1,5 +1,6 @@
 //! Configuration loading from JSON
 
+use crate::agent::error::ConfigError;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
@@ -18,6 +19,21 @@ fn default_build_timeout() -> u64 {
 /// Default max failures before giving up
 fn default_max_failures() -> u32 {
     3
+}
+
+/// Default broadcast channel capacity for gRPC log streaming
+fn default_broadcast_capacity() -> usize {
+    1024
+}
+
+/// Default gRPC port
+fn default_grpc_port() -> u16 {
+    50051
+}
+
+/// Default require_tls setting
+fn default_require_tls() -> bool {
+    false
 }
 
 /// Agent configuration loaded from JSON
@@ -56,6 +72,31 @@ pub struct Config {
     /// Maximum number of build failures before giving up (default: 3)
     #[serde(default = "default_max_failures")]
     pub max_failures: u32,
+
+    /// Broadcast channel capacity for gRPC log streaming (default: 1024)
+    #[serde(default = "default_broadcast_capacity")]
+    pub broadcast_capacity: usize,
+
+    /// gRPC server port (default: 50051)
+    #[serde(default = "default_grpc_port")]
+    pub grpc_port: u16,
+
+    /// Require TLS for gRPC server (default: false)
+    /// If true and TLS certificates are not provided, the agent will fail to start
+    #[serde(default = "default_require_tls")]
+    pub require_tls: bool,
+
+    /// CA certificate (PEM) for mTLS
+    #[serde(default)]
+    pub ca_cert_pem: Option<String>,
+
+    /// Agent certificate (PEM) for mTLS
+    #[serde(default)]
+    pub agent_cert_pem: Option<String>,
+
+    /// Agent private key (PEM) for mTLS
+    #[serde(default)]
+    pub agent_key_pem: Option<String>,
 }
 
 impl Config {
@@ -72,51 +113,84 @@ impl Config {
     }
 
     /// Validate configuration values
-    fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<(), ConfigError> {
         if self.run_id.is_empty() {
-            anyhow::bail!("Config error: run_id cannot be empty");
+            return Err(ConfigError::EmptyRunId);
         }
 
         if self.bucket.is_empty() {
-            anyhow::bail!("Config error: bucket cannot be empty");
+            return Err(ConfigError::EmptyBucket);
         }
 
         if self.region.is_empty() {
-            anyhow::bail!("Config error: region cannot be empty");
+            return Err(ConfigError::EmptyRegion);
         }
 
         if self.attr.is_empty() {
-            anyhow::bail!("Config error: attr cannot be empty");
+            return Err(ConfigError::EmptyAttr);
         }
 
         if self.runs == 0 {
-            anyhow::bail!("Config error: runs must be at least 1");
+            return Err(ConfigError::InvalidRuns(self.runs));
         }
 
         if self.instance_type.is_empty() {
-            anyhow::bail!("Config error: instance_type cannot be empty");
+            return Err(ConfigError::EmptyInstanceType);
         }
 
         if self.system != "x86_64-linux" && self.system != "aarch64-linux" {
-            anyhow::bail!(
-                "Config error: system must be 'x86_64-linux' or 'aarch64-linux', got: {}",
-                self.system
-            );
+            return Err(ConfigError::InvalidSystem(self.system.clone()));
         }
 
         if self.flake_ref.is_empty() {
-            anyhow::bail!("Config error: flake_ref cannot be empty");
+            return Err(ConfigError::EmptyFlakeRef);
         }
 
         if self.build_timeout == 0 {
-            anyhow::bail!("Config error: build_timeout must be greater than 0");
+            return Err(ConfigError::InvalidBuildTimeout);
         }
 
         if self.max_failures == 0 {
-            anyhow::bail!("Config error: max_failures must be at least 1");
+            return Err(ConfigError::InvalidMaxFailures);
+        }
+
+        if self.broadcast_capacity == 0 {
+            return Err(ConfigError::InvalidBroadcastCapacity);
+        }
+
+        // If require_tls is true, all TLS certificates must be provided
+        if self.require_tls {
+            if self.ca_cert_pem.is_none() {
+                return Err(ConfigError::MissingCaCert);
+            }
+            if self.agent_cert_pem.is_none() {
+                return Err(ConfigError::MissingAgentCert);
+            }
+            if self.agent_key_pem.is_none() {
+                return Err(ConfigError::MissingAgentKey);
+            }
         }
 
         Ok(())
+    }
+
+    /// Get TLS configuration if certificates are present
+    pub fn tls_config(&self) -> Option<crate::tls::TlsConfig> {
+        match (&self.ca_cert_pem, &self.agent_cert_pem, &self.agent_key_pem) {
+            (Some(ca), Some(cert), Some(key)) => Some(crate::tls::TlsConfig {
+                ca_cert_pem: ca.clone(),
+                cert_pem: cert.clone(),
+                key_pem: key.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Check if TLS is enabled
+    pub fn tls_enabled(&self) -> bool {
+        self.ca_cert_pem.is_some()
+            && self.agent_cert_pem.is_some()
+            && self.agent_key_pem.is_some()
     }
 }
 
@@ -251,5 +325,310 @@ mod tests {
         let result = Config::load(Path::new("/nonexistent/config.json"));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Failed to read"));
+    }
+
+    #[test]
+    fn test_validation_empty_bucket() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux"
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("bucket"));
+    }
+
+    #[test]
+    fn test_validation_empty_region() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux"
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("region"));
+    }
+
+    #[test]
+    fn test_validation_empty_attr() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux"
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("attr"));
+    }
+
+    #[test]
+    fn test_validation_empty_instance_type() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "",
+                "system": "x86_64-linux"
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("instance_type"));
+    }
+
+    #[test]
+    fn test_validation_empty_flake_ref() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "flake_ref": ""
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("flake_ref"));
+    }
+
+    #[test]
+    fn test_validation_zero_build_timeout() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "build_timeout": 0
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("build_timeout"));
+    }
+
+    #[test]
+    fn test_validation_zero_max_failures() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "max_failures": 0
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_failures"));
+    }
+
+    #[test]
+    fn test_validation_zero_broadcast_capacity() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "broadcast_capacity": 0
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("broadcast_capacity"));
+    }
+
+    #[test]
+    fn test_tls_config_when_all_certs_present() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+                "agent_cert_pem": "-----BEGIN CERTIFICATE-----\nAGENT\n-----END CERTIFICATE-----",
+                "agent_key_pem": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----"
+            }}"#
+        )
+        .unwrap();
+
+        let config = Config::load(file.path()).unwrap();
+        assert!(config.tls_enabled());
+        let tls_config = config.tls_config();
+        assert!(tls_config.is_some());
+    }
+
+    #[test]
+    fn test_tls_config_when_certs_missing() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux"
+            }}"#
+        )
+        .unwrap();
+
+        let config = Config::load(file.path()).unwrap();
+        assert!(!config.tls_enabled());
+        assert!(config.tls_config().is_none());
+    }
+
+    #[test]
+    fn test_tls_config_when_partial_certs() {
+        // Only CA cert, missing agent cert and key
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----"
+            }}"#
+        )
+        .unwrap();
+
+        let config = Config::load(file.path()).unwrap();
+        // Partial TLS config should not be enabled
+        assert!(!config.tls_enabled());
+        assert!(config.tls_config().is_none());
+    }
+
+    #[test]
+    fn test_require_tls_without_certs_fails() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "require_tls": true
+            }}"#
+        )
+        .unwrap();
+
+        let result = Config::load(file.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("require_tls is true but ca_cert_pem is not provided"));
+    }
+
+    #[test]
+    fn test_require_tls_with_certs_succeeds() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{
+                "run_id": "abc123",
+                "bucket": "nix-bench-abc123",
+                "region": "us-east-2",
+                "attr": "large-deep",
+                "runs": 10,
+                "instance_type": "c7id.metal",
+                "system": "x86_64-linux",
+                "require_tls": true,
+                "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+                "agent_cert_pem": "-----BEGIN CERTIFICATE-----\nAGENT\n-----END CERTIFICATE-----",
+                "agent_key_pem": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----"
+            }}"#
+        )
+        .unwrap();
+
+        let config = Config::load(file.path()).unwrap();
+        assert!(config.require_tls);
+        assert!(config.tls_enabled());
     }
 }

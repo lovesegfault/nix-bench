@@ -1,21 +1,27 @@
 //! Instance list widget
 
 use crate::tui::app::App;
+use crate::tui::theme;
+use crate::tui::truncate_str;
 use crate::tui::ui::{status_color, status_symbol};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+/// Render the instance list and return the scroll offset for mouse click handling
+pub fn render(frame: &mut Frame, area: Rect, app: &App) -> usize {
+    let t = theme::theme();
+
     // Calculate available width (minus borders and highlight symbol)
     let available_width = area.width.saturating_sub(5) as usize;
 
     let items: Vec<ListItem> = app
-        .instance_order
+        .instances
+        .order
         .iter()
         .filter_map(|instance_type| {
-            let state = app.instances.get(instance_type)?;
+            let state = app.instances.data.get(instance_type)?;
             let symbol = status_symbol(state.status);
             let color = status_color(state.status);
 
@@ -26,41 +32,37 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
             let line = Line::from(vec![
                 Span::styled(format!("{} ", symbol), Style::default().fg(color)),
-                Span::raw(format!(
-                    "{:<width$} ",
-                    truncate_instance_type(instance_type, max_name_len),
-                    width = max_name_len
-                )),
-                Span::styled(runs_str, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(
+                        "{:<width$} ",
+                        truncate_str(instance_type, max_name_len),
+                        width = max_name_len
+                    ),
+                    t.text(),
+                ),
+                Span::styled(runs_str, t.dim()),
             ]);
 
             Some(ListItem::new(line))
         })
         .collect();
 
-    let title = format!(" Instances ({}) ", app.instances.len());
+    let title = format!(" Instances ({}) ", app.instances.data.len());
     let list = List::new(items)
-        .block(Block::default().title(title).borders(Borders::ALL))
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(t.block_unfocused()),
         )
+        .highlight_style(t.selection().add_modifier(Modifier::BOLD))
         .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
-    list_state.select(Some(app.selected_index));
+    list_state.select(Some(app.instances.selected_index));
 
     frame.render_stateful_widget(list, area, &mut list_state);
-}
 
-/// Truncate instance type to fit in display
-fn truncate_instance_type(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else if max_len > 1 {
-        format!("{}…", &s[..max_len - 1])
-    } else {
-        "…".to_string()
-    }
+    // Return the scroll offset for mouse click calculation
+    list_state.offset()
 }

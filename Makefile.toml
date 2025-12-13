@@ -1,0 +1,183 @@
+# cargo-make configuration for nix-bench
+# Run tasks with: cargo make <task>
+
+[config]
+default_to_workspace = false
+
+# ============================================================================
+# Agent Build Tasks
+# ============================================================================
+
+[tasks.agent]
+description = "Build agents for x86_64 and aarch64 (statically linked with musl)"
+command = "cargo"
+args = [
+    "build",
+    "--features", "agent",
+    "--bin", "nix-bench-agent",
+    "--release",
+    "--target", "x86_64-unknown-linux-musl",
+    "--target", "aarch64-unknown-linux-musl",
+]
+
+[tasks.agent-x86]
+description = "Build agent for x86_64 only"
+command = "cargo"
+args = [
+    "build",
+    "--features", "agent",
+    "--bin", "nix-bench-agent",
+    "--release",
+    "--target", "x86_64-unknown-linux-musl",
+]
+
+[tasks.agent-aarch64]
+description = "Build agent for aarch64 only"
+command = "cargo"
+args = [
+    "build",
+    "--features", "agent",
+    "--bin", "nix-bench-agent",
+    "--release",
+    "--target", "aarch64-unknown-linux-musl",
+]
+
+# ============================================================================
+# Coordinator Build/Run Tasks
+# ============================================================================
+
+[tasks.build-coordinator]
+description = "Build coordinator in release mode"
+command = "cargo"
+args = [
+    "build",
+    "--features", "coordinator",
+    "--bin", "nix-bench-coordinator",
+    "--release",
+]
+
+[tasks.b]
+description = "Build agents then coordinator (release)"
+dependencies = ["agent"]
+run_task = "build-coordinator"
+
+[tasks.build]
+description = "Build agents then coordinator (release)"
+alias = "b"
+
+[tasks.run-coordinator]
+description = "Run coordinator (pass args after --)"
+command = "cargo"
+args = ["run", "--features", "coordinator", "--bin", "nix-bench-coordinator", "--release"]
+
+[tasks.r]
+description = "Build agents then run coordinator with 'run' subcommand"
+dependencies = ["agent", "build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["run", "${@}"]
+
+[tasks.run]
+description = "Build agents then run coordinator"
+alias = "r"
+
+[tasks.coord]
+description = "Run coordinator with any subcommand (pass subcommand after --)"
+dependencies = ["build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["${@}"]
+
+[tasks.state]
+description = "Run coordinator state subcommand (list, cleanup, prune)"
+dependencies = ["build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["state", "${@}"]
+
+[tasks.cleanup]
+description = "Cleanup orphaned AWS resources"
+dependencies = ["build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["state", "cleanup"]
+
+[tasks.list]
+description = "List tracked resources"
+dependencies = ["build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["state", "list"]
+
+[tasks.prune]
+description = "Prune stale entries from local database"
+dependencies = ["build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["state", "prune"]
+
+# ============================================================================
+# Test Tasks
+# ============================================================================
+
+[tasks.t]
+description = "Run tests with nextest"
+command = "cargo"
+args = ["nextest", "run"]
+
+[tasks.test]
+description = "Run tests with nextest"
+alias = "t"
+
+[tasks.ta]
+description = "Run all tests including AWS integration"
+command = "cargo"
+args = ["nextest", "run", "--run-ignored", "all"]
+
+[tasks.test-all]
+description = "Run all tests including AWS integration"
+alias = "ta"
+
+# ============================================================================
+# Check/Lint Tasks
+# ============================================================================
+
+[tasks.c]
+description = "Cargo check"
+command = "cargo"
+args = ["check"]
+
+[tasks.check]
+alias = "c"
+
+[tasks.cl]
+description = "Cargo clippy"
+command = "cargo"
+args = ["clippy"]
+
+[tasks.clippy]
+alias = "cl"
+
+# ============================================================================
+# Development Helpers
+# ============================================================================
+
+[tasks.build-coordinator-debug]
+description = "Build coordinator in debug mode"
+command = "cargo"
+args = ["build", "--features", "coordinator", "--bin", "nix-bench-coordinator"]
+
+[tasks.dev]
+description = "Build agents then run coordinator in dev mode (debug build)"
+dependencies = ["agent", "build-coordinator-debug"]
+command = "./target/debug/nix-bench-coordinator"
+args = ["run", "${@}"]
+
+[tasks.watch]
+description = "Watch for changes and run check"
+command = "cargo"
+args = ["watch", "-x", "check"]
+
+[tasks.fmt]
+description = "Format code"
+command = "cargo"
+args = ["fmt"]
+
+[tasks.fmt-check]
+description = "Check formatting"
+command = "cargo"
+args = ["fmt", "--check"]

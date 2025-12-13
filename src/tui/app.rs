@@ -104,32 +104,6 @@ impl App {
         }
     }
 
-    pub fn new(instances: HashMap<String, InstanceState>, total_runs: u32) -> Self {
-        let mut instance_order: Vec<String> = instances.keys().cloned().collect();
-        instance_order.sort();
-
-        let now = Instant::now();
-        Self {
-            instances,
-            selected_index: 0,
-            instance_order,
-            should_quit: false,
-            total_runs,
-            start_time: now,
-            last_update: now,
-            show_help: false,
-            init_phase: InitPhase::Running,
-            run_id: None,
-            bucket_name: None,
-            instance_list_area: None,
-        }
-    }
-
-    /// Update init phase
-    pub fn set_phase(&mut self, phase: InitPhase) {
-        self.init_phase = phase;
-    }
-
     /// Check if we're still initializing
     pub fn is_initializing(&self) -> bool {
         !matches!(self.init_phase, InitPhase::Running | InitPhase::Completed | InitPhase::Failed(_))

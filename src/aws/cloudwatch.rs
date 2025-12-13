@@ -1,5 +1,6 @@
 //! CloudWatch metrics polling
 
+use crate::metrics::{self, NAMESPACE};
 use anyhow::{Context, Result};
 use aws_sdk_cloudwatch::{
     primitives::DateTime as AwsDateTime,
@@ -9,8 +10,6 @@ use aws_sdk_cloudwatch::{
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use tracing::debug;
-
-const NAMESPACE: &str = "NixBench";
 
 /// Metrics for an instance
 #[derive(Debug, Clone, Default)]
@@ -26,11 +25,20 @@ pub struct InstanceMetrics {
 pub struct CloudWatchClient {
     client: Client,
     run_id: String,
+    /// Maps instance_type to system (e.g., "x86_64-linux" or "aarch64-linux")
+    instance_systems: HashMap<String, String>,
 }
 
 impl CloudWatchClient {
     /// Create a new CloudWatch client
-    pub async fn new(region: &str, run_id: &str) -> Result<Self> {
+    ///
+    /// `instance_systems` maps each instance type to its system architecture
+    /// (e.g., "c7i.metal" -> "x86_64-linux", "c7g.metal" -> "aarch64-linux")
+    pub async fn new(
+        region: &str,
+        run_id: &str,
+        instance_systems: HashMap<String, String>,
+    ) -> Result<Self> {
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(aws_config::Region::new(region.to_string()))
             .load()
@@ -41,6 +49,7 @@ impl CloudWatchClient {
         Ok(Self {
             client,
             run_id: run_id.to_string(),
+            instance_systems,
         })
     }
 
@@ -55,8 +64,14 @@ impl CloudWatchClient {
         let start_time = end_time - Duration::minutes(10);
 
         for instance_type in instance_types {
+            let system = self
+                .instance_systems
+                .get(instance_type)
+                .map(|s| s.as_str())
+                .unwrap_or("x86_64-linux");
+
             let metrics = self
-                .get_instance_metrics(instance_type, start_time, end_time)
+                .get_instance_metrics(instance_type, system, start_time, end_time)
                 .await?;
             results.insert(instance_type.clone(), metrics);
         }
@@ -67,33 +82,26 @@ impl CloudWatchClient {
     async fn get_instance_metrics(
         &self,
         instance_type: &str,
+        system: &str,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
     ) -> Result<InstanceMetrics> {
-        let dimensions = vec![
-            Dimension::builder()
-                .name("RunId")
-                .value(&self.run_id)
-                .build(),
-            Dimension::builder()
-                .name("InstanceType")
-                .value(instance_type)
-                .build(),
-        ];
+        // Use shared dimension builder to ensure consistency with agent
+        let dimensions = metrics::build_dimensions(&self.run_id, instance_type, system);
 
         // Query Status metric
         let status = self
-            .get_latest_metric("Status", &dimensions, start_time, end_time)
+            .get_latest_metric(metrics::names::STATUS, &dimensions, start_time, end_time)
             .await?;
 
         // Query RunProgress metric
         let progress = self
-            .get_latest_metric("RunProgress", &dimensions, start_time, end_time)
+            .get_latest_metric(metrics::names::RUN_PROGRESS, &dimensions, start_time, end_time)
             .await?;
 
         // Query RunDuration metrics
         let durations = self
-            .get_all_metrics("RunDuration", &dimensions, start_time, end_time)
+            .get_all_metrics(metrics::names::RUN_DURATION, &dimensions, start_time, end_time)
             .await?;
 
         Ok(InstanceMetrics {

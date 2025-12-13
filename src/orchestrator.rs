@@ -281,8 +281,15 @@ async fn run_benchmarks_with_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create placeholder CloudWatch client (will be replaced after init)
-    let cloudwatch = CloudWatchClient::new(&config.region, &run_id).await?;
+    // Build instance_type -> system mapping for CloudWatch metrics
+    let instance_systems: HashMap<String, String> = config
+        .instance_types
+        .iter()
+        .map(|it| (it.clone(), detect_system(it).to_string()))
+        .collect();
+
+    // Create CloudWatch client with system mapping
+    let cloudwatch = CloudWatchClient::new(&config.region, &run_id, instance_systems).await?;
 
     // Create empty instances map - will be filled by background task
     let mut instances: HashMap<String, InstanceState> = HashMap::new();
@@ -575,8 +582,11 @@ async fn poll_instance_output(
     timeout_secs: u64,
     start_time: Instant,
 ) {
+    use crate::aws::logs::LogsError;
     use crate::aws::LogsClient;
     use std::collections::HashSet;
+    use std::time::Duration;
+    use tracing::debug;
 
     let logs = match LogsClient::new(&region, &run_id).await {
         Ok(c) => c,
@@ -590,6 +600,11 @@ async fn poll_instance_output(
 
     // Track which instances have already been marked as failed
     let mut failed_instances: HashSet<String> = HashSet::new();
+
+    // Exponential backoff for rate limiting
+    let mut backoff = Duration::from_secs(5);
+    const MIN_BACKOFF: Duration = Duration::from_secs(5);
+    const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
     loop {
         // Check for timeout
@@ -612,6 +627,8 @@ async fn poll_instance_output(
             break;
         }
 
+        let mut any_rate_limited = false;
+
         for (instance_type, state) in &instances {
             // Skip already failed instances
             if failed_instances.contains(instance_type) {
@@ -619,8 +636,10 @@ async fn poll_instance_output(
             }
 
             // Try CloudWatch Logs first (agent is running)
-            if let Ok(output) = logs.get_recent_logs(instance_type, 50).await {
-                if !output.is_empty() {
+            match logs.get_recent_logs(instance_type, 50).await {
+                Ok(output) if !output.is_empty() => {
+                    // Success - reset backoff and send update
+                    backoff = MIN_BACKOFF;
                     let _ = tx
                         .send(TuiMessage::ConsoleOutput {
                             instance_type: instance_type.clone(),
@@ -628,6 +647,22 @@ async fn poll_instance_output(
                         })
                         .await;
                     continue; // Agent is running, skip console check
+                }
+                Ok(_) => {
+                    // Empty logs - likely agent hasn't started yet
+                }
+                Err(LogsError::NotFound) => {
+                    // Expected during bootstrap - agent hasn't created log stream yet
+                    debug!(instance_type = %instance_type, "Log stream not found, checking console output");
+                }
+                Err(LogsError::RateLimited) => {
+                    // Rate limited - increase backoff
+                    any_rate_limited = true;
+                    debug!(instance_type = %instance_type, backoff = ?backoff, "CloudWatch Logs rate limited");
+                }
+                Err(LogsError::Sdk(e)) => {
+                    // Other SDK error - log but continue
+                    warn!(instance_type = %instance_type, error = ?e, "CloudWatch Logs SDK error");
                 }
             }
 
@@ -663,8 +698,15 @@ async fn poll_instance_output(
             }
         }
 
-        // Poll every 5 seconds
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        // Adjust backoff based on rate limiting
+        if any_rate_limited {
+            backoff = std::cmp::min(backoff * 2, MAX_BACKOFF);
+            info!(backoff = ?backoff, "Rate limited, increasing backoff");
+        } else {
+            backoff = MIN_BACKOFF;
+        }
+
+        tokio::time::sleep(backoff).await;
     }
 }
 
@@ -685,7 +727,14 @@ async fn run_benchmarks_no_tui(
     // Initialize AWS clients
     let ec2 = Ec2Client::new(&config.region).await?;
     let s3 = S3Client::new(&config.region).await?;
-    let cloudwatch = CloudWatchClient::new(&config.region, &run_id).await?;
+
+    // Build instance_type -> system mapping for CloudWatch metrics
+    let instance_systems: HashMap<String, String> = config
+        .instance_types
+        .iter()
+        .map(|it| (it.clone(), detect_system(it).to_string()))
+        .collect();
+    let cloudwatch = CloudWatchClient::new(&config.region, &run_id, instance_systems).await?;
 
     // Create S3 bucket
     info!("Creating S3 bucket for run artifacts");

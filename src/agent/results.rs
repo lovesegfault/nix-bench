@@ -1,6 +1,6 @@
 //! S3 results upload
 
-use crate::config::Config;
+use super::config::Config;
 use anyhow::{Context, Result};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;

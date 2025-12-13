@@ -1,0 +1,98 @@
+[package]
+name = "nix-bench"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/lovesegfault/nix-bench"
+description = "Nix build benchmarking toolkit with EC2 coordinator and agent"
+
+[[bin]]
+name = "nix-bench-coordinator"
+path = "src/bin/coordinator.rs"
+required-features = ["coordinator"]
+
+[[bin]]
+name = "nix-bench-agent"
+path = "src/bin/agent.rs"
+required-features = ["agent"]
+
+[features]
+default = ["coordinator"]
+coordinator = [
+    "dep:aws-sdk-ec2",
+    "dep:aws-sdk-iam",
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:tokio-util",
+    "dep:futures",
+    "dep:tui-logger",
+    "dep:log",
+    "dep:rusqlite",
+    "dep:directories",
+    "dep:base64",
+]
+agent = [
+    "dep:nix",
+]
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1", features = ["full"] }
+
+# AWS SDK (shared)
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-cloudwatch = "1"
+aws-sdk-cloudwatchlogs = "1"
+aws-sdk-s3 = "1"
+
+# AWS SDK (coordinator-only)
+aws-sdk-ec2 = { version = "1", optional = true }
+aws-sdk-iam = { version = "1", optional = true }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v7"] }
+
+# TUI (coordinator-only)
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.29", features = ["event-stream"], optional = true }
+tokio-util = { version = "0.7", optional = true }
+futures = { version = "0.3", optional = true }
+tui-logger = { version = "0.17", features = ["tracing-support"], optional = true }
+log = { version = "0.4", optional = true }
+
+# State management (coordinator-only)
+rusqlite = { version = "0.37", features = ["bundled"], optional = true }
+directories = { version = "6", optional = true }
+
+# Utilities (coordinator-only)
+base64 = { version = "0.22", optional = true }
+
+# System utilities (agent-only)
+nix = { version = "0.30", features = ["fs", "mount"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+uuid = { version = "1", features = ["v7"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-cloudwatch = "1"
+aws-sdk-s3 = "1"
+aws-sdk-ec2 = "1"
+aws-sdk-iam = "1"
+base64 = "0.22"
+urlencoding = "2"

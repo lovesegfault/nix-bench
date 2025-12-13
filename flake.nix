@@ -72,8 +72,8 @@
 
             craneLib = (inputs.crane.mkLib pkgs).overrideToolchain mkRustToolchain;
 
-            # Common build inputs for Rust crates
-            src = craneLib.cleanCargoSource ./crates;
+            # Common build inputs for Rust crate
+            src = craneLib.cleanCargoSource ./.;
 
             commonArgs = {
               inherit src;
@@ -102,24 +102,25 @@
               }
             );
 
-            # Individual crates
-            nix-bench-ec2 = craneLib.buildPackage (
+            # Coordinator binary (nix-bench-coordinator)
+            nix-bench-coordinator = craneLib.buildPackage (
               commonArgs
               // {
                 inherit cargoArtifacts;
-                pname = "nix-bench-ec2";
-                cargoExtraArgs = "-p nix-bench-ec2";
+                pname = "nix-bench-coordinator";
+                cargoExtraArgs = "--features coordinator --bin nix-bench-coordinator";
                 # Skip default cargo test, we use nextest separately
                 doCheck = false;
               }
             );
 
+            # Agent binary (nix-bench-agent)
             nix-bench-agent = craneLib.buildPackage (
               commonArgs
               // {
                 inherit cargoArtifacts;
                 pname = "nix-bench-agent";
-                cargoExtraArgs = "-p nix-bench-agent";
+                cargoExtraArgs = "--features agent --bin nix-bench-agent";
                 # Skip default cargo test, we use nextest separately
                 doCheck = false;
               }
@@ -165,7 +166,7 @@
                   crossArgs
                   // {
                     cargoArtifacts = crossCraneLib.buildDepsOnly crossArgs;
-                    cargoExtraArgs = "-p nix-bench-agent";
+                    cargoExtraArgs = "--features agent --bin nix-bench-agent";
                   }
                 )
               else
@@ -174,7 +175,7 @@
             # Combined package with coordinator + agents
             nixBenchCombined = pkgs.symlinkJoin {
               name = "nix-bench";
-              paths = [ nix-bench-ec2 ];
+              paths = [ nix-bench-coordinator ];
               nativeBuildInputs = [ pkgs.makeWrapper ];
               postBuild = ''
                 # Create lib directory for agent binaries
@@ -188,7 +189,7 @@
                 }
 
                 # Wrap the binary to set default agent paths
-                wrapProgram $out/bin/nix-bench-ec2 \
+                wrapProgram $out/bin/nix-bench-coordinator \
                   --set NIX_BENCH_AGENT_X86_64 "$out/lib/nix-bench/agent-x86_64" \
                   ${
                     if nix-bench-agent-aarch64 != null then
@@ -198,7 +199,7 @@
                   }
 
                 # Create nix-bench symlink for nix run
-                ln -s nix-bench-ec2 $out/bin/nix-bench
+                ln -s nix-bench-coordinator $out/bin/nix-bench
               '';
               meta.mainProgram = "nix-bench";
             };
@@ -215,7 +216,7 @@
               nixBench.mkTieredPackages { }
               // {
                 "nix-bench" = nixBenchCombined;
-                "nix-bench-ec2" = nix-bench-ec2;
+                "nix-bench-coordinator" = nix-bench-coordinator;
                 "nix-bench-agent" = nix-bench-agent;
                 "nix-bench-nextest" = nix-bench-nextest;
                 default = nixBenchCombined;

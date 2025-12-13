@@ -1,6 +1,6 @@
 //! Nix build execution
 
-use crate::logs::LoggingProcess;
+use super::logs::LoggingProcess;
 use anyhow::{Context, Result};
 use std::process::Command;
 use tracing::{debug, info};

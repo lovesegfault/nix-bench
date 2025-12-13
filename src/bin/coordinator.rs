@@ -1,20 +1,15 @@
-//! nix-bench-ec2: EC2 instance benchmarking coordinator with TUI dashboard
+//! nix-bench-coordinator: EC2 instance benchmarking coordinator with TUI dashboard
 //!
 //! This tool launches EC2 instances to run nix-bench benchmarks and provides
 //! a real-time TUI dashboard showing progress.
 
-mod aws;
-mod config;
-mod orchestrator;
-mod state;
-mod tui;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use nix_bench::{config, orchestrator, state};
 use tracing::info;
 
 #[derive(Parser, Debug)]
-#[command(name = "nix-bench-ec2")]
+#[command(name = "nix-bench-coordinator")]
 #[command(about = "EC2 instance benchmarking for Nix builds")]
 #[command(version)]
 struct Args {
@@ -41,6 +36,10 @@ enum Command {
         /// AWS region
         #[arg(long, default_value = "us-east-2")]
         region: String,
+
+        /// AWS profile to use (overrides AWS_PROFILE env var)
+        #[arg(long)]
+        aws_profile: Option<String>,
 
         /// Output JSON file for results
         #[arg(short, long)]
@@ -128,6 +127,16 @@ async fn main() -> Result<()> {
         tui_logger::init_logger(log::LevelFilter::Info)?;
         tui_logger::set_default_level(log::LevelFilter::Info);
 
+        // Configure explicit targets to show coordinator logs
+        tui_logger::set_level_for_target("nix_bench", log::LevelFilter::Info);
+        tui_logger::set_level_for_target("nix_bench::orchestrator", log::LevelFilter::Info);
+        tui_logger::set_level_for_target("nix_bench::aws", log::LevelFilter::Info);
+
+        // Reduce noise from AWS SDK (show only warnings and errors)
+        tui_logger::set_level_for_target("aws_config", log::LevelFilter::Warn);
+        tui_logger::set_level_for_target("aws_sdk", log::LevelFilter::Warn);
+        tui_logger::set_level_for_target("aws_smithy", log::LevelFilter::Warn);
+
         // Set up tracing to route to tui-logger
         use tracing_subscriber::prelude::*;
         tracing_subscriber::registry()
@@ -149,6 +158,7 @@ async fn main() -> Result<()> {
             attr,
             runs,
             region,
+            aws_profile,
             output,
             keep,
             timeout,
@@ -163,6 +173,12 @@ async fn main() -> Result<()> {
             build_timeout,
             max_failures,
         } => {
+            // Set AWS profile before any AWS SDK calls
+            if let Some(profile) = &aws_profile {
+                std::env::set_var("AWS_PROFILE", profile);
+                info!(profile = %profile, "Using AWS profile");
+            }
+
             let instance_types: Vec<String> =
                 instances.split(',').map(|s| s.trim().to_string()).collect();
 

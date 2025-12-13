@@ -3,15 +3,10 @@
 //! This agent is deployed to EC2 instances via user-data script.
 //! It runs nix-bench benchmarks and reports progress to CloudWatch.
 
-mod benchmark;
-mod config;
-mod logs;
-mod metrics;
-mod nvme;
-mod results;
-
 use anyhow::Result;
 use clap::Parser;
+use nix_bench::agent::{benchmark, config, logs, metrics, nvme, results};
+use nix_bench::metrics::Status;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -191,7 +186,7 @@ async fn main() -> Result<()> {
     let logs_client = Arc::new(logs::LogsClient::new(&config).await?);
 
     // Signal that we're running
-    cloudwatch.put_status(metrics::Status::Running).await?;
+    cloudwatch.put_status(Status::Running).await?;
     logs_client
         .write_line(&format!(
             "Starting benchmark: {} runs of {} (from {}), timeout {}s, max {} failures",
@@ -207,7 +202,7 @@ async fn main() -> Result<()> {
     s3.upload_results(&run_results).await?;
 
     // Signal completion
-    cloudwatch.put_status(metrics::Status::Complete).await?;
+    cloudwatch.put_status(Status::Complete).await?;
     logs_client
         .write_line(&format!(
             "Benchmark complete: {} successful runs",

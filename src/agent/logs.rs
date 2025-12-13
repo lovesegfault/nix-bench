@@ -1,6 +1,6 @@
 //! CloudWatch Logs streaming for real-time build output
 
-use crate::config::Config;
+use super::config::Config;
 use anyhow::{Context, Result};
 use aws_sdk_cloudwatchlogs::Client;
 use std::sync::Arc;

@@ -26,11 +26,8 @@ impl CloudWatchClient {
         let client = Client::new(&aws_config);
 
         // Use shared dimension builder to ensure consistency with coordinator
-        let dimensions = metrics::build_dimensions(
-            &config.run_id,
-            &config.instance_type,
-            &config.system,
-        );
+        let dimensions =
+            metrics::build_dimensions(&config.run_id, &config.instance_type, &config.system);
 
         Ok(Self { client, dimensions })
     }

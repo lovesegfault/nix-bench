@@ -1,5 +1,6 @@
 //! S3 bucket and object management
 
+use crate::aws_context::AwsContext;
 use anyhow::{Context, Result};
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use std::path::Path;
@@ -14,26 +15,24 @@ pub struct S3Client {
 impl S3Client {
     /// Create a new S3 client
     pub async fn new(region: &str) -> Result<Self> {
-        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(region.to_string()))
-            .load()
-            .await;
+        let ctx = AwsContext::new(region).await;
+        Ok(Self::from_context(&ctx))
+    }
 
-        let client = Client::new(&config);
-
-        Ok(Self {
-            client,
-            region: region.to_string(),
-        })
+    /// Create an S3 client from a pre-loaded AWS context
+    pub fn from_context(ctx: &AwsContext) -> Self {
+        Self {
+            client: ctx.s3_client(),
+            region: ctx.region().to_string(),
+        }
     }
 
     /// Create a bucket for this run
     pub async fn create_bucket(&self, bucket_name: &str) -> Result<()> {
         info!(bucket = %bucket_name, region = %self.region, "Creating S3 bucket");
 
-        let location_constraint = aws_sdk_s3::types::BucketLocationConstraint::from(
-            self.region.as_str(),
-        );
+        let location_constraint =
+            aws_sdk_s3::types::BucketLocationConstraint::from(self.region.as_str());
 
         let create_config = aws_sdk_s3::types::CreateBucketConfiguration::builder()
             .location_constraint(location_constraint)
@@ -71,7 +70,13 @@ impl S3Client {
     }
 
     /// Upload bytes to S3
-    pub async fn upload_bytes(&self, bucket: &str, key: &str, data: Vec<u8>, content_type: &str) -> Result<()> {
+    pub async fn upload_bytes(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> Result<()> {
         debug!(bucket = %bucket, key = %key, size = data.len(), "Uploading bytes");
 
         self.client
@@ -85,31 +90,6 @@ impl S3Client {
             .context("Failed to upload bytes")?;
 
         Ok(())
-    }
-
-    /// Download an object from S3
-    #[allow(dead_code)]
-    pub async fn download_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>> {
-        debug!(bucket = %bucket, key = %key, "Downloading object");
-
-        let response = self
-            .client
-            .get_object()
-            .bucket(bucket)
-            .key(key)
-            .send()
-            .await
-            .context("Failed to get object")?;
-
-        let data = response
-            .body
-            .collect()
-            .await
-            .context("Failed to read object body")?
-            .into_bytes()
-            .to_vec();
-
-        Ok(data)
     }
 
     /// Delete a bucket and all its objects
@@ -156,23 +136,5 @@ impl S3Client {
             .context("Failed to delete bucket")?;
 
         Ok(())
-    }
-
-    /// Check if a bucket exists
-    #[allow(dead_code)]
-    pub async fn bucket_exists(&self, bucket: &str) -> Result<bool> {
-        match self.client.head_bucket().bucket(bucket).send().await {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                if e.as_service_error()
-                    .map(|e| e.is_not_found())
-                    .unwrap_or(false)
-                {
-                    Ok(false)
-                } else {
-                    Err(e).context("Failed to check bucket")
-                }
-            }
-        }
     }
 }

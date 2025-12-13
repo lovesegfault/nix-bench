@@ -1,6 +1,7 @@
 //! CloudWatch Logs streaming for real-time build output
 
 use super::config::Config;
+use super::grpc::LogBroadcaster;
 use anyhow::{Context, Result};
 use aws_sdk_cloudwatchlogs::Client;
 use std::sync::Arc;
@@ -104,11 +105,23 @@ impl LogsClient {
 /// Wrapper that captures command output and streams to CloudWatch Logs
 pub struct LoggingProcess {
     logs: Arc<LogsClient>,
+    broadcaster: Option<Arc<LogBroadcaster>>,
 }
 
 impl LoggingProcess {
     pub fn new(logs: Arc<LogsClient>) -> Self {
-        Self { logs }
+        Self {
+            logs,
+            broadcaster: None,
+        }
+    }
+
+    /// Create a new logging process with gRPC broadcaster support
+    pub fn new_with_grpc(logs: Arc<LogsClient>, broadcaster: Arc<LogBroadcaster>) -> Self {
+        Self {
+            logs,
+            broadcaster: Some(broadcaster),
+        }
     }
 
     /// Run a command and stream its output to CloudWatch Logs
@@ -157,24 +170,46 @@ impl LoggingProcess {
 
         let logs_stdout = self.logs.clone();
         let logs_stderr = self.logs.clone();
+        let broadcaster_stdout = self.broadcaster.clone();
+        let broadcaster_stderr = self.broadcaster.clone();
 
-        // Stream stdout
+        // Stream stdout (no prefix - user doesn't care about stdout/stderr distinction)
         let stdout_handle = tokio::spawn(async move {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Err(e) = logs_stdout.write_line(&format!("[stdout] {}", line)).await {
+                // Broadcast to gRPC clients if broadcaster is present
+                if let Some(ref broadcaster) = broadcaster_stdout {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    broadcaster.broadcast(timestamp, line.clone());
+                }
+
+                // Write to CloudWatch
+                if let Err(e) = logs_stdout.write_line(&line).await {
                     warn!(error = %e, "Failed to write stdout line to CloudWatch");
                 }
             }
         });
 
-        // Stream stderr
+        // Stream stderr (no prefix - combined with stdout as terminal output)
         let stderr_handle = tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Err(e) = logs_stderr.write_line(&format!("[stderr] {}", line)).await {
+                // Broadcast to gRPC clients if broadcaster is present
+                if let Some(ref broadcaster) = broadcaster_stderr {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    broadcaster.broadcast(timestamp, line.clone());
+                }
+
+                // Write to CloudWatch
+                if let Err(e) = logs_stderr.write_line(&line).await {
                     warn!(error = %e, "Failed to write stderr line to CloudWatch");
                 }
             }
@@ -214,12 +249,25 @@ impl LoggingProcess {
         };
 
         // Wait for log streaming to finish (with a short timeout to avoid blocking forever)
+        // Also properly handle panics in streaming tasks
         let stream_timeout = Duration::from_secs(5);
-        if let Err(e) = tokio::time::timeout(stream_timeout, stdout_handle).await {
-            warn!(error = %e, "Timed out waiting for stdout streaming to finish");
+
+        match tokio::time::timeout(stream_timeout, stdout_handle).await {
+            Err(_) => warn!("Timed out waiting for stdout streaming to finish"),
+            Ok(Err(e)) if e.is_panic() => {
+                warn!("Stdout streaming task panicked: {:?}", e);
+            }
+            Ok(Err(e)) => warn!(error = ?e, "Stdout streaming task failed"),
+            Ok(Ok(())) => {}
         }
-        if let Err(e) = tokio::time::timeout(stream_timeout, stderr_handle).await {
-            warn!(error = %e, "Timed out waiting for stderr streaming to finish");
+
+        match tokio::time::timeout(stream_timeout, stderr_handle).await {
+            Err(_) => warn!("Timed out waiting for stderr streaming to finish"),
+            Ok(Err(e)) if e.is_panic() => {
+                warn!("Stderr streaming task panicked: {:?}", e);
+            }
+            Ok(Err(e)) => warn!(error = ?e, "Stderr streaming task failed"),
+            Ok(Ok(())) => {}
         }
 
         Ok(success)

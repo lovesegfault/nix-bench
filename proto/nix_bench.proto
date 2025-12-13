@@ -1,0 +1,31 @@
+syntax = "proto3";
+package nix_bench;
+
+service LogStream {
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+}
+
+message StreamLogsRequest {
+  string instance_type = 1;
+  string run_id = 2;
+}
+
+message LogEntry {
+  int64 timestamp = 1;
+  string message = 2;  // Combined stdout+stderr (like terminal)
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  string status = 1;  // Deprecated: use status_code instead
+  uint32 run_progress = 2;
+  uint32 total_runs = 3;
+  // Total number of log messages dropped due to slow client consumption
+  uint64 dropped_log_count = 4;
+  // Build durations in seconds for completed runs
+  repeated double durations = 5;
+  // Canonical status code: 0=pending, 1=running, 2=complete, -1=failed
+  int32 status_code = 6;
+}

@@ -10,10 +10,21 @@
 //!
 //! ## Shared Modules
 //!
-//! The `metrics` module contains shared constants for CloudWatch metrics,
-//! ensuring dimension consistency between the agent and coordinator.
+//! - `metrics`: Constants for CloudWatch metrics dimensions
+//! - `stats`: Duration statistics utility (min/avg/max)
+//! - `status`: Canonical status codes for agent/coordinator communication
+//! - `tls`: TLS certificate generation for mTLS
+//! - `aws_context`: Shared AWS SDK configuration
 
+pub mod aws_context;
 pub mod metrics;
+pub mod stats;
+pub mod status;
+pub mod tls;
+
+// Test fixtures and helpers (only compiled for tests)
+#[cfg(test)]
+pub mod testing;
 
 // Agent-specific modules
 #[cfg(feature = "agent")]
@@ -30,3 +41,5 @@ pub mod orchestrator;
 pub mod state;
 #[cfg(feature = "coordinator")]
 pub mod tui;
+#[cfg(feature = "coordinator")]
+pub mod wait;

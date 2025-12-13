@@ -286,6 +286,7 @@
                     openssl
                     sqlite
                     cargo-nextest
+                    cargo-make
 
                     # AWS CLI for testing
                     awscli2
@@ -301,9 +302,11 @@
                   ${config.pre-commit.installationScript}
                   echo "nix-bench dev shell"
                   echo ""
-                  echo "  cargo agent      - Build agents (x86_64 + aarch64, static musl)"
-                  echo "  cargo r run ...  - Run coordinator"
-                  echo "  cargo t          - Run tests"
+                  echo "  cargo make agent - Build agents (x86_64 + aarch64, static musl)"
+                  echo "  cargo make b     - Build agents then coordinator"
+                  echo "  cargo make r     - Build agents then run coordinator"
+                  echo "  cargo make t     - Run tests with nextest"
+                  echo "  cargo make ta    - Run all tests including AWS"
                   echo ""
                 '';
 

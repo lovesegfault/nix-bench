@@ -65,8 +65,7 @@ impl S3Client {
             runs: runs.to_vec(),
         };
 
-        let json = serde_json::to_string_pretty(&results)
-            .context("Failed to serialize results")?;
+        let json = serde_json::to_string_pretty(&results).context("Failed to serialize results")?;
 
         let key = format!("{}/{}/results.json", self.run_id, self.instance_type);
         debug!(bucket = %self.bucket, key = %key, "Uploading results");

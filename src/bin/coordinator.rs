@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use nix_bench::tui::{LogCapture, LogCaptureLayer};
 use nix_bench::{config, orchestrator, state};
 use tracing::info;
 
@@ -116,11 +117,64 @@ enum StateAction {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
+async fn main() {
+    if let Err(e) = run().await {
+        print_error(&e);
+        std::process::exit(1);
+    }
+}
+
+/// Print error in a user-friendly way
+fn print_error(e: &anyhow::Error) {
+    use std::io::Write;
+
+    let mut stderr = std::io::stderr();
+
+    // Print main error message
+    let _ = writeln!(stderr, "\n\x1b[1;31mError:\x1b[0m {e}");
+
+    // Print error chain (causes)
+    let mut source = e.source();
+    while let Some(cause) = source {
+        let _ = writeln!(stderr, "  \x1b[33mCaused by:\x1b[0m {cause}");
+        source = cause.source();
+    }
+
+    // Only print backtrace hint if not already showing
+    if std::env::var("RUST_BACKTRACE").is_err() {
+        let _ = writeln!(
+            stderr,
+            "\n\x1b[2mSet RUST_BACKTRACE=1 for a detailed backtrace\x1b[0m"
+        );
+    } else {
+        // Print backtrace if available and requested
+        let backtrace = e.backtrace();
+        if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
+            let _ = writeln!(stderr, "\n\x1b[2mBacktrace:\x1b[0m\n{backtrace}");
+        }
+    }
+}
+
+async fn run() -> Result<()> {
+    // Install rustls crypto provider before any TLS operations
+    // Required for rustls 0.23+ when using tonic with TLS
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
+    // Filter out bare "--" args that cargo-make may pass
+    let filtered_args: Vec<String> = std::env::args().filter(|a| a != "--").collect();
+    let args = Args::parse_from(filtered_args);
 
     // Check if we're in TUI mode (run command without --no-tui)
     let use_tui = matches!(&args.command, Command::Run { no_tui, .. } if !no_tui);
+
+    // Create log capture for TUI mode (to print errors/warnings after exit)
+    let log_capture = if use_tui {
+        Some(LogCapture::new(50))
+    } else {
+        None
+    };
 
     if use_tui {
         // Initialize tui-logger for TUI mode
@@ -137,10 +191,11 @@ async fn main() -> Result<()> {
         tui_logger::set_level_for_target("aws_sdk", log::LevelFilter::Warn);
         tui_logger::set_level_for_target("aws_smithy", log::LevelFilter::Warn);
 
-        // Set up tracing to route to tui-logger
+        // Set up tracing to route to tui-logger and log capture
         use tracing_subscriber::prelude::*;
         tracing_subscriber::registry()
             .with(tui_logger::TuiTracingSubscriberLayer)
+            .with(LogCaptureLayer::new(log_capture.clone().unwrap()))
             .init();
     } else {
         // Standard tracing for non-TUI mode
@@ -211,6 +266,7 @@ async fn main() -> Result<()> {
                 flake_ref,
                 build_timeout,
                 max_failures,
+                log_capture,
             };
 
             orchestrator::run_benchmarks(config).await?;
@@ -224,7 +280,7 @@ async fn main() -> Result<()> {
                 state::cleanup_resources().await?;
             }
             StateAction::Prune => {
-                state::prune_database()?;
+                state::prune_database().await?;
             }
         },
     }

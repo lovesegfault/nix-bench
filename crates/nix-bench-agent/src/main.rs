@@ -258,7 +258,7 @@ async fn main() -> Result<()> {
     );
 
     // Get TLS config (required - will fail if missing)
-    let tls_config = config.tls_config().map_err(|e| {
+    let tls_config = nix_bench_agent::config::get_tls_config(&config).map_err(|e| {
         error!(error = %e, "TLS configuration is required but missing");
         anyhow::anyhow!("TLS configuration is required: {}", e)
     })?;

@@ -31,9 +31,6 @@ pub const TAG_STATUS: &str = "nix-bench:status";
 /// Tag key for instance type association (EC2)
 pub const TAG_INSTANCE_TYPE: &str = "nix-bench:instance-type";
 
-/// Tag key for associated S3 bucket
-pub const TAG_BUCKET: &str = "nix-bench:bucket";
-
 /// Resource lifecycle status values
 pub mod status {
     /// Resource is being created - not yet fully initialized
@@ -41,9 +38,6 @@ pub mod status {
 
     /// Resource is active and in use
     pub const ACTIVE: &str = "active";
-
-    /// Resource is being deleted
-    pub const DELETING: &str = "deleting";
 }
 
 /// Helper to format creation timestamp for tags

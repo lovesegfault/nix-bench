@@ -19,9 +19,7 @@ pub async fn write_results(
     instances: &HashMap<String, InstanceState>,
 ) -> Result<()> {
     if let Some(output_path) = &config.output {
-        let start_time = chrono::Utc::now(); // TODO: track actual start time
-        let end_time = chrono::Utc::now();
-        let duration = end_time - start_time;
+        let written_at = chrono::Utc::now();
 
         let all_complete = instances
             .values()
@@ -75,9 +73,7 @@ pub async fn write_results(
             "attr": config.attr,
             "runs_per_instance": config.runs,
             "instance_types": config.instance_types,
-            "start_time": start_time.to_rfc3339(),
-            "end_time": end_time.to_rfc3339(),
-            "duration_seconds": duration.num_seconds(),
+            "written_at": written_at.to_rfc3339(),
             "success": all_complete,
             "results": results,
         });

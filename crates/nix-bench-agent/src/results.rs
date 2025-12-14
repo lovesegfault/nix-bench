@@ -2,7 +2,7 @@
 //!
 //! Results are now sent via gRPC, not S3.
 
-use crate::config::Config;
+use crate::config::{validate_config, Config};
 use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
 use std::time::{Duration, Instant};
@@ -51,7 +51,7 @@ pub async fn download_config_with_tls(
                 {
                     info!("TLS config available, validating...");
                     // Validate the full config (will check TLS certs too)
-                    config.validate_full()?;
+                    validate_config(&config)?;
                     return Ok(config);
                 }
 

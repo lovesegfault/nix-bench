@@ -5,6 +5,7 @@
 
 use crate::grpc::LogBroadcaster;
 use anyhow::{Context, Result};
+use nix_bench_common::timestamp_millis;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,11 +41,7 @@ async fn run_command_streaming(
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            broadcaster_stdout.broadcast(timestamp, line);
+            broadcaster_stdout.broadcast(timestamp_millis(), line);
         }
     });
 
@@ -53,11 +50,7 @@ async fn run_command_streaming(
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            broadcaster_stderr.broadcast(timestamp, line);
+            broadcaster_stderr.broadcast(timestamp_millis(), line);
         }
     });
 
@@ -83,11 +76,7 @@ async fn run_command_streaming(
 
 /// Broadcast a log message to gRPC clients
 fn log_message(broadcaster: &Arc<LogBroadcaster>, message: &str) {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    broadcaster.broadcast(timestamp, message.to_string());
+    broadcaster.broadcast(timestamp_millis(), message.to_string());
     info!("{}", message);
 }
 
@@ -131,7 +120,7 @@ async fn detect_nvme_devices() -> Result<Vec<String>> {
 ///
 /// This detects NVMe instance store devices, creates a RAID0 array if multiple,
 /// formats with ext4, and bind-mounts to /nix for fast Nix store operations.
-pub async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> {
+pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> {
     log_message(broadcaster, "=== NVMe Instance Store Setup ===");
 
     let devices = detect_nvme_devices().await?;
@@ -216,7 +205,7 @@ pub async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> {
 }
 
 /// Install Nix using the Determinate Systems installer
-pub async fn install_nix(broadcaster: &Arc<LogBroadcaster>) -> Result<()> {
+pub(crate) async fn install_nix(broadcaster: &Arc<LogBroadcaster>) -> Result<()> {
     log_message(broadcaster, "=== Nix Installation ===");
     log_message(
         broadcaster,
@@ -252,7 +241,7 @@ pub async fn install_nix(broadcaster: &Arc<LogBroadcaster>) -> Result<()> {
 /// Source the Nix profile and update PATH
 ///
 /// This modifies the current process environment to include Nix binaries.
-pub fn source_nix_profile() -> Result<()> {
+pub(crate) fn source_nix_profile() -> Result<()> {
     info!("Sourcing Nix profile...");
 
     // The Determinate installer puts the profile script at this location

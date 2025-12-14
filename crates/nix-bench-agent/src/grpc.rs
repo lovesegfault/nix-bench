@@ -105,11 +105,6 @@ impl LogStreamService {
             dropped_messages: Arc::new(AtomicU64::new(0)),
         }
     }
-
-    /// Get the total number of dropped messages across all clients
-    pub fn total_dropped_messages(&self) -> u64 {
-        self.dropped_messages.load(Ordering::Relaxed)
-    }
 }
 
 type LogStreamResult = Pin<Box<dyn Stream<Item = Result<LogEntry, Status>> + Send>>;

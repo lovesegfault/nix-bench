@@ -4,7 +4,7 @@
 //! to become ready, with configurable exponential backoff, jitter, and cancellation.
 
 use anyhow::Result;
-use rand::Rng;
+use nix_bench_common::jittered_delay;
 use std::future::Future;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -131,15 +131,6 @@ where
             }
         }
     }
-}
-
-/// Add jitter to a duration to prevent thundering herd.
-fn jittered_delay(base: Duration, jitter_factor: f64) -> Duration {
-    if jitter_factor <= 0.0 {
-        return base;
-    }
-    let jitter = rand::thread_rng().gen_range(0.0..jitter_factor);
-    Duration::from_secs_f64(base.as_secs_f64() * (1.0 + jitter))
 }
 
 #[cfg(test)]

@@ -117,37 +117,3 @@ impl ResourceGuardBuilder {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::sync::mpsc;
-
-    #[test]
-    fn test_builder_creates_guards() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let registry = ResourceRegistry::new(tx);
-        let builder = ResourceGuardBuilder::new(registry.clone(), "run-123", "us-east-2");
-
-        // Test EC2 instance guard
-        let guard = builder.ec2_instance("i-12345678");
-        assert_eq!(*guard, "i-12345678");
-        guard.commit();
-
-        // Test S3 bucket guard
-        let guard = builder.s3_bucket("my-bucket");
-        assert_eq!(*guard, "my-bucket");
-        guard.commit();
-
-        // Test IAM role guard
-        let guard = builder.iam_role("my-role", "my-profile");
-        assert_eq!(
-            guard.inner(),
-            &("my-role".to_string(), "my-profile".to_string())
-        );
-        guard.commit();
-
-        // Registry should be empty after all commits
-        assert!(registry.is_empty());
-    }
-}

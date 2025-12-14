@@ -174,7 +174,7 @@ pub async fn watch_and_terminate_completed(
 
             // Check if instance is complete
             if let Some(status_code) = status.status {
-                if let Some(StatusCode::Complete) = StatusCode::from_i32(status_code) {
+                if status_code == StatusCode::Complete {
                     info!(instance_type = %instance_type, "Instance complete, terminating immediately");
 
                     // Get instance ID

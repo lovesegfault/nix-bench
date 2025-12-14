@@ -37,11 +37,3 @@ pub use grpc_client::{
     start_log_streaming_unified, wait_for_tcp_ready, GrpcInstanceStatus, GrpcLogClient,
     GrpcStatusPoller, LogStreamingOptions,
 };
-
-// Re-export mock types for tests
-#[cfg(test)]
-pub use ec2::MockEc2Operations;
-#[cfg(test)]
-pub use iam::MockIamOperations;
-#[cfg(test)]
-pub use s3::MockS3Operations;

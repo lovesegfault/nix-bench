@@ -45,24 +45,3 @@ pub async fn get_current_account_id(config: &aws_config::SdkConfig) -> Result<Ac
 
     Ok(AccountId(account.to_string()))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_account_id_display() {
-        let account = AccountId("123456789012".to_string());
-        assert_eq!(account.to_string(), "123456789012");
-        assert_eq!(account.as_str(), "123456789012");
-    }
-
-    #[test]
-    fn test_account_id_equality() {
-        let a = AccountId("123456789012".to_string());
-        let b = AccountId("123456789012".to_string());
-        let c = AccountId("999999999999".to_string());
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-    }
-}

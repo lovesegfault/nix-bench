@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::Parser;
 use nix_bench_agent::{benchmark, bootstrap, gc, grpc, logging, results};
 use nix_bench_common::RunResult;
+use grpc::StatusCode;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -75,7 +76,7 @@ async fn run_benchmarks_with_retry(
             let mut s = status.write().await;
             s.run_progress = slot as u32;
             s.total_runs = config.runs;
-            s.status = "running".to_string();
+            s.status = StatusCode::Running;
         }
 
         logger.write_line(&format!(
@@ -193,7 +194,7 @@ async fn main() -> Result<()> {
     // Create gRPC infrastructure - broadcaster for log streaming, status for queries
     let broadcaster = Arc::new(grpc::LogBroadcaster::new(DEFAULT_BROADCAST_CAPACITY));
     let status = Arc::new(RwLock::new(grpc::AgentStatus {
-        status: "bootstrap".to_string(),
+        status: StatusCode::Bootstrap,
         run_progress: 0,
         total_runs: 0,
         durations: Vec::new(),
@@ -212,7 +213,7 @@ async fn main() -> Result<()> {
         // Update status to failed
         {
             let mut s = status.write().await;
-            s.status = "failed".to_string();
+            s.status = StatusCode::Failed;
         }
         // Give clients a moment to see the failure status
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -240,7 +241,7 @@ async fn main() -> Result<()> {
             logger.write_line(&format!("ERROR: Failed to get TLS config: {}", e));
             {
                 let mut s = status.write().await;
-                s.status = "failed".to_string();
+                s.status = StatusCode::Failed;
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             shutdown_token.cancel();
@@ -299,7 +300,7 @@ async fn main() -> Result<()> {
         s.total_runs = config.runs;
         s.attr = config.attr.clone();
         s.system = config.system.clone();
-        s.status = "warmup".to_string();
+        s.status = StatusCode::Warmup;
     }
 
     // === Cache Warmup Phase ===
@@ -332,7 +333,7 @@ async fn main() -> Result<()> {
     // === Benchmark Phase ===
     {
         let mut s = status.write().await;
-        s.status = "running".to_string();
+        s.status = StatusCode::Running;
     }
 
     logger.write_line(&format!(
@@ -345,7 +346,7 @@ async fn main() -> Result<()> {
     // Signal completion (results are now available via gRPC GetStatus)
     {
         let mut s = status.write().await;
-        s.status = "complete".to_string();
+        s.status = StatusCode::Complete;
     }
 
     logger.write_line(&format!(

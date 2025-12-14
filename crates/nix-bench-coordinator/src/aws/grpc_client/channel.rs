@@ -5,9 +5,6 @@ use nix_bench_common::TlsConfig;
 use std::time::Duration;
 use tonic::transport::Channel;
 
-// Re-export for backward compatibility
-pub use nix_bench_common::jittered_delay_25 as jittered_delay;
-
 /// Options for building a gRPC channel
 #[derive(Debug, Clone)]
 pub struct ChannelOptions {

@@ -16,6 +16,12 @@ use aws_test_helpers::*;
 use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
 use nix_bench_coordinator::aws::Ec2Client;
 
+/// Instance type to use for integration tests
+const TEST_INSTANCE_TYPE: &str = "c7a.medium";
+
+/// Timeout for instance operations (5 minutes)
+const INSTANCE_TIMEOUT_SECS: u64 = 300;
+
 /// Test that we can find AL2023 AMIs for both architectures
 #[tokio::test]
 #[ignore]

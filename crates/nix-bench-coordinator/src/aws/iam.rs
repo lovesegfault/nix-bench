@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use aws_sdk_iam::Client;
 use chrono::Utc;
 use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use std::future::Future;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -328,27 +329,22 @@ impl IamClient {
     }
 }
 
-/// Trait for IAM operations that can be mocked in tests.
-///
-/// Note: `create_benchmark_role` takes an owned `Option<CancellationToken>` instead of
-/// a reference to work around mockall lifetime limitations. Callers can clone the token.
-#[allow(async_fn_in_trait)] // Internal use only, Send+Sync bounds on trait are sufficient
-#[cfg_attr(test, mockall::automock)]
+/// Trait for IAM operations.
 pub trait IamOperations: Send + Sync {
     /// Create a role and instance profile for a benchmark run.
     /// Pass `cancel.clone()` if you have a token reference.
-    async fn create_benchmark_role(
+    fn create_benchmark_role(
         &self,
         run_id: &str,
         bucket_name: &str,
         cancel: Option<CancellationToken>,
-    ) -> Result<(String, String)>;
+    ) -> impl Future<Output = Result<(String, String)>> + Send;
 
     /// Delete a role and its instance profile
-    async fn delete_benchmark_role(&self, role_name: &str) -> Result<()>;
+    fn delete_benchmark_role(&self, role_name: &str) -> impl Future<Output = Result<()>> + Send;
 
     /// Check if an instance profile exists
-    async fn instance_profile_exists(&self, profile_name: &str) -> bool;
+    fn instance_profile_exists(&self, profile_name: &str) -> impl Future<Output = bool> + Send;
 }
 
 impl IamOperations for IamClient {

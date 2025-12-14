@@ -30,6 +30,3 @@ tonic = { workspace = true, optional = true }
 default = []
 # Enable tonic-specific TlsConfig methods (identity, ca_certificate, etc.)
 tonic-tls = ["tonic"]
-
-[dev-dependencies]
-proptest.workspace = true

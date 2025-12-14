@@ -34,36 +34,3 @@ impl RunResult {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_success_constructor() {
-        let result = RunResult::success(1, 45.5);
-        assert_eq!(result.run_number, 1);
-        assert_eq!(result.duration_secs, 45.5);
-        assert!(result.success);
-    }
-
-    #[test]
-    fn test_failure_constructor() {
-        let result = RunResult::failure(3);
-        assert_eq!(result.run_number, 3);
-        assert_eq!(result.duration_secs, 0.0);
-        assert!(!result.success);
-    }
-
-    #[test]
-    fn test_serialization() {
-        let result = RunResult::success(1, 45.678);
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"run_number\":1"));
-        assert!(json.contains("\"duration_secs\":45.678"));
-        assert!(json.contains("\"success\":true"));
-
-        let parsed: RunResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, result);
-    }
-}

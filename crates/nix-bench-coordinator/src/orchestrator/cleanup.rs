@@ -9,7 +9,7 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::aws::{classify_anyhow_error, Ec2Client, IamClient, S3Client};
+use crate::aws::{Ec2Client, IamClient, S3Client};
 use crate::state::{self, ResourceType, RunStatus};
 use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
 use super::types::{InstanceState, InstanceStatus};
@@ -93,15 +93,11 @@ pub async fn cleanup_resources(
         for instance_id in &instance_ids {
             match ec2.terminate_instance(instance_id).await {
                 Ok(()) => {
-                    info!(instance_id = %instance_id, "Instance terminated");
+                    // terminate_instance returns Ok for both successful termination and not-found
                     let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
                 }
                 Err(e) => {
-                    if classify_anyhow_error(&e).is_not_found() {
-                        let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
-                    } else {
-                        warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
-                    }
+                    warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
                 }
             }
             progress.ec2_instances.0 += 1;
@@ -115,14 +111,11 @@ pub async fn cleanup_resources(
 
         match s3.delete_bucket(bucket_name).await {
             Ok(()) => {
+                // delete_bucket returns Ok for both successful deletion and not-found
                 let _ = state::mark_resource_deleted(&db, ResourceType::S3Bucket, bucket_name).await;
             }
             Err(e) => {
-                if classify_anyhow_error(&e).is_not_found() {
-                    let _ = state::mark_resource_deleted(&db, ResourceType::S3Bucket, bucket_name).await;
-                } else {
-                    warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
-                }
+                warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
             }
         }
         progress.s3_bucket = true;
@@ -169,15 +162,11 @@ pub async fn cleanup_resources(
                 if let Some((sg_id, cidr_ip)) = resource.resource_id.split_once(':') {
                     match ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await {
                         Ok(()) => {
-                            info!(security_group = %sg_id, cidr_ip = %cidr_ip, "Removed gRPC ingress rule");
+                            // remove_grpc_ingress_rule returns Ok for both successful removal and not-found
                             let _ = state::mark_resource_deleted(&db, ResourceType::SecurityGroupRule, &resource.resource_id).await;
                         }
                         Err(e) => {
-                            if classify_anyhow_error(&e).is_not_found() {
-                                let _ = state::mark_resource_deleted(&db, ResourceType::SecurityGroupRule, &resource.resource_id).await;
-                            } else {
-                                warn!(security_group = %sg_id, cidr_ip = %cidr_ip, error = ?e, "Failed to remove security group rule");
-                            }
+                            warn!(security_group = %sg_id, cidr_ip = %cidr_ip, error = ?e, "Failed to remove security group rule");
                         }
                     }
                 } else {
@@ -209,15 +198,11 @@ pub async fn cleanup_resources(
             for resource in &security_groups {
                 match ec2.delete_security_group(&resource.resource_id).await {
                     Ok(()) => {
-                        info!(sg_id = %resource.resource_id, "Deleted security group");
+                        // delete_security_group returns Ok for both successful deletion and not-found
                         let _ = state::mark_resource_deleted(&db, ResourceType::SecurityGroup, &resource.resource_id).await;
                     }
                     Err(e) => {
-                        if classify_anyhow_error(&e).is_not_found() {
-                            let _ = state::mark_resource_deleted(&db, ResourceType::SecurityGroup, &resource.resource_id).await;
-                        } else {
-                            warn!(sg_id = %resource.resource_id, error = ?e, "Failed to delete security group");
-                        }
+                        warn!(sg_id = %resource.resource_id, error = ?e, "Failed to delete security group");
                     }
                 }
             }

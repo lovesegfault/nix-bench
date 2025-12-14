@@ -13,6 +13,19 @@ use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_T
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// Internal parameters for do_launch_instance
+pub(super) struct LaunchParams<'a> {
+    ami_id: &'a str,
+    instance_type_enum: InstanceType,
+    run_id: &'a str,
+    instance_type: &'a str,
+    system: &'a str,
+    user_data_b64: &'a str,
+    subnet_id: Option<&'a str>,
+    security_group_id: Option<&'a str>,
+    iam_instance_profile: Option<&'a str>,
+}
+
 impl Ec2Client {
     /// Launch an EC2 instance with the given configuration
     ///
@@ -42,17 +55,17 @@ impl Ec2Client {
         if let Some(ref profile) = config.iam_instance_profile {
             let profile = profile.clone();
             (|| async {
-                self.do_launch_instance(
-                    &ami_id,
-                    instance_type_enum.clone(),
-                    &config.run_id,
-                    &config.instance_type,
-                    &config.system,
-                    &user_data_b64,
-                    config.subnet_id.as_deref(),
-                    config.security_group_id.as_deref(),
-                    Some(&profile),
-                )
+                self.do_launch_instance(LaunchParams {
+                    ami_id: &ami_id,
+                    instance_type_enum: instance_type_enum.clone(),
+                    run_id: &config.run_id,
+                    instance_type: &config.instance_type,
+                    system: &config.system,
+                    user_data_b64: &user_data_b64,
+                    subnet_id: config.subnet_id.as_deref(),
+                    security_group_id: config.security_group_id.as_deref(),
+                    iam_instance_profile: Some(&profile),
+                })
                 .await
             })
             .retry(
@@ -72,74 +85,63 @@ impl Ec2Client {
             })
             .await
         } else {
-            self.do_launch_instance(
-                &ami_id,
+            self.do_launch_instance(LaunchParams {
+                ami_id: &ami_id,
                 instance_type_enum,
-                &config.run_id,
-                &config.instance_type,
-                &config.system,
-                &user_data_b64,
-                config.subnet_id.as_deref(),
-                config.security_group_id.as_deref(),
-                None,
-            )
+                run_id: &config.run_id,
+                instance_type: &config.instance_type,
+                system: &config.system,
+                user_data_b64: &user_data_b64,
+                subnet_id: config.subnet_id.as_deref(),
+                security_group_id: config.security_group_id.as_deref(),
+                iam_instance_profile: None,
+            })
             .await
         }
     }
 
     /// Internal method to perform the actual RunInstances call
-    pub(super) async fn do_launch_instance(
-        &self,
-        ami_id: &str,
-        instance_type_enum: InstanceType,
-        run_id: &str,
-        instance_type: &str,
-        system: &str,
-        user_data_b64: &str,
-        subnet_id: Option<&str>,
-        security_group_id: Option<&str>,
-        iam_instance_profile: Option<&str>,
-    ) -> Result<LaunchedInstance> {
+    pub(super) async fn do_launch_instance(&self, params: LaunchParams<'_>) -> Result<LaunchedInstance> {
         let created_at = tags::format_created_at(Utc::now());
         let mut request = self
             .client
             .run_instances()
-            .image_id(ami_id)
-            .instance_type(instance_type_enum)
+            .image_id(params.ami_id)
+            .instance_type(params.instance_type_enum)
             .min_count(1)
             .max_count(1)
-            .user_data(user_data_b64)
+            .user_data(params.user_data_b64)
             .tag_specifications(
                 TagSpecification::builder()
                     .resource_type(ResourceType::Instance)
                     .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
-                    .tags(Tag::builder().key(TAG_RUN_ID).value(run_id).build())
+                    .tags(Tag::builder().key(TAG_RUN_ID).value(params.run_id).build())
                     .tags(Tag::builder().key(TAG_CREATED_AT).value(&created_at).build())
                     .tags(Tag::builder().key(TAG_STATUS).value(tags::status::CREATING).build())
                     .tags(
                         Tag::builder()
                             .key("Name")
-                            .value(format!("nix-bench-{}-{}", run_id, instance_type))
+                            .value(format!("nix-bench-{}-{}", params.run_id, params.instance_type))
                             .build(),
                     )
                     .tags(
                         Tag::builder()
                             .key(tags::TAG_INSTANCE_TYPE)
-                            .value(instance_type)
+                            .value(params.instance_type)
                             .build(),
                     )
                     .build(),
             );
 
-        if let Some(subnet) = subnet_id {
+        if let Some(subnet) = params.subnet_id {
             request = request.subnet_id(subnet);
         }
 
-        if let Some(sg) = security_group_id {
+        if let Some(sg) = params.security_group_id {
             request = request.security_group_ids(sg);
         }
 
-        if let Some(profile) = iam_instance_profile {
+        if let Some(profile) = params.iam_instance_profile {
             request = request.iam_instance_profile(
                 aws_sdk_ec2::types::IamInstanceProfileSpecification::builder()
                     .name(profile)
@@ -163,8 +165,8 @@ impl Ec2Client {
 
         Ok(LaunchedInstance {
             instance_id,
-            instance_type: instance_type.to_string(),
-            system: system.to_string(),
+            instance_type: params.instance_type.to_string(),
+            system: params.system.to_string(),
             public_ip: None,
         })
     }

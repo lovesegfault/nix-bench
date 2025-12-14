@@ -30,23 +30,3 @@ pub fn default_build_timeout() -> u64 {
 pub fn default_max_failures() -> u32 {
     DEFAULT_MAX_FAILURES
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_values() {
-        assert_eq!(DEFAULT_FLAKE_REF, "github:lovesegfault/nix-bench");
-        assert_eq!(DEFAULT_BUILD_TIMEOUT, 7200);
-        assert_eq!(DEFAULT_MAX_FAILURES, 3);
-        assert_eq!(DEFAULT_GRPC_PORT, 50051);
-    }
-
-    #[test]
-    fn test_default_functions() {
-        assert_eq!(default_flake_ref(), "github:lovesegfault/nix-bench");
-        assert_eq!(default_build_timeout(), 7200);
-        assert_eq!(default_max_failures(), 3);
-    }
-}

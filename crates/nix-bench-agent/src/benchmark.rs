@@ -1,27 +1,27 @@
 //! Nix build execution
 
-use crate::logs::LoggingProcess;
+use crate::logging::GrpcLogger;
 use anyhow::Result;
 use tracing::info;
 
-/// Run nix build with streaming output to CloudWatch Logs
+/// Run nix build with streaming output to gRPC clients
 ///
 /// # Arguments
 /// * `flake_base` - Base flake reference (e.g., "github:lovesegfault/nix-bench")
 /// * `attr` - Attribute to build (e.g., "large-deep")
-/// * `logging` - Logging process for streaming output
+/// * `logger` - gRPC logger for streaming output
 /// * `timeout_secs` - Optional timeout in seconds
-pub async fn run_nix_build_with_logging(
+pub async fn run_nix_build(
     flake_base: &str,
     attr: &str,
-    logging: &LoggingProcess,
+    logger: &GrpcLogger,
     timeout_secs: Option<u64>,
 ) -> Result<()> {
     info!(flake_base, attr, "Running nix build with log streaming");
 
     let flake_ref = format!("{}#{}", flake_base, attr);
 
-    let success = logging
+    let success = logger
         .run_command(
             "nix",
             &[
@@ -30,7 +30,6 @@ pub async fn run_nix_build_with_logging(
                 "--impure",
                 "--no-link",
                 "-L",            // Print build logs
-                "-v",            // Verbose mode for more output
                 "--log-format",
                 "bar-with-logs", // Show progress bar + build output
             ],

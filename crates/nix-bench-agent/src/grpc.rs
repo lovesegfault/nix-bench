@@ -1,13 +1,13 @@
 //! gRPC server for real-time log streaming
 
-use crate::config::Config;
 use anyhow::Result;
 use nix_bench_common::{StatusCode, TlsConfig};
 use nix_bench_proto::{LogEntry, LogStream, LogStreamServer, StatusRequest, StatusResponse, StreamLogsRequest};
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
 use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
@@ -24,22 +24,39 @@ pub struct AgentStatus {
     pub durations: Vec<f64>,
 }
 
+/// Maximum number of messages to buffer for late subscribers
+const LOG_BUFFER_SIZE: usize = 100;
+
 /// Broadcasts log entries to all connected gRPC clients
 pub struct LogBroadcaster {
     sender: broadcast::Sender<LogEntry>,
+    /// Buffer for replaying messages to late subscribers
+    buffer: Mutex<VecDeque<LogEntry>>,
 }
 
 impl LogBroadcaster {
     /// Create a new broadcaster with the given channel capacity
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
+        Self {
+            sender,
+            buffer: Mutex::new(VecDeque::with_capacity(LOG_BUFFER_SIZE)),
+        }
     }
 
     /// Broadcast a log entry to all connected clients
     pub fn broadcast(&self, timestamp: i64, message: String) {
         let entry = LogEntry { timestamp, message };
-        // Ignore send errors (no subscribers)
+
+        // Buffer the message for late subscribers (non-blocking try_lock)
+        if let Ok(mut buffer) = self.buffer.try_lock() {
+            if buffer.len() >= LOG_BUFFER_SIZE {
+                buffer.pop_front();
+            }
+            buffer.push_back(entry.clone());
+        }
+
+        // Send to live subscribers (ignore errors if no subscribers)
         let _ = self.sender.send(entry);
     }
 
@@ -47,12 +64,18 @@ impl LogBroadcaster {
     pub fn subscribe(&self) -> broadcast::Receiver<LogEntry> {
         self.sender.subscribe()
     }
+
+    /// Get buffered messages for replay to late subscribers
+    pub async fn get_buffered_messages(&self) -> Vec<LogEntry> {
+        self.buffer.lock().await.iter().cloned().collect()
+    }
 }
 
 /// gRPC service implementation for log streaming
 pub struct LogStreamService {
     broadcaster: Arc<LogBroadcaster>,
-    config: Arc<Config>,
+    run_id: String,
+    instance_type: String,
     status: Arc<RwLock<AgentStatus>>,
     shutdown_token: CancellationToken,
     /// Counter for total dropped messages across all clients (for monitoring)
@@ -62,13 +85,15 @@ pub struct LogStreamService {
 impl LogStreamService {
     pub fn new(
         broadcaster: Arc<LogBroadcaster>,
-        config: Arc<Config>,
+        run_id: String,
+        instance_type: String,
         status: Arc<RwLock<AgentStatus>>,
         shutdown_token: CancellationToken,
     ) -> Self {
         Self {
             broadcaster,
-            config,
+            run_id,
+            instance_type,
             status,
             shutdown_token,
             dropped_messages: Arc::new(AtomicU64::new(0)),
@@ -94,23 +119,28 @@ impl LogStream for LogStreamService {
         let req = request.into_inner();
 
         // Validate request matches this agent
-        if req.instance_type != self.config.instance_type {
+        if req.instance_type != self.instance_type {
             return Err(Status::invalid_argument(format!(
                 "Instance type mismatch: requested {} but this is {}",
-                req.instance_type, self.config.instance_type
+                req.instance_type, self.instance_type
             )));
         }
 
-        if req.run_id != self.config.run_id {
+        if req.run_id != self.run_id {
             return Err(Status::invalid_argument(format!(
                 "Run ID mismatch: requested {} but this is {}",
-                req.run_id, self.config.run_id
+                req.run_id, self.run_id
             )));
         }
+
+        // Get buffered messages BEFORE subscribing to avoid duplicates
+        let buffered = self.broadcaster.get_buffered_messages().await;
+        let buffered_count = buffered.len();
 
         info!(
             instance_type = %req.instance_type,
             run_id = %req.run_id,
+            buffered_messages = buffered_count,
             "Client connected for log streaming"
         );
 
@@ -140,8 +170,14 @@ impl LogStream for LogStreamService {
             }
         });
 
-        // Wrap stream to terminate on shutdown signal
+        // Wrap stream to first replay buffered messages, then stream live, with shutdown support
         let shutdown_stream = async_stream::stream! {
+            // First, replay buffered messages from before this client connected
+            for entry in buffered {
+                yield Ok(entry);
+            }
+
+            // Then stream live messages
             tokio::pin!(output_stream);
             loop {
                 tokio::select! {
@@ -190,7 +226,8 @@ impl LogStream for LogStreamService {
 /// # Arguments
 /// * `port` - Port to listen on
 /// * `broadcaster` - Log broadcaster for streaming
-/// * `config` - Agent configuration
+/// * `run_id` - Unique run identifier for request validation
+/// * `instance_type` - EC2 instance type for request validation
 /// * `status` - Shared agent status
 /// * `tls_config` - Optional TLS configuration for mTLS
 /// * `shutdown_token` - Token for graceful shutdown signaling
@@ -201,14 +238,15 @@ impl LogStream for LogStreamService {
 pub async fn run_grpc_server(
     port: u16,
     broadcaster: Arc<LogBroadcaster>,
-    config: Arc<Config>,
+    run_id: String,
+    instance_type: String,
     status: Arc<RwLock<AgentStatus>>,
     tls_config: Option<TlsConfig>,
     shutdown_token: CancellationToken,
 ) -> Result<()> {
     let addr = format!("0.0.0.0:{}", port).parse()?;
 
-    let service = LogStreamService::new(broadcaster, config, status, shutdown_token.clone());
+    let service = LogStreamService::new(broadcaster, run_id, instance_type, status, shutdown_token.clone());
 
     let mut server = tonic::transport::Server::builder();
 
@@ -238,27 +276,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::time::timeout;
-
-    fn test_config() -> Config {
-        Config {
-            run_id: "test-run-123".to_string(),
-            bucket: "test-bucket".to_string(),
-            region: "us-east-2".to_string(),
-            attr: "test-attr".to_string(),
-            runs: 5,
-            instance_type: "c6i.xlarge".to_string(),
-            system: "x86_64-linux".to_string(),
-            flake_ref: "github:test/test".to_string(),
-            build_timeout: 7200,
-            max_failures: 3,
-            broadcast_capacity: 1024,
-            grpc_port: 50051,
-            require_tls: false,
-            ca_cert_pem: None,
-            agent_cert_pem: None,
-            agent_key_pem: None,
-        }
-    }
 
     #[test]
     fn test_log_broadcaster_creation() {
@@ -318,7 +335,6 @@ mod tests {
     #[tokio::test]
     async fn test_get_status_returns_current_status() {
         let broadcaster = Arc::new(LogBroadcaster::new(100));
-        let config = Arc::new(test_config());
         let status = Arc::new(RwLock::new(AgentStatus {
             status: "running".to_string(),
             run_progress: 3,
@@ -327,7 +343,13 @@ mod tests {
         }));
 
         let shutdown_token = CancellationToken::new();
-        let service = LogStreamService::new(broadcaster, config, status, shutdown_token);
+        let service = LogStreamService::new(
+            broadcaster,
+            "test-run-123".to_string(),
+            "c6i.xlarge".to_string(),
+            status,
+            shutdown_token,
+        );
 
         let request = Request::new(StatusRequest {});
         let response = service.get_status(request).await.unwrap();
@@ -342,11 +364,16 @@ mod tests {
     #[tokio::test]
     async fn test_stream_logs_validates_instance_type() {
         let broadcaster = Arc::new(LogBroadcaster::new(100));
-        let config = Arc::new(test_config());
         let status = Arc::new(RwLock::new(AgentStatus::default()));
         let shutdown_token = CancellationToken::new();
 
-        let service = LogStreamService::new(broadcaster, config, status, shutdown_token);
+        let service = LogStreamService::new(
+            broadcaster,
+            "test-run-123".to_string(),
+            "c6i.xlarge".to_string(),
+            status,
+            shutdown_token,
+        );
 
         let request = Request::new(StreamLogsRequest {
             instance_type: "wrong-instance-type".to_string(),
@@ -366,11 +393,16 @@ mod tests {
     #[tokio::test]
     async fn test_stream_logs_accepts_valid_request() {
         let broadcaster = Arc::new(LogBroadcaster::new(100));
-        let config = Arc::new(test_config());
         let status = Arc::new(RwLock::new(AgentStatus::default()));
         let shutdown_token = CancellationToken::new();
 
-        let service = LogStreamService::new(broadcaster, config, status, shutdown_token);
+        let service = LogStreamService::new(
+            broadcaster,
+            "test-run-123".to_string(),
+            "c6i.xlarge".to_string(),
+            status,
+            shutdown_token,
+        );
 
         let request = Request::new(StreamLogsRequest {
             instance_type: "c6i.xlarge".to_string(),

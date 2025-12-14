@@ -20,10 +20,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 tokio-stream.workspace = true
 
-# AWS SDK (only what agent needs)
+# AWS SDK (only what agent needs - S3 for config download and results upload)
 aws-config.workspace = true
-aws-sdk-cloudwatch.workspace = true
-aws-sdk-cloudwatchlogs.workspace = true
 aws-sdk-s3.workspace = true
 
 # gRPC server

@@ -424,7 +424,7 @@ mod tests {
     fn render_does_not_panic_with_empty_state() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new_loading(&[], 0);
+        let mut app = App::new_loading(&[], 0, None);
         terminal.draw(|f| render(f, &mut app)).unwrap();
     }
 
@@ -433,7 +433,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let instances = vec!["m5.large".to_string(), "c5.xlarge".to_string()];
-        let mut app = App::new_loading(&instances, 10);
+        let mut app = App::new_loading(&instances, 10, None);
         terminal.draw(|f| render(f, &mut app)).unwrap();
     }
 
@@ -443,7 +443,7 @@ mod tests {
         let backend = TestBackend::new(10, 5);
         let mut terminal = Terminal::new(backend).unwrap();
         let instances = vec!["m5.large".to_string()];
-        let mut app = App::new_loading(&instances, 5);
+        let mut app = App::new_loading(&instances, 5, None);
         terminal.draw(|f| render(f, &mut app)).unwrap();
     }
 
@@ -455,7 +455,7 @@ mod tests {
             "this-is-a-very-long-instance-type-name-that-exceeds-normal-bounds".to_string(),
             "another-extremely-long-instance-name-for-testing-truncation".to_string(),
         ];
-        let mut app = App::new_loading(&instances, 10);
+        let mut app = App::new_loading(&instances, 10, None);
         terminal.draw(|f| render(f, &mut app)).unwrap();
     }
 
@@ -465,7 +465,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         // Instance names with unicode (unlikely in practice but test robustness)
         let instances = vec!["日本語インスタンス".to_string(), "🦀-instance".to_string()];
-        let mut app = App::new_loading(&instances, 5);
+        let mut app = App::new_loading(&instances, 5, None);
 
         // Add some unicode to console output
         if let Some(state) = app.instances.data.get_mut("日本語インスタンス") {
@@ -487,7 +487,7 @@ mod tests {
             "complete".to_string(),
             "failed".to_string(),
         ];
-        let mut app = App::new_loading(&instances, 5);
+        let mut app = App::new_loading(&instances, 5, None);
 
         // Set different statuses
         if let Some(s) = app.instances.data.get_mut("pending") {
@@ -513,7 +513,7 @@ mod tests {
     fn render_does_not_panic_with_help_popup() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new_loading(&["m5.large".to_string()], 5);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
         app.ui.show_help = true;
         terminal.draw(|f| render(f, &mut app)).unwrap();
     }
@@ -522,7 +522,7 @@ mod tests {
     fn render_does_not_panic_with_quit_confirm_popup() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new_loading(&["m5.large".to_string()], 5);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
         app.ui.show_quit_confirm = true;
         terminal.draw(|f| render(f, &mut app)).unwrap();
     }
@@ -531,7 +531,7 @@ mod tests {
     fn render_does_not_panic_with_large_log_buffer() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new_loading(&["m5.large".to_string()], 5);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
 
         // Fill log buffer with many lines
         if let Some(state) = app.instances.data.get_mut("m5.large") {

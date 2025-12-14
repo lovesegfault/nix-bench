@@ -284,7 +284,6 @@ impl ScrollState {
 }
 
 /// Run context and timing
-#[derive(Debug)]
 pub struct RunContext {
     /// Unique run identifier
     pub run_id: Option<String>,
@@ -300,11 +299,28 @@ pub struct RunContext {
     pub last_update: Instant,
     /// When all instances completed
     pub completion_time: Option<Instant>,
+    /// TLS configuration for gRPC status polling
+    pub tls_config: Option<nix_bench_common::TlsConfig>,
+}
+
+impl std::fmt::Debug for RunContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunContext")
+            .field("run_id", &self.run_id)
+            .field("bucket_name", &self.bucket_name)
+            .field("aws_account_id", &self.aws_account_id)
+            .field("total_runs", &self.total_runs)
+            .field("start_time", &self.start_time)
+            .field("last_update", &self.last_update)
+            .field("completion_time", &self.completion_time)
+            .field("tls_config", &self.tls_config.is_some())
+            .finish()
+    }
 }
 
 impl RunContext {
     /// Create a new run context
-    pub fn new(total_runs: u32) -> Self {
+    pub fn new(total_runs: u32, tls_config: Option<nix_bench_common::TlsConfig>) -> Self {
         let now = Instant::now();
         Self {
             run_id: None,
@@ -314,6 +330,7 @@ impl RunContext {
             start_time: now,
             last_update: now,
             completion_time: None,
+            tls_config,
         }
     }
 }
@@ -363,7 +380,11 @@ pub struct App {
 
 impl App {
     /// Create a new app in early/loading state
-    pub fn new_loading(instance_types: &[String], total_runs: u32) -> Self {
+    pub fn new_loading(
+        instance_types: &[String],
+        total_runs: u32,
+        tls_config: Option<nix_bench_common::TlsConfig>,
+    ) -> Self {
         // Create placeholder instances
         let mut data = HashMap::new();
         let mut order = Vec::new();
@@ -396,7 +417,7 @@ impl App {
             },
             ui: UiState::default(),
             scroll: ScrollState::new(),
-            context: RunContext::new(total_runs),
+            context: RunContext::new(total_runs, tls_config),
             lifecycle: LifecycleState::default(),
         }
     }
@@ -743,7 +764,11 @@ impl App {
             return;
         }
 
-        let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT);
+        let poller = if let Some(ref tls) = self.context.tls_config {
+            GrpcStatusPoller::new_with_tls(&instances_with_ips, GRPC_PORT, tls.clone())
+        } else {
+            GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT)
+        };
         let status_map = poller.poll_status().await;
         if !status_map.is_empty() {
             self.update_from_grpc_status(&status_map);
@@ -806,6 +831,9 @@ impl App {
                         TuiMessage::RunInfo { run_id, bucket_name } => {
                             self.context.run_id = Some(run_id);
                             self.context.bucket_name = Some(bucket_name);
+                        }
+                        TuiMessage::TlsConfig { config } => {
+                            self.context.tls_config = Some(config);
                         }
                         TuiMessage::InstanceUpdate { instance_type, instance_id, status, public_ip } => {
                             if let Some(state) = self.instances.data.get_mut(&instance_type) {
@@ -1102,20 +1130,20 @@ mod tests {
     #[test]
     fn test_completion_percentage_zero_instances() {
         // Create app with empty instance list
-        let app = App::new_loading(&[], 5);
+        let app = App::new_loading(&[], 5, None);
         assert_eq!(app.completion_percentage(), 0.0);
     }
 
     #[test]
     fn test_completion_percentage_zero_runs() {
         // Create app with instances but zero runs
-        let app = App::new_loading(&["m5.large".to_string()], 0);
+        let app = App::new_loading(&["m5.large".to_string()], 0, None);
         assert_eq!(app.completion_percentage(), 0.0);
     }
 
     #[test]
     fn test_completion_percentage_normal() {
-        let mut app = App::new_loading(&["m5.large".to_string(), "c5.large".to_string()], 10);
+        let mut app = App::new_loading(&["m5.large".to_string(), "c5.large".to_string()], 10, None);
 
         // Simulate some progress
         if let Some(state) = app.instances.data.get_mut("m5.large") {
@@ -1133,7 +1161,7 @@ mod tests {
 
     #[test]
     fn test_tick_throbbers_adds_running_instance() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
 
         // Set instance to running
         if let Some(state) = app.instances.data.get_mut("m5.large") {
@@ -1148,7 +1176,7 @@ mod tests {
 
     #[test]
     fn test_tick_throbbers_removes_completed_instance() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
 
         // Set instance to running first
         if let Some(state) = app.instances.data.get_mut("m5.large") {
@@ -1169,7 +1197,7 @@ mod tests {
 
     #[test]
     fn test_tick_throbbers_cleanup_orphaned_states() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
 
         // Manually insert an orphaned throbber state (for instance that doesn't exist)
         app.scroll

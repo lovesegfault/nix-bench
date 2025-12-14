@@ -309,8 +309,8 @@ async fn run_benchmarks_with_tui(
     // Create empty instances map - will be filled by background task
     let mut instances: HashMap<String, InstanceState> = HashMap::new();
 
-    // Create app state in loading mode
-    let mut app = tui::App::new_loading(&config.instance_types, config.runs);
+    // Create app state in loading mode (TLS config is sent via channel later)
+    let mut app = tui::App::new_loading(&config.instance_types, config.runs, None);
 
     // Create cancellation token shared between TUI and init task
     let cancel_token = CancellationToken::new();
@@ -445,6 +445,11 @@ async fn run_init_task(
     // Extract what we need from the context
     let instances = ctx.instances;
     let coordinator_tls_config = ctx.coordinator_tls_config;
+
+    // Send TLS config to TUI for status polling
+    if let Some(ref tls) = coordinator_tls_config {
+        let _ = tx.send(TuiMessage::TlsConfig { config: tls.clone() }).await;
+    }
 
     // Switch to running phase
     let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
@@ -654,8 +659,8 @@ async fn run_benchmarks_no_tui(
         // Use unified log streaming with stdout output
         use crate::aws::{LogStreamingOptions, start_log_streaming_unified};
         let mut options = LogStreamingOptions::new(&instances_with_ips, &run_id, GRPC_PORT);
-        if let Some(tls_config) = coordinator_tls_config {
-            options = options.with_tls(tls_config);
+        if let Some(ref tls_config) = coordinator_tls_config {
+            options = options.with_tls(tls_config.clone());
         }
         let handles = start_log_streaming_unified(options);
 
@@ -739,7 +744,11 @@ async fn run_benchmarks_no_tui(
 
         let status_map = if !instances_with_ips.is_empty() {
             use crate::aws::GrpcStatusPoller;
-            let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT);
+            let poller = if let Some(ref tls) = coordinator_tls_config {
+                GrpcStatusPoller::new_with_tls(&instances_with_ips, GRPC_PORT, tls.clone())
+            } else {
+                GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT)
+            };
             poller.poll_status().await
         } else {
             std::collections::HashMap::new()
@@ -1242,16 +1251,26 @@ async fn write_results(
 
 /// Print a summary table of benchmark results to stdout
 fn print_results_summary(instances: &HashMap<String, InstanceState>) {
+    use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, ContentArrangement, Table};
+
     if instances.is_empty() {
         return;
     }
 
     println!("\n=== Benchmark Results ===\n");
-    println!(
-        "{:<20} {:>10} {:>8} {:>10} {:>10} {:>10}",
-        "Instance Type", "Status", "Runs", "Min (s)", "Avg (s)", "Max (s)"
-    );
-    println!("{}", "-".repeat(70));
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL_CONDENSED)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("Instance Type"),
+            Cell::new("Status"),
+            Cell::new("Runs"),
+            Cell::new("Min (s)"),
+            Cell::new("Avg (s)"),
+            Cell::new("Max (s)"),
+        ]);
 
     // Sort by average duration (fastest first), with instances that have no results at the end
     let mut sorted: Vec<_> = instances.iter().collect();
@@ -1290,16 +1309,14 @@ fn print_results_summary(instances: &HashMap<String, InstanceState>) {
                 .iter()
                 .cloned()
                 .filter(|x| x.is_finite())
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap_or(0.0);
+                .fold(f64::MAX, f64::min);
             let avg_val = state.durations.iter().sum::<f64>() / state.durations.len() as f64;
             let max_val = state
                 .durations
                 .iter()
                 .cloned()
                 .filter(|x| x.is_finite())
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap_or(0.0);
+                .fold(f64::MIN, f64::max);
             (
                 format!("{:.1}", min_val),
                 format!("{:.1}", avg_val),
@@ -1307,12 +1324,17 @@ fn print_results_summary(instances: &HashMap<String, InstanceState>) {
             )
         };
 
-        println!(
-            "{:<20} {:>10} {:>8} {:>10} {:>10} {:>10}",
-            instance_type, status, runs, min, avg, max
-        );
+        table.add_row(vec![
+            Cell::new(instance_type),
+            Cell::new(status),
+            Cell::new(&runs),
+            Cell::new(&min),
+            Cell::new(&avg),
+            Cell::new(&max),
+        ]);
     }
-    println!();
+
+    println!("{table}");
 }
 
 #[cfg(test)]

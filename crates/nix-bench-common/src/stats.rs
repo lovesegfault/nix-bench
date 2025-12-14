@@ -66,6 +66,7 @@ impl DurationStats {
     }
 
     /// Format as "min/avg/max" string (e.g., "1.2/3.4/5.6s")
+    #[cfg(test)]
     pub fn format_short(&self) -> String {
         if self.is_empty() {
             "-".to_string()
@@ -75,6 +76,7 @@ impl DurationStats {
     }
 
     /// Format with labels (e.g., "Avg: 3.4s  Min: 1.2s  Max: 5.6s")
+    #[cfg(test)]
     pub fn format_labeled(&self) -> String {
         if self.is_empty() {
             "-".to_string()
@@ -143,5 +145,48 @@ mod tests {
     fn test_format_labeled() {
         let stats = DurationStats::from_durations(&[1.0, 2.0, 3.0]);
         assert_eq!(stats.format_labeled(), "Avg: 2.0s  Min: 1.0s  Max: 3.0s");
+    }
+
+    // Property-based tests
+    use proptest::prelude::*;
+
+    proptest! {
+        /// DurationStats should never panic regardless of input
+        #[test]
+        fn duration_stats_never_panics(durations in prop::collection::vec(-1e15..1e15f64, 0..100)) {
+            let _ = DurationStats::from_durations(&durations);
+        }
+
+        /// avg should always be between min and max (when non-empty)
+        #[test]
+        fn avg_between_min_and_max(durations in prop::collection::vec(0.0..1000.0f64, 1..50)) {
+            let stats = DurationStats::from_durations(&durations);
+            if !stats.is_empty() {
+                prop_assert!(stats.avg >= stats.min, "avg {} < min {}", stats.avg, stats.min);
+                prop_assert!(stats.avg <= stats.max, "avg {} > max {}", stats.avg, stats.max);
+            }
+        }
+
+        /// count should match the number of finite values
+        #[test]
+        fn count_matches_finite_values(durations in prop::collection::vec(prop::num::f64::ANY, 0..50)) {
+            let stats = DurationStats::from_durations(&durations);
+            let expected_count = durations.iter().filter(|x| x.is_finite()).count();
+            prop_assert_eq!(stats.count, expected_count);
+        }
+
+        /// format_short should not panic
+        #[test]
+        fn format_short_never_panics(durations in prop::collection::vec(prop::num::f64::ANY, 0..20)) {
+            let stats = DurationStats::from_durations(&durations);
+            let _ = stats.format_short();
+        }
+
+        /// format_labeled should not panic
+        #[test]
+        fn format_labeled_never_panics(durations in prop::collection::vec(prop::num::f64::ANY, 0..20)) {
+            let stats = DurationStats::from_durations(&durations);
+            let _ = stats.format_labeled();
+        }
     }
 }

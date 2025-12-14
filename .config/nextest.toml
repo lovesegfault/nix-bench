@@ -9,6 +9,11 @@ test-threads = 1
 [profile.default.junit]
 path = "target/nextest/default/junit.xml"
 
+# Override timeout for AWS integration tests (instance launch can take 5+ min)
+[[profile.default.overrides]]
+filter = 'binary(~aws)'
+slow-timeout = { period = "120s", terminate-after = 5 }
+
 [profile.ci]
 # CI profile with longer timeouts
 slow-timeout = { period = "120s", terminate-after = 2 }

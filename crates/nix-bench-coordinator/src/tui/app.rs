@@ -118,8 +118,6 @@ pub enum InitPhase {
 pub struct CleanupProgress {
     /// EC2 instances: (completed, total)
     pub ec2_instances: (usize, usize),
-    /// Elastic IPs: (completed, total)
-    pub elastic_ips: (usize, usize),
     /// S3 bucket deleted
     pub s3_bucket: bool,
     /// IAM roles: (completed, total)
@@ -134,13 +132,12 @@ impl CleanupProgress {
     /// Create a new cleanup progress tracker with initial totals
     pub fn new(
         ec2_total: usize,
-        eip_total: usize,
+        _eip_total: usize, // Kept for API compatibility, but unused
         iam_total: usize,
         sg_total: usize,
     ) -> Self {
         Self {
             ec2_instances: (0, ec2_total),
-            elastic_ips: (0, eip_total),
             s3_bucket: false,
             iam_roles: (0, iam_total),
             security_rules: (0, sg_total),
@@ -151,7 +148,6 @@ impl CleanupProgress {
     /// Calculate overall completion percentage
     pub fn percentage(&self) -> f64 {
         let total_items = self.ec2_instances.1
-            + self.elastic_ips.1
             + 1 // S3 bucket
             + self.iam_roles.1
             + self.security_rules.1;
@@ -159,7 +155,6 @@ impl CleanupProgress {
             return 100.0;
         }
         let completed = self.ec2_instances.0
-            + self.elastic_ips.0
             + (if self.s3_bucket { 1 } else { 0 })
             + self.iam_roles.0
             + self.security_rules.0;

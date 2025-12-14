@@ -5,6 +5,7 @@
 
 use super::progress::{InitProgressReporter, InstanceUpdate};
 use super::types::{InstanceState, InstanceStatus};
+use crate::aws::ec2::LaunchInstanceConfig;
 use crate::aws::{
     get_coordinator_public_ip, get_current_account_id, AccountId, Ec2Client, IamClient, S3Client,
 };
@@ -16,6 +17,9 @@ use crate::tui::{InitPhase, LogBuffer};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tracing::{error, info};
+
+/// Map of instance_type -> (ca_cert_pem, agent_cert_pem, agent_key_pem)
+type AgentCertificateMap = HashMap<String, (String, String, String)>;
 
 /// Context holding all resources created during initialization
 pub struct InitContext {
@@ -29,7 +33,6 @@ pub struct InitContext {
     pub instance_profile_name: Option<String>,
     pub security_group_id: Option<String>,
     pub coordinator_ip: Option<String>,
-    pub eip_allocations: HashMap<String, (String, String)>,
     pub agent_certs: HashMap<String, (String, String, String)>,
     /// TLS configuration for coordinator (required for mTLS)
     pub coordinator_tls_config: TlsConfig,
@@ -102,21 +105,14 @@ impl<'a> BenchmarkInitializer<'a> {
             (Some(profile_name), Some(role_name))
         };
 
-        // Phase 4: Allocate Elastic IPs (required for TLS certificates)
-        let eip_allocations = self.allocate_elastic_ips(&ec2).await?;
-
-        // Phase 5: Generate TLS certificates (required for mTLS)
-        let (agent_certs, coordinator_tls_config) = self.generate_certificates(&eip_allocations)?;
-
-        // Phase 6: Upload agents
+        // Phase 4: Upload agent binaries (before launching instances)
         reporter.report_phase(InitPhase::UploadingAgents);
         self.upload_agents(&s3).await?;
-        self.upload_configs(&s3, &agent_certs).await?;
 
-        // Phase 7: Setup security group
+        // Phase 5: Setup security group
         let (security_group_id, coordinator_ip, sg_rule_id) = self.setup_security_group(&ec2).await?;
 
-        // Phase 8: Launch instances
+        // Phase 6: Launch instances
         reporter.report_phase(InitPhase::LaunchingInstances);
         let launched = self
             .launch_instances(&ec2, security_group_id.as_deref(), instance_profile_name.as_deref(), reporter)
@@ -127,9 +123,25 @@ impl<'a> BenchmarkInitializer<'a> {
             anyhow::bail!("No instances were launched successfully");
         }
 
-        // Phase 9: Wait for instances
+        // Phase 7: Wait for instances and get their dynamic public IPs
         reporter.report_phase(InitPhase::WaitingForInstances);
-        let instances = self.wait_for_instances(launched, &ec2, &eip_allocations, reporter).await?;
+        let instances = self.wait_for_instances(launched, &ec2, reporter).await?;
+
+        // Phase 8: Generate TLS certificates using dynamic public IPs
+        let public_ips: HashMap<String, String> = instances
+            .iter()
+            .filter_map(|(t, s)| s.public_ip.as_ref().map(|ip| (t.clone(), ip.clone())))
+            .collect();
+
+        if public_ips.is_empty() {
+            anyhow::bail!("No instances have public IPs - cannot generate TLS certificates");
+        }
+
+        let (agent_certs, coordinator_tls_config) = self.generate_certificates(&public_ips)?;
+
+        // Phase 9: Upload agent configs (with TLS certificates)
+        self.upload_configs(&s3, &agent_certs).await?;
+        info!("Agent configs with TLS certificates uploaded - agents will poll and start gRPC");
 
         // All async work done, now record to database
         let db = state::open_db().await?;
@@ -144,10 +156,6 @@ impl<'a> BenchmarkInitializer<'a> {
             if iam_role_name.is_some() {
                 state::insert_resource(&db, &self.run_id, &account_id, ResourceType::IamInstanceProfile, profile_name, &self.config.region).await?;
             }
-        }
-
-        for (allocation_id, _) in eip_allocations.values() {
-            state::insert_resource(&db, &self.run_id, &account_id, ResourceType::ElasticIp, allocation_id, &self.config.region).await?;
         }
 
         if let Some(ref sg_id) = security_group_id {
@@ -171,24 +179,13 @@ impl<'a> BenchmarkInitializer<'a> {
             region: self.config.region.clone(),
             db, ec2, s3,
             instance_profile_name, security_group_id, coordinator_ip,
-            eip_allocations, agent_certs, coordinator_tls_config, instances,
+            agent_certs, coordinator_tls_config, instances,
         })
     }
 
-    async fn allocate_elastic_ips(&self, ec2: &Ec2Client) -> Result<HashMap<String, (String, String)>> {
-        let mut eip_allocations = HashMap::new();
-        for instance_type in &self.config.instance_types {
-            let (allocation_id, public_ip) = ec2.allocate_elastic_ip(&self.run_id).await
-                .with_context(|| format!("Failed to allocate EIP for instance type {}. EIPs are required for mTLS.", instance_type))?;
-            info!(instance_type = %instance_type, public_ip = %public_ip, "Allocated EIP");
-            eip_allocations.insert(instance_type.clone(), (allocation_id, public_ip));
-        }
-        Ok(eip_allocations)
-    }
-
-    fn generate_certificates(&self, eip_allocations: &HashMap<String, (String, String)>) -> Result<(HashMap<String, (String, String, String)>, TlsConfig)> {
-        if eip_allocations.is_empty() {
-            anyhow::bail!("No EIPs allocated - cannot generate TLS certificates. EIPs are required for mTLS.");
+    fn generate_certificates(&self, public_ips: &HashMap<String, String>) -> Result<(AgentCertificateMap, TlsConfig)> {
+        if public_ips.is_empty() {
+            anyhow::bail!("No public IPs available - cannot generate TLS certificates");
         }
 
         let ca = generate_ca(&self.run_id)?;
@@ -200,7 +197,7 @@ impl<'a> BenchmarkInitializer<'a> {
         };
 
         let mut agent_certs = HashMap::new();
-        for (instance_type, (_, public_ip)) in eip_allocations {
+        for (instance_type, public_ip) in public_ips {
             let cert = generate_agent_cert(&ca.cert_pem, &ca.key_pem, instance_type, Some(public_ip))
                 .with_context(|| format!("Failed to generate TLS certificate for instance type {}", instance_type))?;
             agent_certs.insert(instance_type.clone(), (ca.cert_pem.clone(), cert.cert_pem, cert.key_pem));
@@ -264,7 +261,17 @@ impl<'a> BenchmarkInitializer<'a> {
         for instance_type in &self.config.instance_types {
             let system = detect_system(instance_type);
             let user_data = super::generate_user_data(&self.bucket_name, &self.run_id, instance_type);
-            match ec2.launch_instance(&self.run_id, instance_type, system, &user_data, self.config.subnet_id.as_deref(), security_group_id, instance_profile_name).await {
+            let mut launch_config = LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
+            if let Some(subnet) = &self.config.subnet_id {
+                launch_config = launch_config.with_subnet(subnet);
+            }
+            if let Some(sg) = security_group_id {
+                launch_config = launch_config.with_security_group(sg);
+            }
+            if let Some(profile) = instance_profile_name {
+                launch_config = launch_config.with_iam_profile(profile);
+            }
+            match ec2.launch_instance(launch_config).await {
                 Ok(launched) => {
                     reporter.report_instance_update(InstanceUpdate { instance_type: instance_type.clone(), instance_id: launched.instance_id.clone(), status: InstanceStatus::Launching, public_ip: None });
                     instances.insert(instance_type.clone(), InstanceState {
@@ -283,15 +290,11 @@ impl<'a> BenchmarkInitializer<'a> {
         Ok(instances)
     }
 
-    async fn wait_for_instances<R: InitProgressReporter>(&self, mut instances: HashMap<String, InstanceState>, ec2: &Ec2Client, eip_allocations: &HashMap<String, (String, String)>, reporter: &R) -> Result<HashMap<String, InstanceState>> {
+    async fn wait_for_instances<R: InitProgressReporter>(&self, mut instances: HashMap<String, InstanceState>, ec2: &Ec2Client, reporter: &R) -> Result<HashMap<String, InstanceState>> {
         for (instance_type, state) in instances.iter_mut() {
             match ec2.wait_for_running(&state.instance_id, None).await {
                 Ok(dynamic_ip) => {
-                    if let Some((allocation_id, eip)) = eip_allocations.get(instance_type) {
-                        state.public_ip = ec2.associate_elastic_ip(allocation_id, &state.instance_id).await.ok().map(|_| eip.clone()).or(dynamic_ip);
-                    } else {
-                        state.public_ip = dynamic_ip;
-                    }
+                    state.public_ip = dynamic_ip;
                     state.status = InstanceStatus::Running;
                     reporter.report_instance_update(InstanceUpdate { instance_type: instance_type.clone(), instance_id: state.instance_id.clone(), status: InstanceStatus::Running, public_ip: state.public_ip.clone() });
                 }

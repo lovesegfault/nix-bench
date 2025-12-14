@@ -6,9 +6,31 @@
 
 use anyhow::{Context, Result};
 use rcgen::{
-    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
-    KeyUsagePurpose, SanType,
+    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyPair, KeyUsagePurpose, SanType,
 };
+
+/// Parse a CA certificate and key from PEM and recreate for signing.
+///
+/// This is needed because rcgen requires the CA to be a `Certificate` object
+/// to sign new certificates, not just the raw PEM. We parse the PEM, extract
+/// parameters, and recreate the certificate.
+fn parse_ca_for_signing(ca_cert_pem: &str, ca_key_pem: &str) -> Result<(Certificate, KeyPair)> {
+    let ca_key_pair = KeyPair::from_pem(ca_key_pem).context("Failed to parse CA private key")?;
+
+    let ca_cert_der = pem::parse(ca_cert_pem)
+        .context("Failed to parse CA certificate PEM")?
+        .into_contents();
+
+    let ca_params = CertificateParams::from_ca_cert_der(&ca_cert_der.into())
+        .context("Failed to parse CA certificate parameters")?;
+
+    let ca_cert = ca_params
+        .self_signed(&ca_key_pair)
+        .context("Failed to recreate CA certificate for signing")?;
+
+    Ok((ca_cert, ca_key_pair))
+}
 
 /// PEM-encoded certificate and private key pair
 #[derive(Debug, Clone)]
@@ -112,19 +134,7 @@ pub fn generate_agent_cert(
     instance_type: &str,
     public_ip: Option<&str>,
 ) -> Result<CertKeyPair> {
-    // Parse the CA key pair
-    let ca_key_pair = KeyPair::from_pem(ca_key_pem).context("Failed to parse CA private key")?;
-
-    // Parse the CA certificate from PEM to get its parameters
-    let ca_cert_der = pem::parse(ca_cert_pem)
-        .context("Failed to parse CA certificate PEM")?
-        .into_contents();
-    let ca_params = CertificateParams::from_ca_cert_der(&ca_cert_der.into())
-        .context("Failed to parse CA certificate parameters")?;
-
-    let ca_cert = ca_params
-        .self_signed(&ca_key_pair)
-        .context("Failed to recreate CA certificate for signing")?;
+    let (ca_cert, ca_key_pair) = parse_ca_for_signing(ca_cert_pem, ca_key_pem)?;
 
     // Now create the agent certificate
     let mut params = CertificateParams::default();
@@ -160,9 +170,6 @@ pub fn generate_agent_cert(
         .signed_by(&key_pair, &ca_cert, &ca_key_pair)
         .context("Failed to sign agent certificate")?;
 
-    // We ignore ca_cert_pem since we recreated the CA from the key
-    let _ = ca_cert_pem;
-
     Ok(CertKeyPair {
         cert_pem: cert.pem(),
         key_pem: key_pair.serialize_pem(),
@@ -175,19 +182,7 @@ pub fn generate_agent_cert(
 /// * `ca_cert_pem` - The CA certificate PEM
 /// * `ca_key_pem` - The CA private key PEM
 pub fn generate_coordinator_cert(ca_cert_pem: &str, ca_key_pem: &str) -> Result<CertKeyPair> {
-    // Parse the CA key pair
-    let ca_key_pair = KeyPair::from_pem(ca_key_pem).context("Failed to parse CA private key")?;
-
-    // Parse the CA certificate from PEM to get its parameters
-    let ca_cert_der = pem::parse(ca_cert_pem)
-        .context("Failed to parse CA certificate PEM")?
-        .into_contents();
-    let ca_params = CertificateParams::from_ca_cert_der(&ca_cert_der.into())
-        .context("Failed to parse CA certificate parameters")?;
-
-    let ca_cert = ca_params
-        .self_signed(&ca_key_pair)
-        .context("Failed to recreate CA certificate for signing")?;
+    let (ca_cert, ca_key_pair) = parse_ca_for_signing(ca_cert_pem, ca_key_pem)?;
 
     // Now create the coordinator certificate
     let mut params = CertificateParams::default();

@@ -396,7 +396,6 @@ async fn run_init_task(
     // Extract what we need from the context
     let instances = ctx.instances;
     let coordinator_tls_config = ctx.coordinator_tls_config;
-    let eip_allocations = ctx.eip_allocations;
 
     // Send TLS config to TUI for status polling
     let _ = tx.send(TuiMessage::TlsConfig { config: coordinator_tls_config.clone() }).await;
@@ -472,7 +471,6 @@ async fn run_init_task(
     tokio::spawn(async move {
         watch_and_terminate_completed(
             instances_for_termination,
-            eip_allocations,
             region_for_termination,
             run_id_for_termination,
             tls_config_for_watcher,
@@ -578,7 +576,6 @@ async fn poll_bootstrap_status(
 /// rather than waiting for all instances to finish before cleanup.
 async fn watch_and_terminate_completed(
     instances: HashMap<String, InstanceState>,
-    eip_allocations: HashMap<String, (String, String)>,
     region: String,
     _run_id: String,
     tls_config: nix_bench_common::TlsConfig,
@@ -653,49 +650,24 @@ async fn watch_and_terminate_completed(
                         let instance_id = &state.instance_id;
 
                         // Terminate the instance
-                        let termination_succeeded = match ec2.terminate_instance(instance_id).await {
+                        match ec2.terminate_instance(instance_id).await {
                             Ok(()) => {
                                 info!(instance_id = %instance_id, instance_type = %instance_type, "Instance terminated");
                                 let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
-                                true
+                                terminated.insert(instance_type.clone());
                             }
                             Err(e) => {
                                 let error_str = format!("{:?}", e);
                                 if error_str.contains("InvalidInstanceID.NotFound") {
                                     // Already terminated
                                     let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
-                                    true
+                                    terminated.insert(instance_type.clone());
                                 } else {
                                     warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
-                                    false
+                                    // Don't add to terminated set - watcher will retry
                                 }
                             }
-                        };
-
-                        // Only proceed with EIP release and mark as terminated if EC2 termination succeeded
-                        if termination_succeeded {
-                            // Release the Elastic IP
-                            if let Some((allocation_id, public_ip)) = eip_allocations.get(instance_type) {
-                                match ec2.release_elastic_ip(allocation_id).await {
-                                    Ok(()) => {
-                                        info!(allocation_id = %allocation_id, public_ip = %public_ip, "Released Elastic IP");
-                                        let _ = state::mark_resource_deleted(&db, ResourceType::ElasticIp, allocation_id).await;
-                                    }
-                                    Err(e) => {
-                                        let error_str = format!("{:?}", e);
-                                        if error_str.contains("InvalidAllocationID.NotFound") {
-                                            let _ = state::mark_resource_deleted(&db, ResourceType::ElasticIp, allocation_id).await;
-                                        } else {
-                                            // EIP release failed but instance is terminated - cleanup will retry EIP
-                                            warn!(allocation_id = %allocation_id, error = ?e, "Failed to release EIP");
-                                        }
-                                    }
-                                }
-                            }
-
-                            terminated.insert(instance_type.clone());
                         }
-                        // If termination failed, don't add to terminated set - watcher will retry
                     }
                 }
             }
@@ -1011,10 +983,6 @@ async fn cleanup_resources(
         instance_ids.retain(|id| db_instance_ids.contains(id));
 
         // Count resources for progress tracking
-        let eip_ids: Vec<_> = db_resources
-            .iter()
-            .filter(|r| r.resource_type == ResourceType::ElasticIp && r.deleted_at.is_none())
-            .collect();
         let iam_roles: Vec<_> = db_resources
             .iter()
             .filter(|r| r.resource_type == ResourceType::IamRole && r.deleted_at.is_none())
@@ -1030,7 +998,7 @@ async fn cleanup_resources(
 
         let mut progress = CleanupProgress::new(
             instance_ids.len(),
-            eip_ids.len(),
+            0, // No EIPs to release
             iam_roles.len(),
             sg_rules.len(),
         );
@@ -1055,7 +1023,8 @@ async fn cleanup_resources(
                             &db,
                             ResourceType::Ec2Instance,
                             instance_id,
-                        );
+                        )
+                        .await;
                     } else {
                         warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
                     }
@@ -1063,40 +1032,6 @@ async fn cleanup_resources(
             }
             progress.ec2_instances.0 += 1;
             send_cleanup_progress(&progress_tx, progress.clone()).await;
-        }
-
-        // Release Elastic IPs (must be after instance termination)
-        if !eip_ids.is_empty() {
-            info!(count = eip_ids.len(), "Releasing Elastic IPs...");
-            progress.current_step = format!("Releasing {} Elastic IPs...", eip_ids.len());
-            send_cleanup_progress(&progress_tx, progress.clone()).await;
-
-            for resource in &eip_ids {
-                match ec2.release_elastic_ip(&resource.resource_id).await {
-                    Ok(()) => {
-                        info!(allocation_id = %resource.resource_id, "Released Elastic IP");
-                        let _ = state::mark_resource_deleted(
-                            &db,
-                            ResourceType::ElasticIp,
-                            &resource.resource_id,
-                        );
-                    }
-                    Err(e) => {
-                        let error_str = format!("{:?}", e);
-                        if error_str.contains("InvalidAllocationID.NotFound") {
-                            let _ = state::mark_resource_deleted(
-                                &db,
-                                ResourceType::ElasticIp,
-                                &resource.resource_id,
-                            );
-                        } else {
-                            warn!(allocation_id = %resource.resource_id, error = ?e, "Failed to release EIP");
-                        }
-                    }
-                }
-                progress.elastic_ips.0 += 1;
-                send_cleanup_progress(&progress_tx, progress.clone()).await;
-            }
         }
 
         // Delete S3 bucket
@@ -1135,13 +1070,15 @@ async fn cleanup_resources(
                         &db,
                         ResourceType::IamRole,
                         &resource.resource_id,
-                    );
+                    )
+                    .await;
                     // Instance profile has the same name as the role
                     let _ = state::mark_resource_deleted(
                         &db,
                         ResourceType::IamInstanceProfile,
                         &resource.resource_id,
-                    );
+                    )
+                    .await;
                 }
                 progress.iam_roles.0 += 1;
                 send_cleanup_progress(&progress_tx, progress.clone()).await;
@@ -1164,7 +1101,8 @@ async fn cleanup_resources(
                                 &db,
                                 ResourceType::SecurityGroupRule,
                                 &resource.resource_id,
-                            );
+                            )
+                            .await;
                         }
                         Err(e) => {
                             let error_str = format!("{:?}", e);
@@ -1174,7 +1112,8 @@ async fn cleanup_resources(
                                     &db,
                                     ResourceType::SecurityGroupRule,
                                     &resource.resource_id,
-                                );
+                                )
+                                .await;
                             } else {
                                 warn!(
                                     security_group = %sg_id,
@@ -1222,7 +1161,8 @@ async fn cleanup_resources(
                             &db,
                             ResourceType::SecurityGroup,
                             &resource.resource_id,
-                        );
+                        )
+                        .await;
                     }
                     Err(e) => {
                         let error_str = format!("{:?}", e);
@@ -1232,7 +1172,8 @@ async fn cleanup_resources(
                                 &db,
                                 ResourceType::SecurityGroup,
                                 &resource.resource_id,
-                            );
+                            )
+                            .await;
                         } else {
                             warn!(
                                 sg_id = %resource.resource_id,
@@ -1602,26 +1543,22 @@ Agent started successfully
         let mut mock = MockEc2Operations::new();
 
         mock.expect_launch_instance()
-            .returning(|run_id, instance_type, system, _, _, _, _| {
+            .returning(|config| {
                 Ok(LaunchedInstance {
-                    instance_id: format!("i-{}", run_id),
-                    instance_type: instance_type.to_string(),
-                    system: system.to_string(),
+                    instance_id: format!("i-{}", config.run_id),
+                    instance_type: config.instance_type,
+                    system: config.system,
                     public_ip: None,
                 })
             });
 
-        let result = mock
-            .launch_instance(
-                "test-run",
-                "c6i.xlarge",
-                "x86_64-linux",
-                "#!/bin/bash\necho test",
-                None,
-                None,
-                None,
-            )
-            .await;
+        let config = crate::aws::ec2::LaunchInstanceConfig::new(
+            "test-run",
+            "c6i.xlarge",
+            "x86_64-linux",
+            "#!/bin/bash\necho test",
+        );
+        let result = mock.launch_instance(config).await;
 
         assert!(result.is_ok());
         let instance = result.unwrap();
@@ -1634,21 +1571,15 @@ Agent started successfully
         let mut mock = MockEc2Operations::new();
 
         mock.expect_launch_instance()
-            .returning(|_, _, _, _, _, _, _| {
-                Err(anyhow::anyhow!("InsufficientInstanceCapacity"))
-            });
+            .returning(|_| Err(anyhow::anyhow!("InsufficientInstanceCapacity")));
 
-        let result = mock
-            .launch_instance(
-                "test-run",
-                "c6i.xlarge",
-                "x86_64-linux",
-                "#!/bin/bash",
-                None,
-                None,
-                None,
-            )
-            .await;
+        let config = crate::aws::ec2::LaunchInstanceConfig::new(
+            "test-run",
+            "c6i.xlarge",
+            "x86_64-linux",
+            "#!/bin/bash",
+        );
+        let result = mock.launch_instance(config).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("InsufficientInstanceCapacity"));
@@ -1728,28 +1659,4 @@ Agent started successfully
         mock.delete_security_group(&sg_id).await.unwrap();
     }
 
-    #[tokio::test]
-    async fn test_mock_ec2_elastic_ip_lifecycle() {
-        let mut mock = MockEc2Operations::new();
-
-        mock.expect_allocate_elastic_ip()
-            .returning(|_| Ok(("eipalloc-123".to_string(), "54.1.2.3".to_string())));
-
-        mock.expect_associate_elastic_ip()
-            .with(eq("eipalloc-123"), eq("i-test"))
-            .returning(|_, _| Ok("eipassoc-456".to_string()));
-
-        mock.expect_release_elastic_ip()
-            .with(eq("eipalloc-123"))
-            .returning(|_| Ok(()));
-
-        let (alloc_id, public_ip) = mock.allocate_elastic_ip("run-123").await.unwrap();
-        assert_eq!(alloc_id, "eipalloc-123");
-        assert_eq!(public_ip, "54.1.2.3");
-
-        let assoc_id = mock.associate_elastic_ip(&alloc_id, "i-test").await.unwrap();
-        assert_eq!(assoc_id, "eipassoc-456");
-
-        mock.release_elastic_ip(&alloc_id).await.unwrap();
-    }
 }

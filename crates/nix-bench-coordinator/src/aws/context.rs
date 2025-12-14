@@ -72,16 +72,6 @@ impl AwsContext {
     pub fn s3_client(&self) -> aws_sdk_s3::Client {
         aws_sdk_s3::Client::new(self.sdk_config())
     }
-
-    /// Create a CloudWatch client from this context.
-    pub fn cloudwatch_client(&self) -> aws_sdk_cloudwatch::Client {
-        aws_sdk_cloudwatch::Client::new(self.sdk_config())
-    }
-
-    /// Create a CloudWatch Logs client from this context.
-    pub fn cloudwatch_logs_client(&self) -> aws_sdk_cloudwatchlogs::Client {
-        aws_sdk_cloudwatchlogs::Client::new(self.sdk_config())
-    }
 }
 
 impl std::fmt::Debug for AwsContext {

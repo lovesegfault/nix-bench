@@ -2,35 +2,11 @@
 
 use crate::error::ConfigError;
 use anyhow::{Context, Result};
+use nix_bench_common::defaults::{default_build_timeout, default_flake_ref, default_max_failures};
 use nix_bench_common::TlsConfig;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
-
-/// Default flake reference for nix-bench
-fn default_flake_ref() -> String {
-    "github:lovesegfault/nix-bench".to_string()
-}
-
-/// Default build timeout in seconds (2 hours)
-fn default_build_timeout() -> u64 {
-    7200
-}
-
-/// Default max failures before giving up
-fn default_max_failures() -> u32 {
-    3
-}
-
-/// Default broadcast channel capacity for gRPC log streaming
-fn default_broadcast_capacity() -> usize {
-    1024
-}
-
-/// Default gRPC port
-fn default_grpc_port() -> u16 {
-    50051
-}
 
 /// Default gc_between_runs setting
 fn default_gc_between_runs() -> bool {
@@ -74,14 +50,6 @@ pub struct Config {
     #[serde(default = "default_max_failures")]
     pub max_failures: u32,
 
-    /// Broadcast channel capacity for gRPC log streaming (default: 1024)
-    #[serde(default = "default_broadcast_capacity")]
-    pub broadcast_capacity: usize,
-
-    /// gRPC server port (default: 50051)
-    #[serde(default = "default_grpc_port")]
-    pub grpc_port: u16,
-
     /// Run garbage collection between benchmark runs (default: false)
     /// This preserves fixed-output derivations (fetched sources) but removes build outputs,
     /// keeping disk usage manageable during long benchmark sessions.
@@ -114,8 +82,15 @@ impl Config {
         Ok(config)
     }
 
-    /// Validate configuration values
+    /// Validate configuration values (called automatically by load())
     fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_full()
+    }
+
+    /// Validate all configuration values including TLS certificates.
+    ///
+    /// This is public so it can be called after downloading config from S3.
+    pub fn validate_full(&self) -> Result<(), ConfigError> {
         if self.run_id.is_empty() {
             return Err(ConfigError::EmptyRunId);
         }
@@ -154,10 +129,6 @@ impl Config {
 
         if self.max_failures == 0 {
             return Err(ConfigError::InvalidMaxFailures);
-        }
-
-        if self.broadcast_capacity == 0 {
-            return Err(ConfigError::InvalidBroadcastCapacity);
         }
 
         // TLS certificates are always required for security

@@ -1,7 +1,7 @@
 //! EC2 instance management
 
-use crate::aws::error::{classify_anyhow_error, AwsError};
 use crate::aws::context::AwsContext;
+use crate::aws::error::{classify_anyhow_error, AwsError};
 use anyhow::{Context, Result};
 use aws_sdk_ec2::{
     types::{
@@ -11,6 +11,8 @@ use aws_sdk_ec2::{
     Client,
 };
 use backon::{ExponentialBuilder, Retryable};
+use chrono::Utc;
+use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -26,6 +28,58 @@ pub struct LaunchedInstance {
     pub instance_type: String,
     pub system: String,
     pub public_ip: Option<String>,
+}
+
+/// Configuration for launching an EC2 instance
+#[derive(Debug, Clone)]
+pub struct LaunchInstanceConfig {
+    /// Unique run identifier for tagging
+    pub run_id: String,
+    /// EC2 instance type (e.g., "c7i.xlarge")
+    pub instance_type: String,
+    /// System architecture ("x86_64-linux" or "aarch64-linux")
+    pub system: String,
+    /// User data script (will be base64 encoded)
+    pub user_data: String,
+    /// Optional VPC subnet ID
+    pub subnet_id: Option<String>,
+    /// Optional security group ID
+    pub security_group_id: Option<String>,
+    /// Optional IAM instance profile name
+    pub iam_instance_profile: Option<String>,
+}
+
+impl LaunchInstanceConfig {
+    /// Create a new launch configuration with required fields
+    pub fn new(run_id: impl Into<String>, instance_type: impl Into<String>, system: impl Into<String>, user_data: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            instance_type: instance_type.into(),
+            system: system.into(),
+            user_data: user_data.into(),
+            subnet_id: None,
+            security_group_id: None,
+            iam_instance_profile: None,
+        }
+    }
+
+    /// Set the VPC subnet ID
+    pub fn with_subnet(mut self, subnet_id: impl Into<String>) -> Self {
+        self.subnet_id = Some(subnet_id.into());
+        self
+    }
+
+    /// Set the security group ID
+    pub fn with_security_group(mut self, security_group_id: impl Into<String>) -> Self {
+        self.security_group_id = Some(security_group_id.into());
+        self
+    }
+
+    /// Set the IAM instance profile name
+    pub fn with_iam_profile(mut self, profile_name: impl Into<String>) -> Self {
+        self.iam_instance_profile = Some(profile_name.into());
+        self
+    }
 }
 
 impl Ec2Client {
@@ -96,48 +150,40 @@ impl Ec2Client {
     /// When an IAM instance profile is provided, this function will retry the launch
     /// if EC2 rejects the profile due to IAM eventual consistency (the profile may
     /// not be visible to EC2 immediately after creation).
-    pub async fn launch_instance(
-        &self,
-        run_id: &str,
-        instance_type: &str,
-        system: &str,
-        user_data: &str,
-        subnet_id: Option<&str>,
-        security_group_id: Option<&str>,
-        iam_instance_profile: Option<&str>,
-    ) -> Result<LaunchedInstance> {
-        let ami_id = self.get_al2023_ami(system).await?;
+    pub async fn launch_instance(&self, config: LaunchInstanceConfig) -> Result<LaunchedInstance> {
+        let ami_id = self.get_al2023_ami(&config.system).await?;
 
-        let instance_type_enum: InstanceType = instance_type
+        let instance_type_enum: InstanceType = config
+            .instance_type
             .parse()
-            .map_err(|_| anyhow::anyhow!("Invalid instance type: {}", instance_type))?;
+            .map_err(|_| anyhow::anyhow!("Invalid instance type: {}", config.instance_type))?;
 
         info!(
-            instance_type = %instance_type,
-            system = %system,
+            instance_type = %config.instance_type,
+            system = %config.system,
             ami = %ami_id,
             "Launching instance"
         );
 
         let user_data_b64 = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
-            user_data.as_bytes(),
+            config.user_data.as_bytes(),
         );
 
         // Only use retry logic if an IAM profile is provided (IAM eventual consistency)
-        if iam_instance_profile.is_some() {
-            let profile = iam_instance_profile.unwrap();
+        if let Some(ref profile) = config.iam_instance_profile {
+            let profile = profile.clone();
             (|| async {
                 self.do_launch_instance(
                     &ami_id,
                     instance_type_enum.clone(),
-                    run_id,
-                    instance_type,
-                    system,
+                    &config.run_id,
+                    &config.instance_type,
+                    &config.system,
                     &user_data_b64,
-                    subnet_id,
-                    security_group_id,
-                    Some(profile),
+                    config.subnet_id.as_deref(),
+                    config.security_group_id.as_deref(),
+                    Some(&profile),
                 )
                 .await
             })
@@ -154,7 +200,7 @@ impl Ec2Client {
             .notify(|e, dur| {
                 warn!(
                     delay = ?dur,
-                    profile = profile,
+                    profile = %profile,
                     error = %e,
                     "IAM instance profile not yet visible to EC2, retrying..."
                 );
@@ -165,12 +211,12 @@ impl Ec2Client {
             self.do_launch_instance(
                 &ami_id,
                 instance_type_enum,
-                run_id,
-                instance_type,
-                system,
+                &config.run_id,
+                &config.instance_type,
+                &config.system,
                 &user_data_b64,
-                subnet_id,
-                security_group_id,
+                config.subnet_id.as_deref(),
+                config.security_group_id.as_deref(),
                 None,
             )
             .await
@@ -190,6 +236,7 @@ impl Ec2Client {
         security_group_id: Option<&str>,
         iam_instance_profile: Option<&str>,
     ) -> Result<LaunchedInstance> {
+        let created_at = tags::format_created_at(Utc::now());
         let mut request = self
             .client
             .run_instances()
@@ -201,16 +248,19 @@ impl Ec2Client {
             .tag_specifications(
                 TagSpecification::builder()
                     .resource_type(ResourceType::Instance)
+                    .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
+                    .tags(Tag::builder().key(TAG_RUN_ID).value(run_id).build())
+                    .tags(Tag::builder().key(TAG_CREATED_AT).value(&created_at).build())
+                    .tags(Tag::builder().key(TAG_STATUS).value(tags::status::CREATING).build())
                     .tags(
                         Tag::builder()
                             .key("Name")
                             .value(format!("nix-bench-{}-{}", run_id, instance_type))
                             .build(),
                     )
-                    .tags(Tag::builder().key("nix-bench:run-id").value(run_id).build())
                     .tags(
                         Tag::builder()
-                            .key("nix-bench:instance-type")
+                            .key(tags::TAG_INSTANCE_TYPE)
                             .value(instance_type)
                             .build(),
                     )
@@ -476,6 +526,7 @@ impl Ec2Client {
         };
 
         // Create the security group
+        let created_at = tags::format_created_at(Utc::now());
         let create_response = self
             .client
             .create_security_group()
@@ -485,18 +536,11 @@ impl Ec2Client {
             .tag_specifications(
                 TagSpecification::builder()
                     .resource_type(ResourceType::SecurityGroup)
-                    .tags(
-                        Tag::builder()
-                            .key("Name")
-                            .value(&sg_name)
-                            .build(),
-                    )
-                    .tags(
-                        Tag::builder()
-                            .key("nix-bench:run-id")
-                            .value(run_id)
-                            .build(),
-                    )
+                    .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
+                    .tags(Tag::builder().key(TAG_RUN_ID).value(run_id).build())
+                    .tags(Tag::builder().key(TAG_CREATED_AT).value(&created_at).build())
+                    .tags(Tag::builder().key(TAG_STATUS).value(tags::status::CREATING).build())
+                    .tags(Tag::builder().key("Name").value(&sg_name).build())
                     .build(),
             )
             .send()
@@ -651,115 +695,6 @@ impl Ec2Client {
 
         Ok(())
     }
-
-    /// Allocate an Elastic IP address for a benchmark instance
-    ///
-    /// # Arguments
-    /// * `run_id` - The run ID for tagging
-    ///
-    /// # Returns
-    /// A tuple of (allocation_id, public_ip)
-    pub async fn allocate_elastic_ip(&self, run_id: &str) -> Result<(String, String)> {
-        info!(run_id = %run_id, "Allocating Elastic IP");
-
-        let response = self
-            .client
-            .allocate_address()
-            .domain(aws_sdk_ec2::types::DomainType::Vpc)
-            .tag_specifications(
-                TagSpecification::builder()
-                    .resource_type(ResourceType::ElasticIp)
-                    .tags(
-                        Tag::builder()
-                            .key("Name")
-                            .value(format!("nix-bench-{}", run_id))
-                            .build(),
-                    )
-                    .tags(Tag::builder().key("nix-bench:run-id").value(run_id).build())
-                    .build(),
-            )
-            .send()
-            .await
-            .context("Failed to allocate Elastic IP")?;
-
-        let allocation_id = response
-            .allocation_id()
-            .context("No allocation ID in response")?
-            .to_string();
-
-        let public_ip = response
-            .public_ip()
-            .context("No public IP in response")?
-            .to_string();
-
-        info!(
-            allocation_id = %allocation_id,
-            public_ip = %public_ip,
-            "Allocated Elastic IP"
-        );
-
-        Ok((allocation_id, public_ip))
-    }
-
-    /// Associate an Elastic IP with an EC2 instance
-    ///
-    /// # Arguments
-    /// * `allocation_id` - The allocation ID of the Elastic IP
-    /// * `instance_id` - The instance ID to associate with
-    ///
-    /// # Returns
-    /// The association ID
-    pub async fn associate_elastic_ip(
-        &self,
-        allocation_id: &str,
-        instance_id: &str,
-    ) -> Result<String> {
-        info!(
-            allocation_id = %allocation_id,
-            instance_id = %instance_id,
-            "Associating Elastic IP with instance"
-        );
-
-        let response = self
-            .client
-            .associate_address()
-            .allocation_id(allocation_id)
-            .instance_id(instance_id)
-            .send()
-            .await
-            .context("Failed to associate Elastic IP")?;
-
-        let association_id = response
-            .association_id()
-            .context("No association ID in response")?
-            .to_string();
-
-        info!(
-            association_id = %association_id,
-            "Associated Elastic IP with instance"
-        );
-
-        Ok(association_id)
-    }
-
-    /// Release an Elastic IP address
-    ///
-    /// # Arguments
-    /// * `allocation_id` - The allocation ID of the Elastic IP to release
-    pub async fn release_elastic_ip(&self, allocation_id: &str) -> Result<()> {
-        info!(allocation_id = %allocation_id, "Releasing Elastic IP");
-
-        self.client
-            .release_address()
-            .allocation_id(allocation_id)
-            .send()
-            .await
-            .context("Failed to release Elastic IP")?;
-
-        info!(allocation_id = %allocation_id, "Released Elastic IP");
-
-        Ok(())
-    }
 }
 
 /// Get the public IP address of the coordinator (this machine)
@@ -791,4 +726,114 @@ pub async fn get_coordinator_public_ip() -> Result<String> {
 
     debug!(public_ip = %ip, "Detected coordinator public IP");
     Ok(ip)
+}
+
+/// Trait for EC2 operations that can be mocked in tests.
+///
+/// This trait abstracts the EC2 client operations to enable unit testing
+/// of orchestration logic without hitting real AWS.
+///
+/// Note: Some parameters use `Option<String>` instead of `Option<&str>` to work
+/// around mockall lifetime limitations.
+#[allow(async_fn_in_trait)] // Internal use only, Send+Sync bounds on trait are sufficient
+#[cfg_attr(test, mockall::automock)]
+pub trait Ec2Operations: Send + Sync {
+    /// Launch an EC2 instance with the given configuration
+    async fn launch_instance(&self, config: LaunchInstanceConfig) -> Result<LaunchedInstance>;
+
+    /// Wait for instance to be running and get its public IP
+    async fn wait_for_running(
+        &self,
+        instance_id: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<Option<String>>;
+
+    /// Terminate an instance
+    async fn terminate_instance(&self, instance_id: &str) -> Result<()>;
+
+    /// Wait for instance to be fully terminated
+    async fn wait_for_terminated(&self, instance_id: &str) -> Result<()>;
+
+    /// Get console output from an instance
+    async fn get_console_output(&self, instance_id: &str) -> Result<Option<String>>;
+
+    /// Create a security group
+    async fn create_security_group(
+        &self,
+        run_id: &str,
+        coordinator_cidr: &str,
+        vpc_id: Option<String>,
+    ) -> Result<String>;
+
+    /// Delete a security group
+    async fn delete_security_group(&self, security_group_id: &str) -> Result<()>;
+
+    /// Add gRPC ingress rule to security group
+    async fn add_grpc_ingress_rule(
+        &self,
+        security_group_id: &str,
+        cidr_ip: &str,
+    ) -> Result<()>;
+
+    /// Remove gRPC ingress rule from security group
+    async fn remove_grpc_ingress_rule(
+        &self,
+        security_group_id: &str,
+        cidr_ip: &str,
+    ) -> Result<()>;
+}
+
+impl Ec2Operations for Ec2Client {
+    async fn launch_instance(&self, config: LaunchInstanceConfig) -> Result<LaunchedInstance> {
+        Ec2Client::launch_instance(self, config).await
+    }
+
+    async fn wait_for_running(
+        &self,
+        instance_id: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<Option<String>> {
+        Ec2Client::wait_for_running(self, instance_id, timeout_secs).await
+    }
+
+    async fn terminate_instance(&self, instance_id: &str) -> Result<()> {
+        Ec2Client::terminate_instance(self, instance_id).await
+    }
+
+    async fn wait_for_terminated(&self, instance_id: &str) -> Result<()> {
+        Ec2Client::wait_for_terminated(self, instance_id).await
+    }
+
+    async fn get_console_output(&self, instance_id: &str) -> Result<Option<String>> {
+        Ec2Client::get_console_output(self, instance_id).await
+    }
+
+    async fn create_security_group(
+        &self,
+        run_id: &str,
+        coordinator_cidr: &str,
+        vpc_id: Option<String>,
+    ) -> Result<String> {
+        Ec2Client::create_security_group(self, run_id, coordinator_cidr, vpc_id.as_deref()).await
+    }
+
+    async fn delete_security_group(&self, security_group_id: &str) -> Result<()> {
+        Ec2Client::delete_security_group(self, security_group_id).await
+    }
+
+    async fn add_grpc_ingress_rule(
+        &self,
+        security_group_id: &str,
+        cidr_ip: &str,
+    ) -> Result<()> {
+        Ec2Client::add_grpc_ingress_rule(self, security_group_id, cidr_ip).await
+    }
+
+    async fn remove_grpc_ingress_rule(
+        &self,
+        security_group_id: &str,
+        cidr_ip: &str,
+    ) -> Result<()> {
+        Ec2Client::remove_grpc_ingress_rule(self, security_group_id, cidr_ip).await
+    }
 }

@@ -47,10 +47,6 @@ pub enum ConfigError {
     #[error("max_failures must be at least 1")]
     InvalidMaxFailures,
 
-    /// broadcast_capacity is zero
-    #[error("broadcast_capacity must be at least 1")]
-    InvalidBroadcastCapacity,
-
     /// TLS CA cert missing (required for mTLS)
     #[error("TLS is required but ca_cert_pem is not provided")]
     MissingCaCert,
@@ -66,24 +62,6 @@ pub enum ConfigError {
     /// Failed to parse JSON configuration
     #[error("Failed to parse config: {0}")]
     Parse(#[from] serde_json::Error),
-
-    /// Failed to read configuration file
-    #[error("Failed to read config file '{path}': {source}")]
-    Io {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-}
-
-impl ConfigError {
-    /// Create an IO error with path context
-    pub fn io(path: impl Into<String>, source: std::io::Error) -> Self {
-        Self::Io {
-            path: path.into(),
-            source,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -101,12 +79,5 @@ mod tests {
             ConfigError::InvalidSystem("windows".to_string()).to_string(),
             "system must be 'x86_64-linux' or 'aarch64-linux', got: windows"
         );
-    }
-
-    #[test]
-    fn test_io_error() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let err = ConfigError::io("/path/to/config.json", io_err);
-        assert!(err.to_string().contains("/path/to/config.json"));
     }
 }

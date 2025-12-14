@@ -34,16 +34,6 @@ impl Default for WaitConfig {
     }
 }
 
-impl WaitConfig {
-    /// Create a new WaitConfig with the given timeout.
-    pub fn with_timeout(timeout: Duration) -> Self {
-        Self {
-            timeout,
-            ..Default::default()
-        }
-    }
-}
-
 /// Wait for a resource to become ready with exponential backoff.
 ///
 /// # Arguments

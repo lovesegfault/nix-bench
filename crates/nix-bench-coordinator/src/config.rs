@@ -1,16 +1,8 @@
 //! Configuration types for the coordinator
 
 use crate::tui::LogCapture;
+use nix_bench_common::defaults::{default_build_timeout, default_flake_ref, default_max_failures};
 use serde::{Deserialize, Serialize};
-
-/// Default flake reference for nix-bench
-pub const DEFAULT_FLAKE_REF: &str = "github:lovesegfault/nix-bench";
-
-/// Default build timeout in seconds (2 hours)
-pub const DEFAULT_BUILD_TIMEOUT: u64 = 7200;
-
-/// Default max failures before giving up
-pub const DEFAULT_MAX_FAILURES: u32 = 3;
 
 /// Configuration for a benchmark run
 #[derive(Debug, Clone)]
@@ -66,6 +58,10 @@ pub struct RunConfig {
     /// Maximum number of build failures before giving up
     pub max_failures: u32,
 
+    /// Run garbage collection between benchmark runs
+    /// Preserves fixed-output derivations (fetched sources) but removes build outputs
+    pub gc_between_runs: bool,
+
     /// Log capture for printing errors/warnings after TUI exit
     pub log_capture: Option<LogCapture>,
 }
@@ -89,6 +85,9 @@ pub struct AgentConfig {
     /// Maximum number of build failures before giving up
     #[serde(default = "default_max_failures")]
     pub max_failures: u32,
+    /// Run garbage collection between benchmark runs
+    #[serde(default)]
+    pub gc_between_runs: bool,
     /// CA certificate (PEM) for mTLS
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_cert_pem: Option<String>,
@@ -98,18 +97,6 @@ pub struct AgentConfig {
     /// Agent private key (PEM) for mTLS
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_key_pem: Option<String>,
-}
-
-fn default_flake_ref() -> String {
-    DEFAULT_FLAKE_REF.to_string()
-}
-
-fn default_build_timeout() -> u64 {
-    DEFAULT_BUILD_TIMEOUT
-}
-
-fn default_max_failures() -> u32 {
-    DEFAULT_MAX_FAILURES
 }
 
 /// Detect system architecture from instance type

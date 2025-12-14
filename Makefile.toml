@@ -154,6 +154,22 @@ description = "Run common crate tests only"
 command = "cargo"
 args = ["nextest", "run", "-p", "nix-bench-common"]
 
+[tasks.t-utils]
+description = "Run test utilities crate tests"
+command = "cargo"
+args = ["nextest", "run", "-p", "nix-bench-test-utils"]
+
+[tasks.e2e]
+description = "Run full agent E2E test (requires AWS creds and built agents)"
+dependencies = ["agent"]
+command = "cargo"
+args = ["test", "--test", "agent_e2e_integration", "--", "--ignored", "--nocapture"]
+
+[tasks.e2e-infra]
+description = "Run infrastructure-only E2E test (no agent required)"
+command = "cargo"
+args = ["test", "--test", "agent_e2e_integration", "test_infrastructure_setup_only", "--", "--ignored", "--nocapture"]
+
 # ============================================================================
 # Check/Lint Tasks
 # ============================================================================

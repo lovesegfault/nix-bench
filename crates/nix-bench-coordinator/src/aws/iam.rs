@@ -3,6 +3,7 @@
 use crate::aws::context::AwsContext;
 use crate::wait::{wait_for_resource, WaitConfig};
 use anyhow::{Context, Result};
+use aws_sdk_iam::error::ProvideErrorMetadata;
 use aws_sdk_iam::Client;
 use chrono::Utc;
 use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
@@ -327,6 +328,62 @@ impl IamClient {
             .await
             .is_ok()
     }
+
+    /// Delete an orphaned instance profile (one that exists without its role)
+    ///
+    /// This handles the case where an instance profile was discovered without
+    /// a paired role (e.g., role was deleted but profile deletion failed).
+    pub async fn delete_instance_profile(&self, profile_name: &str) -> Result<()> {
+        info!(profile_name = %profile_name, "Deleting orphaned instance profile");
+
+        // First, try to remove any roles from the profile
+        // This handles edge cases where a role might still be attached
+        if let Ok(resp) = self
+            .client
+            .get_instance_profile()
+            .instance_profile_name(profile_name)
+            .send()
+            .await
+        {
+            if let Some(profile) = resp.instance_profile() {
+                for role in profile.roles() {
+                    let role_name = role.role_name();
+                    debug!(role_name = %role_name, profile_name = %profile_name, "Removing role from profile");
+                    let _ = self
+                        .client
+                        .remove_role_from_instance_profile()
+                        .instance_profile_name(profile_name)
+                        .role_name(role_name)
+                        .send()
+                        .await;
+                }
+            }
+        }
+
+        // Delete the instance profile
+        match self
+            .client
+            .delete_instance_profile()
+            .instance_profile_name(profile_name)
+            .send()
+            .await
+        {
+            Ok(_) => {
+                info!(profile_name = %profile_name, "Instance profile deleted");
+                Ok(())
+            }
+            Err(e) => {
+                // Check if it's a "not found" error (already deleted)
+                let err_code = e.code().unwrap_or_default();
+                if err_code == "NoSuchEntity" {
+                    debug!(profile_name = %profile_name, "Instance profile already deleted");
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("Failed to delete instance profile: {}", e))
+                }
+            }
+        }
+    }
 }
 
 /// Trait for IAM operations.
@@ -342,6 +399,12 @@ pub trait IamOperations: Send + Sync {
 
     /// Delete a role and its instance profile
     fn delete_benchmark_role(&self, role_name: &str) -> impl Future<Output = Result<()>> + Send;
+
+    /// Delete an orphaned instance profile (without its role)
+    fn delete_instance_profile(
+        &self,
+        profile_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Check if an instance profile exists
     fn instance_profile_exists(&self, profile_name: &str) -> impl Future<Output = bool> + Send;
@@ -359,6 +422,10 @@ impl IamOperations for IamClient {
 
     async fn delete_benchmark_role(&self, role_name: &str) -> Result<()> {
         IamClient::delete_benchmark_role(self, role_name).await
+    }
+
+    async fn delete_instance_profile(&self, profile_name: &str) -> Result<()> {
+        IamClient::delete_instance_profile(self, profile_name).await
     }
 
     async fn instance_profile_exists(&self, profile_name: &str) -> bool {

@@ -1,63 +1,25 @@
 //! Shared test utilities for integration tests
+//!
+//! gRPC test fixtures that require agent and coordinator crates.
+//! Generic utilities (TLS, AWS helpers) are in nix-bench-test-utils.
 
 use nix_bench_agent::grpc::{AgentStatus, LogBroadcaster, LogStreamService};
-use nix_bench_common::tls::{generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig};
+use nix_bench_common::tls::TlsConfig;
 use nix_bench_coordinator::aws::wait_for_tcp_ready;
 use nix_bench_proto::LogStreamServer;
+use nix_bench_test_utils::tls::{generate_test_certs as gen_certs, TestTlsCerts};
 use std::net::SocketAddr;
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-/// Test run ID for integration tests
-pub const TEST_RUN_ID: &str = "test-run-123";
-
-/// Test instance type for integration tests
-pub const TEST_INSTANCE_TYPE: &str = "c6i.xlarge";
-
-/// Install the rustls crypto provider (once per process)
-static INIT: Once = Once::new();
-
-/// Initialize crypto provider for TLS tests
-pub fn init_crypto() {
-    INIT.call_once(|| {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .expect("Failed to install rustls crypto provider");
-    });
-}
-
-/// Test TLS configuration for agent and coordinator
-pub struct TestTlsCerts {
-    pub agent_tls: TlsConfig,
-    pub coordinator_tls: TlsConfig,
-}
+// Re-export from test-utils for compatibility
+pub use nix_bench_test_utils::tls::{TEST_INSTANCE_TYPE, TEST_RUN_ID};
 
 /// Generate test TLS certificates for integration tests
 pub fn generate_test_certs() -> TestTlsCerts {
-    init_crypto();
-    let ca = generate_ca("test-integration").expect("Failed to generate CA");
-
-    let agent_cert =
-        generate_agent_cert(&ca.cert_pem, &ca.key_pem, TEST_INSTANCE_TYPE, Some("127.0.0.1"))
-            .expect("Failed to generate agent cert");
-
-    let coord_cert =
-        generate_coordinator_cert(&ca.cert_pem, &ca.key_pem).expect("Failed to generate coordinator cert");
-
-    TestTlsCerts {
-        agent_tls: TlsConfig {
-            ca_cert_pem: ca.cert_pem.clone(),
-            cert_pem: agent_cert.cert_pem,
-            key_pem: agent_cert.key_pem,
-        },
-        coordinator_tls: TlsConfig {
-            ca_cert_pem: ca.cert_pem,
-            cert_pem: coord_cert.cert_pem,
-            key_pem: coord_cert.key_pem,
-        },
-    }
+    gen_certs()
 }
 
 /// Find an available TCP port for testing

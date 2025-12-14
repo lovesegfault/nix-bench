@@ -1,0 +1,21 @@
+[package]
+name = "nix-bench-test-utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared test utilities for nix-bench"
+
+[dependencies]
+# Core
+anyhow = { workspace = true }
+tokio = { workspace = true }
+
+# Database testing
+sqlx = { workspace = true }
+
+# Time/IDs for test resources
+chrono = { workspace = true }
+
+# TLS testing
+rustls = { workspace = true }
+nix-bench-common = { path = "../nix-bench-common" }

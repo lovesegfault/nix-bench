@@ -42,6 +42,7 @@ pub struct CleanupReport {
     pub ec2_instances: usize,
     pub s3_buckets: usize,
     pub iam_roles: usize,
+    pub iam_instance_profiles: usize,
     pub security_groups: usize,
     pub deleted: usize,
     pub failed: usize,
@@ -194,11 +195,31 @@ impl TagBasedCleanup {
                         }
                     }
                     ResourceKind::IamInstanceProfile => {
-                        // Instance profiles are deleted as part of role deletion
-                        debug!(
-                            profile = %resource.resource_id,
-                            "Skipping (deleted with role)"
-                        );
+                        report.iam_instance_profiles += 1;
+                        // Instance profiles discovered separately may be orphaned
+                        // (role was deleted but profile wasn't)
+                        if config.dry_run {
+                            info!(
+                                profile = %resource.resource_id,
+                                "[DRY RUN] Would delete orphaned instance profile"
+                            );
+                            report.skipped += 1;
+                        } else {
+                            match self.iam.delete_instance_profile(&resource.resource_id).await {
+                                Ok(()) => {
+                                    info!(profile = %resource.resource_id, "Deleted orphaned instance profile");
+                                    report.deleted += 1;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        profile = %resource.resource_id,
+                                        error = ?e,
+                                        "Failed to delete instance profile"
+                                    );
+                                    report.failed += 1;
+                                }
+                            }
+                        }
                     }
                     ResourceKind::SecurityGroup => {
                         report.security_groups += 1;

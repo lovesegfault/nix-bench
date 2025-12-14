@@ -79,3 +79,5 @@ backon.workspace = true
 tempfile.workspace = true
 # Integration tests require the agent crate
 nix-bench-agent = { path = "../nix-bench-agent" }
+# Shared test utilities
+nix-bench-test-utils = { path = "../nix-bench-test-utils" }

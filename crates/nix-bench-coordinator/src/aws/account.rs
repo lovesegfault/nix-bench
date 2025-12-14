@@ -16,6 +16,12 @@ impl AccountId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Create an AccountId for testing purposes
+    #[cfg(test)]
+    pub fn new(s: String) -> Self {
+        AccountId(s)
+    }
 }
 
 impl fmt::Display for AccountId {

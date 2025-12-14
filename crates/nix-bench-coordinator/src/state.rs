@@ -151,7 +151,7 @@ impl RunStatus {
 
 /// Parse ResourceType from string with fallback to S3Object
 fn parse_resource_type(s: &str) -> ResourceType {
-    ResourceKind::from_str(s).unwrap_or(ResourceKind::S3Object)
+    ResourceKind::parse(s).unwrap_or(ResourceKind::S3Object)
 }
 
 /// A tracked resource

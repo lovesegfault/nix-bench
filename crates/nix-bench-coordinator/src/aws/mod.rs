@@ -30,8 +30,8 @@ pub use error::{classify_anyhow_error, classify_aws_error, AwsError};
 
 // gRPC client
 pub use grpc_client::{
-    start_log_streaming_unified, GrpcInstanceStatus, GrpcLogClient, GrpcStatusPoller,
-    LogStreamingOptions,
+    start_log_streaming_unified, wait_for_tcp_ready, GrpcInstanceStatus, GrpcLogClient,
+    GrpcStatusPoller, LogStreamingOptions,
 };
 
 // Re-export mock types for tests

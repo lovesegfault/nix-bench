@@ -66,7 +66,7 @@ impl ResourceKind {
     }
 
     /// Parse from database string representation
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "ec2_instance" => Some(ResourceKind::Ec2Instance),
             "s3_bucket" => Some(ResourceKind::S3Bucket),
@@ -140,7 +140,7 @@ mod tests {
         ];
         for kind in kinds {
             let s = kind.as_str();
-            let parsed = ResourceKind::from_str(s).unwrap();
+            let parsed = ResourceKind::parse(s).unwrap();
             assert_eq!(kind, parsed);
         }
     }

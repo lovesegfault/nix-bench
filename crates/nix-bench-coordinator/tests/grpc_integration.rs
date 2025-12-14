@@ -18,7 +18,7 @@ fn init_crypto() {
     });
 }
 use nix_bench_common::tls::{generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig};
-use nix_bench_coordinator::aws::{GrpcLogClient, GrpcStatusPoller};
+use nix_bench_coordinator::aws::{wait_for_tcp_ready, GrpcLogClient, GrpcStatusPoller};
 use nix_bench_coordinator::tui::TuiMessage;
 use nix_bench_proto::LogStreamServer;
 use std::net::SocketAddr;
@@ -68,18 +68,6 @@ async fn find_available_port() -> u16 {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
-}
-
-/// Wait for TCP server to be ready
-async fn wait_for_tcp_ready(addr: &str, timeout: Duration) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    while start.elapsed() < timeout {
-        if tokio::net::TcpStream::connect(addr).await.is_ok() {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    Err(format!("Timeout waiting for TCP server at {}", addr))
 }
 
 /// Start a gRPC server with TLS for testing and return the port

@@ -1,0 +1,339 @@
+//! EC2 instance lifecycle operations
+
+use super::types::{LaunchInstanceConfig, LaunchedInstance};
+use super::Ec2Client;
+use crate::aws::error::{classify_anyhow_error, AwsError};
+use anyhow::{Context, Result};
+use aws_sdk_ec2::types::{
+    InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification,
+};
+use backon::{ExponentialBuilder, Retryable};
+use chrono::Utc;
+use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use std::time::Duration;
+use tracing::{debug, info, warn};
+
+impl Ec2Client {
+    /// Launch an EC2 instance with the given configuration
+    ///
+    /// When an IAM instance profile is provided, this function will retry the launch
+    /// if EC2 rejects the profile due to IAM eventual consistency.
+    pub async fn launch_instance(&self, config: LaunchInstanceConfig) -> Result<LaunchedInstance> {
+        let ami_id = self.get_al2023_ami(&config.system).await?;
+
+        let instance_type_enum: InstanceType = config
+            .instance_type
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid instance type: {}", config.instance_type))?;
+
+        info!(
+            instance_type = %config.instance_type,
+            system = %config.system,
+            ami = %ami_id,
+            "Launching instance"
+        );
+
+        let user_data_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            config.user_data.as_bytes(),
+        );
+
+        // Only use retry logic if an IAM profile is provided
+        if let Some(ref profile) = config.iam_instance_profile {
+            let profile = profile.clone();
+            (|| async {
+                self.do_launch_instance(
+                    &ami_id,
+                    instance_type_enum.clone(),
+                    &config.run_id,
+                    &config.instance_type,
+                    &config.system,
+                    &user_data_b64,
+                    config.subnet_id.as_deref(),
+                    config.security_group_id.as_deref(),
+                    Some(&profile),
+                )
+                .await
+            })
+            .retry(
+                ExponentialBuilder::default()
+                    .with_min_delay(Duration::from_secs(1))
+                    .with_max_delay(Duration::from_secs(10))
+                    .with_max_times(10),
+            )
+            .when(|e| matches!(classify_anyhow_error(e), AwsError::IamPropagationDelay))
+            .notify(|e, dur| {
+                warn!(
+                    delay = ?dur,
+                    profile = %profile,
+                    error = %e,
+                    "IAM instance profile not yet visible to EC2, retrying..."
+                );
+            })
+            .await
+        } else {
+            self.do_launch_instance(
+                &ami_id,
+                instance_type_enum,
+                &config.run_id,
+                &config.instance_type,
+                &config.system,
+                &user_data_b64,
+                config.subnet_id.as_deref(),
+                config.security_group_id.as_deref(),
+                None,
+            )
+            .await
+        }
+    }
+
+    /// Internal method to perform the actual RunInstances call
+    pub(super) async fn do_launch_instance(
+        &self,
+        ami_id: &str,
+        instance_type_enum: InstanceType,
+        run_id: &str,
+        instance_type: &str,
+        system: &str,
+        user_data_b64: &str,
+        subnet_id: Option<&str>,
+        security_group_id: Option<&str>,
+        iam_instance_profile: Option<&str>,
+    ) -> Result<LaunchedInstance> {
+        let created_at = tags::format_created_at(Utc::now());
+        let mut request = self
+            .client
+            .run_instances()
+            .image_id(ami_id)
+            .instance_type(instance_type_enum)
+            .min_count(1)
+            .max_count(1)
+            .user_data(user_data_b64)
+            .tag_specifications(
+                TagSpecification::builder()
+                    .resource_type(ResourceType::Instance)
+                    .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
+                    .tags(Tag::builder().key(TAG_RUN_ID).value(run_id).build())
+                    .tags(Tag::builder().key(TAG_CREATED_AT).value(&created_at).build())
+                    .tags(Tag::builder().key(TAG_STATUS).value(tags::status::CREATING).build())
+                    .tags(
+                        Tag::builder()
+                            .key("Name")
+                            .value(format!("nix-bench-{}-{}", run_id, instance_type))
+                            .build(),
+                    )
+                    .tags(
+                        Tag::builder()
+                            .key(tags::TAG_INSTANCE_TYPE)
+                            .value(instance_type)
+                            .build(),
+                    )
+                    .build(),
+            );
+
+        if let Some(subnet) = subnet_id {
+            request = request.subnet_id(subnet);
+        }
+
+        if let Some(sg) = security_group_id {
+            request = request.security_group_ids(sg);
+        }
+
+        if let Some(profile) = iam_instance_profile {
+            request = request.iam_instance_profile(
+                aws_sdk_ec2::types::IamInstanceProfileSpecification::builder()
+                    .name(profile)
+                    .build(),
+            );
+        }
+
+        let response = request.send().await.context("Failed to launch instance")?;
+
+        let instance = response
+            .instances()
+            .first()
+            .context("No instance returned")?;
+
+        let instance_id = instance
+            .instance_id()
+            .context("No instance ID")?
+            .to_string();
+
+        info!(instance_id = %instance_id, "Instance launched");
+
+        Ok(LaunchedInstance {
+            instance_id,
+            instance_type: instance_type.to_string(),
+            system: system.to_string(),
+            public_ip: None,
+        })
+    }
+
+    /// Default timeout for waiting for instance to be running (10 minutes)
+    const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 600;
+
+    /// Wait for an instance to be running and get its public IP
+    pub async fn wait_for_running(
+        &self,
+        instance_id: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<Option<String>> {
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(Self::DEFAULT_WAIT_TIMEOUT_SECS));
+        info!(
+            instance_id = %instance_id,
+            timeout_secs = timeout.as_secs(),
+            "Waiting for instance to be running"
+        );
+
+        let result = tokio::time::timeout(timeout, self.wait_for_running_inner(instance_id)).await;
+
+        match result {
+            Ok(inner_result) => inner_result,
+            Err(_) => {
+                warn!(
+                    instance_id = %instance_id,
+                    timeout_secs = timeout.as_secs(),
+                    "Timed out waiting for instance to be running"
+                );
+                Err(anyhow::anyhow!(
+                    "Timeout waiting for instance {} to be running after {}s",
+                    instance_id,
+                    timeout.as_secs()
+                ))
+            }
+        }
+    }
+
+    /// Inner wait loop without timeout
+    async fn wait_for_running_inner(&self, instance_id: &str) -> Result<Option<String>> {
+        loop {
+            let response = self
+                .client
+                .describe_instances()
+                .instance_ids(instance_id)
+                .send()
+                .await
+                .context("Failed to describe instance")?;
+
+            let instance = response
+                .reservations()
+                .first()
+                .and_then(|r| r.instances().first())
+                .context("Instance not found")?;
+
+            let state = instance
+                .state()
+                .and_then(|s| s.name())
+                .unwrap_or(&InstanceStateName::Pending);
+
+            match state {
+                InstanceStateName::Running => {
+                    let public_ip = instance.public_ip_address().map(|s| s.to_string());
+                    info!(instance_id = %instance_id, public_ip = ?public_ip, "Instance is running");
+                    return Ok(public_ip);
+                }
+                InstanceStateName::Pending => {
+                    debug!(instance_id = %instance_id, "Instance still pending");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+                _ => {
+                    anyhow::bail!(
+                        "Instance {} entered unexpected state: {:?}",
+                        instance_id,
+                        state
+                    );
+                }
+            }
+        }
+    }
+
+    /// Terminate an instance
+    pub async fn terminate_instance(&self, instance_id: &str) -> Result<()> {
+        info!(instance_id = %instance_id, "Terminating instance");
+
+        self.client
+            .terminate_instances()
+            .instance_ids(instance_id)
+            .send()
+            .await
+            .context("Failed to terminate instance")?;
+
+        Ok(())
+    }
+
+    /// Wait for an instance to be fully terminated
+    pub async fn wait_for_terminated(&self, instance_id: &str) -> Result<()> {
+        const MAX_WAIT_SECS: u64 = 300;
+        let start = std::time::Instant::now();
+
+        loop {
+            if start.elapsed().as_secs() > MAX_WAIT_SECS {
+                warn!(instance_id = %instance_id, "Timeout waiting for instance to terminate");
+                return Ok(());
+            }
+
+            let response = self
+                .client
+                .describe_instances()
+                .instance_ids(instance_id)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let state = resp
+                        .reservations()
+                        .first()
+                        .and_then(|r| r.instances().first())
+                        .and_then(|i| i.state())
+                        .and_then(|s| s.name());
+
+                    match state {
+                        Some(InstanceStateName::Terminated) => {
+                            debug!(instance_id = %instance_id, "Instance terminated");
+                            return Ok(());
+                        }
+                        Some(InstanceStateName::ShuttingDown) => {
+                            debug!(instance_id = %instance_id, "Instance still shutting down");
+                        }
+                        Some(other) => {
+                            debug!(instance_id = %instance_id, state = ?other, "Unexpected state");
+                        }
+                        None => return Ok(()),
+                    }
+                }
+                Err(e) => {
+                    let err = anyhow::Error::from(e);
+                    if classify_anyhow_error(&err).is_not_found() {
+                        return Ok(());
+                    }
+                    warn!(instance_id = %instance_id, error = ?err, "Error checking instance state");
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    }
+
+    /// Get console output from an instance
+    pub async fn get_console_output(&self, instance_id: &str) -> Result<Option<String>> {
+        let response = self
+            .client
+            .get_console_output()
+            .instance_id(instance_id)
+            .send()
+            .await
+            .context("Failed to get console output")?;
+
+        if let Some(encoded) = response.output() {
+            use base64::Engine;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok());
+            Ok(decoded)
+        } else {
+            Ok(None)
+        }
+    }
+}

@@ -9,6 +9,3 @@ pub mod orchestrator;
 pub mod state;
 pub mod tui;
 pub mod wait;
-
-// Re-export build_dimensions for coordinator use
-pub use aws::build_dimensions;

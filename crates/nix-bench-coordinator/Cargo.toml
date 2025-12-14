@@ -20,10 +20,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 tokio-stream.workspace = true
 
-# AWS SDK (full set for coordinator)
+# AWS SDK
 aws-config.workspace = true
-aws-sdk-cloudwatch.workspace = true
-aws-sdk-cloudwatchlogs.workspace = true
 aws-sdk-s3.workspace = true
 aws-sdk-ec2.workspace = true
 aws-sdk-iam.workspace = true
@@ -80,5 +78,6 @@ backon.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
+mockall = "0.13"
 # Integration tests require the agent crate
 nix-bench-agent = { path = "../nix-bench-agent" }

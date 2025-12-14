@@ -4,6 +4,8 @@ use crate::aws::context::AwsContext;
 use crate::wait::{wait_for_resource, WaitConfig};
 use anyhow::{Context, Result};
 use aws_sdk_iam::Client;
+use chrono::Utc;
+use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -84,7 +86,8 @@ impl IamClient {
 
         info!(role_name = %role_name, "Creating IAM role for benchmark");
 
-        // Create the role
+        // Create the role with standard nix-bench tags
+        let created_at = tags::format_created_at(Utc::now());
         self.client
             .create_role()
             .role_name(&role_name)
@@ -92,8 +95,29 @@ impl IamClient {
             .description(format!("nix-bench agent role for run {}", run_id))
             .tags(
                 aws_sdk_iam::types::Tag::builder()
-                    .key("nix-bench:run-id")
+                    .key(TAG_TOOL)
+                    .value(TAG_TOOL_VALUE)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
+            )
+            .tags(
+                aws_sdk_iam::types::Tag::builder()
+                    .key(TAG_RUN_ID)
                     .value(run_id)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
+            )
+            .tags(
+                aws_sdk_iam::types::Tag::builder()
+                    .key(TAG_CREATED_AT)
+                    .value(&created_at)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
+            )
+            .tags(
+                aws_sdk_iam::types::Tag::builder()
+                    .key(TAG_STATUS)
+                    .value(tags::status::CREATING)
                     .build()
                     .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
             )
@@ -127,14 +151,35 @@ impl IamClient {
 
         debug!(role_name = %role_name, "SSM managed policy attached");
 
-        // Create instance profile
+        // Create instance profile with same tags as role
         self.client
             .create_instance_profile()
             .instance_profile_name(&profile_name)
             .tags(
                 aws_sdk_iam::types::Tag::builder()
-                    .key("nix-bench:run-id")
+                    .key(TAG_TOOL)
+                    .value(TAG_TOOL_VALUE)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
+            )
+            .tags(
+                aws_sdk_iam::types::Tag::builder()
+                    .key(TAG_RUN_ID)
                     .value(run_id)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
+            )
+            .tags(
+                aws_sdk_iam::types::Tag::builder()
+                    .key(TAG_CREATED_AT)
+                    .value(&created_at)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
+            )
+            .tags(
+                aws_sdk_iam::types::Tag::builder()
+                    .key(TAG_STATUS)
+                    .value(tags::status::CREATING)
                     .build()
                     .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
             )
@@ -280,5 +325,47 @@ impl IamClient {
             .send()
             .await
             .is_ok()
+    }
+}
+
+/// Trait for IAM operations that can be mocked in tests.
+///
+/// Note: `create_benchmark_role` takes an owned `Option<CancellationToken>` instead of
+/// a reference to work around mockall lifetime limitations. Callers can clone the token.
+#[allow(async_fn_in_trait)] // Internal use only, Send+Sync bounds on trait are sufficient
+#[cfg_attr(test, mockall::automock)]
+pub trait IamOperations: Send + Sync {
+    /// Create a role and instance profile for a benchmark run.
+    /// Pass `cancel.clone()` if you have a token reference.
+    async fn create_benchmark_role(
+        &self,
+        run_id: &str,
+        bucket_name: &str,
+        cancel: Option<CancellationToken>,
+    ) -> Result<(String, String)>;
+
+    /// Delete a role and its instance profile
+    async fn delete_benchmark_role(&self, role_name: &str) -> Result<()>;
+
+    /// Check if an instance profile exists
+    async fn instance_profile_exists(&self, profile_name: &str) -> bool;
+}
+
+impl IamOperations for IamClient {
+    async fn create_benchmark_role(
+        &self,
+        run_id: &str,
+        bucket_name: &str,
+        cancel: Option<CancellationToken>,
+    ) -> Result<(String, String)> {
+        IamClient::create_benchmark_role(self, run_id, bucket_name, cancel.as_ref()).await
+    }
+
+    async fn delete_benchmark_role(&self, role_name: &str) -> Result<()> {
+        IamClient::delete_benchmark_role(self, role_name).await
+    }
+
+    async fn instance_profile_exists(&self, profile_name: &str) -> bool {
+        IamClient::instance_profile_exists(self, profile_name).await
     }
 }

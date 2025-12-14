@@ -1,7 +1,7 @@
 //! gRPC server for real-time log streaming
 
 use anyhow::Result;
-use nix_bench_common::{StatusCode, TlsConfig};
+use nix_bench_common::{RunResult, StatusCode, TlsConfig};
 use nix_bench_proto::{LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult, StatusRequest, StatusResponse, StreamLogsRequest};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -13,14 +13,6 @@ use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
-
-/// Result of a single benchmark run
-#[derive(Debug, Clone)]
-pub struct RunResult {
-    pub run_number: u32,
-    pub duration_secs: f64,
-    pub success: bool,
-}
 
 /// Agent status for gRPC queries
 #[derive(Debug, Clone, Default)]
@@ -220,7 +212,7 @@ impl LogStream for LogStreamService {
         let status = self.status.read().await;
 
         // Convert status string to canonical status code
-        let status_code = StatusCode::from_str(&status.status)
+        let status_code = StatusCode::parse(&status.status)
             .map(|c| c.as_i32())
             .unwrap_or(0); // Default to pending if unknown
 

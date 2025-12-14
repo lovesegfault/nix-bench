@@ -6,6 +6,7 @@
 use anyhow::Result;
 use clap::Parser;
 use nix_bench_agent::{benchmark, bootstrap, gc, grpc, logging, results};
+use nix_bench_common::RunResult;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -43,8 +44,8 @@ async fn run_benchmarks_with_retry(
     config: &nix_bench_agent::config::Config,
     logger: &logging::GrpcLogger,
     status: &Arc<RwLock<grpc::AgentStatus>>,
-) -> Result<Vec<results::RunResult>> {
-    let mut successful_runs: Vec<results::RunResult> = Vec::new();
+) -> Result<Vec<RunResult>> {
+    let mut successful_runs: Vec<RunResult> = Vec::new();
     let mut failure_count: u32 = 0;
     let mut current_run: u32 = 1;
 
@@ -107,8 +108,8 @@ async fn run_benchmarks_with_retry(
                     duration.as_secs_f64()
                 ));
 
-                successful_runs.push(results::RunResult {
-                    run: slot as u32,
+                successful_runs.push(RunResult {
+                    run_number: slot as u32,
                     duration_secs: duration.as_secs_f64(),
                     success: true,
                 });
@@ -117,7 +118,7 @@ async fn run_benchmarks_with_retry(
                 {
                     let mut s = status.write().await;
                     s.durations.push(duration.as_secs_f64());
-                    s.run_results.push(grpc::RunResult {
+                    s.run_results.push(RunResult {
                         run_number: slot as u32,
                         duration_secs: duration.as_secs_f64(),
                         success: true,
@@ -219,16 +220,24 @@ async fn main() -> Result<()> {
         return Err(e);
     }
 
-    // === Load Config from S3 ===
-    info!("Downloading config from S3");
+    // === Load Config from S3 (with TLS polling) ===
+    // The coordinator generates TLS certificates after instances are running.
+    // We need to poll until the config includes TLS certificates.
+    info!("Waiting for config with TLS certificates from S3");
     let logger = logging::GrpcLogger::new(broadcaster.clone());
-    logger.write_line("Downloading benchmark config from S3...");
+    logger.write_line("Waiting for benchmark config with TLS certificates from S3...");
 
-    let config = match results::download_config(&args.bucket, &args.run_id, &args.instance_type).await {
+    let tls_timeout = std::time::Duration::from_secs(300); // 5 minutes timeout
+    let config = match results::download_config_with_tls(
+        &args.bucket,
+        &args.run_id,
+        &args.instance_type,
+        tls_timeout,
+    ).await {
         Ok(c) => c,
         Err(e) => {
-            error!(error = %e, "Failed to download config");
-            logger.write_line(&format!("ERROR: Failed to download config: {}", e));
+            error!(error = %e, "Failed to download config with TLS");
+            logger.write_line(&format!("ERROR: Failed to get TLS config: {}", e));
             {
                 let mut s = status.write().await;
                 s.status = "failed".to_string();

@@ -155,7 +155,6 @@ pub enum ResourceType {
     IamInstanceProfile,
     SecurityGroup,
     SecurityGroupRule,
-    ElasticIp,
 }
 
 impl ResourceType {
@@ -168,7 +167,6 @@ impl ResourceType {
             ResourceType::IamInstanceProfile => "iam_instance_profile",
             ResourceType::SecurityGroup => "security_group",
             ResourceType::SecurityGroupRule => "security_group_rule",
-            ResourceType::ElasticIp => "elastic_ip",
         }
     }
 
@@ -181,7 +179,6 @@ impl ResourceType {
             "iam_instance_profile" => ResourceType::IamInstanceProfile,
             "security_group" => ResourceType::SecurityGroup,
             "security_group_rule" => ResourceType::SecurityGroupRule,
-            "elastic_ip" => ResourceType::ElasticIp,
             _ => ResourceType::S3Object,
         }
     }
@@ -514,7 +511,6 @@ pub async fn cleanup_resources() -> Result<()> {
                         Err(anyhow::anyhow!("Invalid SecurityGroupRule resource_id format"))
                     }
                 }
-                ResourceType::ElasticIp => ec2.release_elastic_ip(&resource.resource_id).await,
                 ResourceType::SecurityGroup => unreachable!(),
             };
             handle_cleanup_result(&pool, resource, result, &mut cleanup_errors).await?;

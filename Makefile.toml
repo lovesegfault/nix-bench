@@ -105,6 +105,18 @@ dependencies = ["build-coordinator"]
 command = "./target/release/nix-bench-coordinator"
 args = ["state", "prune"]
 
+[tasks.scan]
+description = "Scan AWS for nix-bench resources using tags"
+dependencies = ["build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["scan", "${@}"]
+
+[tasks.cleanup-orphans]
+description = "Clean up orphaned AWS resources (dry-run by default)"
+dependencies = ["build-coordinator"]
+command = "./target/release/nix-bench-coordinator"
+args = ["cleanup-orphans", "${@}"]
+
 # ============================================================================
 # Test Tasks
 # ============================================================================

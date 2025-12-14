@@ -11,6 +11,13 @@ description = "Shared types and utilities for nix-bench (no AWS dependencies)"
 anyhow.workspace = true
 thiserror.workspace = true
 
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Time/date handling for tags
+chrono.workspace = true
+
 # TLS certificate generation
 rcgen.workspace = true
 pem.workspace = true
@@ -25,3 +32,4 @@ default = []
 tonic-tls = ["tonic"]
 
 [dev-dependencies]
+proptest.workspace = true

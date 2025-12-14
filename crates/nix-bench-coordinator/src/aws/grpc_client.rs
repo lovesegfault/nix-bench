@@ -2,7 +2,7 @@
 
 use crate::tui::TuiMessage;
 use anyhow::{Context, Result};
-use nix_bench_common::TlsConfig;
+use nix_bench_common::{RunResult, TlsConfig};
 use nix_bench_proto::{LogStreamClient, StatusRequest, StreamLogsRequest};
 use rand::Rng;
 use std::time::Duration;
@@ -618,14 +618,6 @@ impl GrpcLogClient {
     }
 }
 
-/// Single run result info from gRPC
-#[derive(Debug, Clone)]
-pub struct RunResultInfo {
-    pub run_number: u32,
-    pub duration_secs: f64,
-    pub success: bool,
-}
-
 /// Instance status from gRPC GetStatus RPC
 #[derive(Debug, Clone, Default)]
 pub struct GrpcInstanceStatus {
@@ -640,7 +632,7 @@ pub struct GrpcInstanceStatus {
     /// Number of dropped log messages (for monitoring)
     pub dropped_log_count: u64,
     /// Detailed run results with success/failure
-    pub run_results: Vec<RunResultInfo>,
+    pub run_results: Vec<RunResult>,
     /// Nix attribute being built
     pub attr: Option<String>,
     /// System architecture
@@ -703,15 +695,15 @@ impl GrpcStatusPoller {
                         Some(status.status_code)
                     } else {
                         // Legacy: parse from status string
-                        nix_bench_common::StatusCode::from_str(&status.status)
+                        nix_bench_common::StatusCode::parse(&status.status)
                             .map(|c| c.as_i32())
                     };
 
                     // Convert run_results from proto format
-                    let run_results: Vec<RunResultInfo> = status
+                    let run_results: Vec<RunResult> = status
                         .run_results
                         .iter()
-                        .map(|r| RunResultInfo {
+                        .map(|r| RunResult {
                             run_number: r.run_number,
                             duration_secs: r.duration_secs,
                             success: r.success,

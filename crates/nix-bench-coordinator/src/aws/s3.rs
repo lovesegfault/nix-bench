@@ -3,6 +3,8 @@
 use crate::aws::context::AwsContext;
 use anyhow::{Context, Result};
 use aws_sdk_s3::{primitives::ByteStream, Client};
+use chrono::Utc;
+use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -45,6 +47,53 @@ impl S3Client {
             .send()
             .await
             .context("Failed to create bucket")?;
+
+        Ok(())
+    }
+
+    /// Apply standard nix-bench tags to a bucket
+    ///
+    /// S3 bucket tagging requires a separate API call after bucket creation.
+    /// This should be called immediately after `create_bucket`.
+    pub async fn tag_bucket(&self, bucket_name: &str, run_id: &str) -> Result<()> {
+        debug!(bucket = %bucket_name, run_id = %run_id, "Tagging S3 bucket");
+
+        let created_at = tags::format_created_at(Utc::now());
+
+        let tagging = aws_sdk_s3::types::Tagging::builder()
+            .tag_set(
+                aws_sdk_s3::types::Tag::builder()
+                    .key(TAG_TOOL)
+                    .value(TAG_TOOL_VALUE)
+                    .build()?,
+            )
+            .tag_set(
+                aws_sdk_s3::types::Tag::builder()
+                    .key(TAG_RUN_ID)
+                    .value(run_id)
+                    .build()?,
+            )
+            .tag_set(
+                aws_sdk_s3::types::Tag::builder()
+                    .key(TAG_CREATED_AT)
+                    .value(&created_at)
+                    .build()?,
+            )
+            .tag_set(
+                aws_sdk_s3::types::Tag::builder()
+                    .key(TAG_STATUS)
+                    .value(tags::status::CREATING)
+                    .build()?,
+            )
+            .build()?;
+
+        self.client
+            .put_bucket_tagging()
+            .bucket(bucket_name)
+            .tagging(tagging)
+            .send()
+            .await
+            .context("Failed to tag bucket")?;
 
         Ok(())
     }
@@ -136,5 +185,59 @@ impl S3Client {
             .context("Failed to delete bucket")?;
 
         Ok(())
+    }
+}
+
+/// Trait for S3 operations that can be mocked in tests.
+#[allow(async_fn_in_trait)] // Internal use only, Send+Sync bounds on trait are sufficient
+#[cfg_attr(test, mockall::automock)]
+pub trait S3Operations: Send + Sync {
+    /// Create a bucket
+    async fn create_bucket(&self, bucket_name: &str) -> Result<()>;
+
+    /// Apply standard nix-bench tags to a bucket
+    async fn tag_bucket(&self, bucket_name: &str, run_id: &str) -> Result<()>;
+
+    /// Upload a file to S3
+    async fn upload_file(&self, bucket: &str, key: &str, path: &std::path::Path) -> Result<()>;
+
+    /// Upload bytes to S3
+    async fn upload_bytes(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> Result<()>;
+
+    /// Delete a bucket and all its objects
+    async fn delete_bucket(&self, bucket: &str) -> Result<()>;
+}
+
+impl S3Operations for S3Client {
+    async fn create_bucket(&self, bucket_name: &str) -> Result<()> {
+        S3Client::create_bucket(self, bucket_name).await
+    }
+
+    async fn tag_bucket(&self, bucket_name: &str, run_id: &str) -> Result<()> {
+        S3Client::tag_bucket(self, bucket_name, run_id).await
+    }
+
+    async fn upload_file(&self, bucket: &str, key: &str, path: &std::path::Path) -> Result<()> {
+        S3Client::upload_file(self, bucket, key, path).await
+    }
+
+    async fn upload_bytes(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> Result<()> {
+        S3Client::upload_bytes(self, bucket, key, data, content_type).await
+    }
+
+    async fn delete_bucket(&self, bucket: &str) -> Result<()> {
+        S3Client::delete_bucket(self, bucket).await
     }
 }

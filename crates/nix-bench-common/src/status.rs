@@ -4,6 +4,7 @@
 //! replacing magic numbers and string-based status values.
 
 use std::fmt;
+use std::str::FromStr;
 
 /// Canonical status codes (stable i32 values for gRPC)
 ///
@@ -40,18 +41,6 @@ impl StatusCode {
         }
     }
 
-    /// Convert from status string (legacy compatibility)
-    ///
-    /// Returns `None` for unknown values.
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "pending" => Some(Self::Pending),
-            "running" => Some(Self::Running),
-            "complete" | "completed" => Some(Self::Complete),
-            "failed" | "error" => Some(Self::Failed),
-            _ => None,
-        }
-    }
 
     /// Convert to i32 (for protobuf)
     pub fn as_i32(self) -> i32 {
@@ -74,11 +63,13 @@ impl StatusCode {
     }
 
     /// Check if the status represents success
+    #[cfg(test)]
     pub fn is_success(self) -> bool {
         matches!(self, Self::Complete)
     }
 
     /// Check if the status represents failure
+    #[cfg(test)]
     pub fn is_failure(self) -> bool {
         matches!(self, Self::Failed)
     }
@@ -87,6 +78,41 @@ impl StatusCode {
 impl fmt::Display for StatusCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+/// Error type for parsing StatusCode
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseStatusCodeError(String);
+
+impl fmt::Display for ParseStatusCodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid status code: '{}'", self.0)
+    }
+}
+
+impl std::error::Error for ParseStatusCodeError {}
+
+impl FromStr for StatusCode {
+    type Err = ParseStatusCodeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "complete" | "completed" => Ok(Self::Complete),
+            "failed" | "error" => Ok(Self::Failed),
+            _ => Err(ParseStatusCodeError(s.to_string())),
+        }
+    }
+}
+
+impl StatusCode {
+    /// Parse from string, returning None for unknown values
+    ///
+    /// This is a convenience wrapper around `FromStr` that returns `Option`.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 }
 
@@ -105,13 +131,22 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        assert_eq!(StatusCode::from_str("pending"), Some(StatusCode::Pending));
-        assert_eq!(StatusCode::from_str("RUNNING"), Some(StatusCode::Running));
-        assert_eq!(StatusCode::from_str("complete"), Some(StatusCode::Complete));
-        assert_eq!(StatusCode::from_str("completed"), Some(StatusCode::Complete));
-        assert_eq!(StatusCode::from_str("failed"), Some(StatusCode::Failed));
-        assert_eq!(StatusCode::from_str("error"), Some(StatusCode::Failed));
-        assert_eq!(StatusCode::from_str("unknown"), None);
+        // Using the FromStr trait
+        assert_eq!("pending".parse::<StatusCode>(), Ok(StatusCode::Pending));
+        assert_eq!("RUNNING".parse::<StatusCode>(), Ok(StatusCode::Running));
+        assert_eq!("complete".parse::<StatusCode>(), Ok(StatusCode::Complete));
+        assert_eq!("completed".parse::<StatusCode>(), Ok(StatusCode::Complete));
+        assert_eq!("failed".parse::<StatusCode>(), Ok(StatusCode::Failed));
+        assert_eq!("error".parse::<StatusCode>(), Ok(StatusCode::Failed));
+        assert!("unknown".parse::<StatusCode>().is_err());
+    }
+
+    #[test]
+    fn test_parse_helper() {
+        // Using the parse() convenience method
+        assert_eq!(StatusCode::parse("pending"), Some(StatusCode::Pending));
+        assert_eq!(StatusCode::parse("RUNNING"), Some(StatusCode::Running));
+        assert_eq!(StatusCode::parse("unknown"), None);
     }
 
     #[test]
@@ -146,5 +181,68 @@ mod tests {
     #[test]
     fn test_default() {
         assert_eq!(StatusCode::default(), StatusCode::Pending);
+    }
+
+    // Property-based tests
+    use proptest::prelude::*;
+
+    proptest! {
+        /// from_i32 followed by as_i32 should be identity for valid codes
+        #[test]
+        fn i32_roundtrip(code in prop_oneof![Just(0i32), Just(1), Just(2), Just(-1)]) {
+            let status = StatusCode::from_i32(code).unwrap();
+            prop_assert_eq!(status.as_i32(), code);
+        }
+
+        /// as_str followed by parse should be identity
+        #[test]
+        fn str_roundtrip(code in prop_oneof![
+            Just(StatusCode::Pending),
+            Just(StatusCode::Running),
+            Just(StatusCode::Complete),
+            Just(StatusCode::Failed)
+        ]) {
+            let s = code.as_str();
+            let parsed = StatusCode::parse(s);
+            prop_assert_eq!(parsed, Some(code));
+        }
+
+        /// from_i32 returns None for invalid codes
+        #[test]
+        fn from_i32_invalid_returns_none(code in -1000i32..1000) {
+            if ![-1, 0, 1, 2].contains(&code) {
+                prop_assert!(StatusCode::from_i32(code).is_none());
+            }
+        }
+
+        /// parse never panics on arbitrary input
+        #[test]
+        fn parse_never_panics(s in "\\PC*") {
+            let _ = StatusCode::parse(&s);
+        }
+
+        /// is_terminal is consistent with Complete and Failed
+        #[test]
+        fn terminal_consistency(code in prop_oneof![
+            Just(StatusCode::Pending),
+            Just(StatusCode::Running),
+            Just(StatusCode::Complete),
+            Just(StatusCode::Failed)
+        ]) {
+            let is_terminal = code.is_terminal();
+            let expected = matches!(code, StatusCode::Complete | StatusCode::Failed);
+            prop_assert_eq!(is_terminal, expected);
+        }
+
+        /// Display output matches as_str
+        #[test]
+        fn display_matches_as_str(code in prop_oneof![
+            Just(StatusCode::Pending),
+            Just(StatusCode::Running),
+            Just(StatusCode::Complete),
+            Just(StatusCode::Failed)
+        ]) {
+            prop_assert_eq!(format!("{}", code), code.as_str());
+        }
     }
 }

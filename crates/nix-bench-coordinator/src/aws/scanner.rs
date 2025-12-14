@@ -7,8 +7,8 @@ use crate::aws::context::AwsContext;
 use anyhow::Result;
 use aws_sdk_ec2::types::Filter;
 use chrono::{DateTime, Duration, Utc};
-use nix_bench_common::resource_kind::ResourceKind as SharedResourceKind;
 use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+pub use nix_bench_common::ResourceKind;
 use std::collections::HashMap;
 use tracing::debug;
 
@@ -29,31 +29,6 @@ pub struct DiscoveredResource {
     pub status: String,
     /// All tags on the resource
     pub tags: HashMap<String, String>,
-}
-
-/// Types of resources that can be discovered
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceKind {
-    Ec2Instance,
-    SecurityGroup,
-    S3Bucket,
-    IamRole,
-    IamInstanceProfile,
-}
-
-impl ResourceKind {
-    /// Get cleanup priority (lower = cleanup first)
-    ///
-    /// Delegates to the shared ResourceKind for consistent ordering.
-    pub fn cleanup_priority(&self) -> u8 {
-        match self {
-            ResourceKind::Ec2Instance => SharedResourceKind::Ec2Instance.cleanup_priority(),
-            ResourceKind::S3Bucket => SharedResourceKind::S3Bucket.cleanup_priority(),
-            ResourceKind::IamRole => SharedResourceKind::IamRole.cleanup_priority(),
-            ResourceKind::IamInstanceProfile => SharedResourceKind::IamInstanceProfile.cleanup_priority(),
-            ResourceKind::SecurityGroup => SharedResourceKind::SecurityGroup.cleanup_priority(),
-        }
-    }
 }
 
 /// Scanner configuration

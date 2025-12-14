@@ -229,6 +229,14 @@ impl TagBasedCleanup {
                             }
                         }
                     }
+                    // These variants are tracked but not discovered by the scanner
+                    ResourceKind::S3Object | ResourceKind::SecurityGroupRule => {
+                        debug!(
+                            resource_id = %resource.resource_id,
+                            resource_type = ?resource.resource_type,
+                            "Skipping (not discoverable)"
+                        );
+                    }
                 }
             }
         }

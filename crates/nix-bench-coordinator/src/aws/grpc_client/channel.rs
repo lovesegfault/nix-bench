@@ -2,16 +2,11 @@
 
 use anyhow::{Context, Result};
 use nix_bench_common::TlsConfig;
-use rand::Rng;
 use std::time::Duration;
 use tonic::transport::Channel;
 
-/// Add 0-25% jitter to a duration to prevent thundering herd
-pub fn jittered_delay(base: Duration) -> Duration {
-    let mut rng = rand::thread_rng();
-    let jitter_factor = 1.0 + rng.gen_range(0.0..0.25);
-    Duration::from_secs_f64(base.as_secs_f64() * jitter_factor)
-}
+// Re-export for backward compatibility
+pub use nix_bench_common::jittered_delay_25 as jittered_delay;
 
 /// Options for building a gRPC channel
 #[derive(Debug, Clone)]

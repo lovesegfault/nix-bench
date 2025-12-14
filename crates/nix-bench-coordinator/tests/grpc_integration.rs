@@ -5,7 +5,7 @@
 
 mod test_utils;
 
-use nix_bench_agent::grpc::{AgentStatus, LogBroadcaster, LogStreamService};
+use nix_bench_agent::grpc::{AgentStatus, LogBroadcaster, LogStreamService, StatusCode};
 use nix_bench_coordinator::aws::{GrpcLogClient, GrpcStatusPoller};
 use nix_bench_coordinator::tui::TuiMessage;
 use nix_bench_proto::LogStreamServer;
@@ -236,7 +236,7 @@ async fn test_bootstrap_streaming_integration() {
     use nix_bench_agent::logging::GrpcLogger;
 
     let initial_status = AgentStatus {
-        status: "bootstrap".to_string(),
+        status: StatusCode::Bootstrap,
         run_progress: 0,
         total_runs: 0,
         durations: Vec::new(),
@@ -286,7 +286,7 @@ async fn test_bootstrap_streaming_integration() {
     // Update status to show bootstrap is done
     fixture
         .set_status(AgentStatus {
-            status: "running".to_string(),
+            status: StatusCode::Running,
             ..Default::default()
         })
         .await;
@@ -345,10 +345,8 @@ async fn test_bootstrap_streaming_integration() {
 /// Test that verifies status transitions during bootstrap are visible via gRPC
 #[tokio::test]
 async fn test_bootstrap_status_transitions() {
-    use nix_bench_common::StatusCode;
-
     let initial_status = AgentStatus {
-        status: "bootstrap".to_string(),
+        status: StatusCode::Bootstrap,
         run_progress: 0,
         total_runs: 0,
         durations: Vec::new(),
@@ -374,7 +372,7 @@ async fn test_bootstrap_status_transitions() {
     // Simulate status transition after bootstrap completes
     fixture
         .set_status(AgentStatus {
-            status: "warmup".to_string(),
+            status: StatusCode::Warmup,
             total_runs: 5,
             ..Default::default()
         })
@@ -389,7 +387,7 @@ async fn test_bootstrap_status_transitions() {
     // Simulate running status
     fixture
         .set_status(AgentStatus {
-            status: "running".to_string(),
+            status: StatusCode::Running,
             run_progress: 1,
             total_runs: 5,
             ..Default::default()
@@ -400,13 +398,13 @@ async fn test_bootstrap_status_transitions() {
     let running_status = statuses
         .get(TEST_INSTANCE_TYPE)
         .expect("Should have status");
-    assert_eq!(running_status.status, Some(StatusCode::Running.as_i32()));
+    assert_eq!(running_status.status, Some(StatusCode::Running));
     assert_eq!(running_status.run_progress, Some(1));
 
     // Simulate completion
     fixture
         .set_status(AgentStatus {
-            status: "complete".to_string(),
+            status: StatusCode::Complete,
             run_progress: 5,
             total_runs: 5,
             durations: vec![10.5, 11.2, 10.8, 11.0, 10.9],
@@ -418,7 +416,7 @@ async fn test_bootstrap_status_transitions() {
     let complete_status = statuses
         .get(TEST_INSTANCE_TYPE)
         .expect("Should have status");
-    assert_eq!(complete_status.status, Some(StatusCode::Complete.as_i32()));
+    assert_eq!(complete_status.status, Some(StatusCode::Complete));
     assert_eq!(complete_status.run_progress, Some(5));
     assert_eq!(complete_status.durations.len(), 5);
 }

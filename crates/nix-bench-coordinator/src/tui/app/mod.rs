@@ -242,7 +242,7 @@ impl App {
         self.scroll
             .log_scroll_states
             .entry(instance_type.to_string())
-            .or_insert_with(ScrollViewState::default);
+            .or_default();
     }
 
     /// Scroll build output up by n lines
@@ -301,7 +301,7 @@ impl App {
                 self.scroll
                     .throbber_states
                     .entry(instance_type.clone())
-                    .or_insert_with(ThrobberState::default);
+                    .or_default();
             }
         }
 
@@ -403,14 +403,12 @@ impl App {
         for (instance_type, status) in status_map {
             if let Some(state) = self.instances.data.get_mut(instance_type) {
                 if let Some(status_code) = status.status {
-                    if let Some(code) = StatusCode::from_i32(status_code) {
-                        state.status = match code {
-                            StatusCode::Complete => InstanceStatus::Complete,
-                            StatusCode::Failed => InstanceStatus::Failed,
-                            StatusCode::Running => InstanceStatus::Running,
-                            StatusCode::Pending => InstanceStatus::Pending,
-                        };
-                    }
+                    state.status = match status_code {
+                        StatusCode::Complete => InstanceStatus::Complete,
+                        StatusCode::Failed => InstanceStatus::Failed,
+                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => InstanceStatus::Running,
+                        StatusCode::Pending => InstanceStatus::Pending,
+                    };
                 }
                 if let Some(progress) = status.run_progress {
                     state.run_progress = progress;
@@ -624,10 +622,10 @@ impl App {
             tokio::select! {
                 maybe_event = event_stream.next() => {
                     if let Some(Ok(Event::Key(key))) = maybe_event {
-                        if key.kind == KeyEventKind::Press {
-                            if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                                // Already cleaning up - just consume the event
-                            }
+                        if key.kind == KeyEventKind::Press
+                            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+                        {
+                            // Already cleaning up - just consume the event
                         }
                     }
                 }

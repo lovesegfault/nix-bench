@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::aws::{GrpcStatusPoller, LogStreamingOptions, start_log_streaming_unified};
 use crate::config::RunConfig;
+use nix_bench_common::StatusCode;
 use crate::tui::{self, InitPhase, TuiMessage};
 use super::init::BenchmarkInitializer;
 use super::progress::{ChannelReporter, LogReporter};
@@ -418,12 +419,12 @@ pub async fn run_benchmarks_no_tui(
 
             if let Some(grpc_status) = status_map.get(instance_type) {
                 if let Some(status_code) = grpc_status.status {
-                    match status_code {
-                        2 => state.status = InstanceStatus::Complete,
-                        -1 => state.status = InstanceStatus::Failed,
-                        1 => state.status = InstanceStatus::Running,
-                        _ => {}
-                    }
+                    state.status = match status_code {
+                        StatusCode::Complete => InstanceStatus::Complete,
+                        StatusCode::Failed => InstanceStatus::Failed,
+                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => InstanceStatus::Running,
+                        StatusCode::Pending => InstanceStatus::Pending,
+                    };
                 }
                 if let Some(progress) = grpc_status.run_progress {
                     state.run_progress = progress;

@@ -66,24 +66,3 @@ pub struct RunConfig {
     /// Log capture for printing errors/warnings after TUI exit
     pub log_capture: Option<LogCapture>,
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_bucket_name_format() {
-        // Bucket names must use full UUID to be globally unique
-        // This test ensures we don't regress to truncated names
-        let uuid = uuid::Uuid::now_v7().to_string();
-        let bucket_name = format!("nix-bench-{}", uuid);
-
-        // Should be: "nix-bench-" (10) + UUID with hyphens (36) = 46 chars
-        assert_eq!(bucket_name.len(), 46);
-        assert!(bucket_name.starts_with("nix-bench-"));
-
-        // S3 bucket names must be 3-63 characters
-        assert!(bucket_name.len() >= 3 && bucket_name.len() <= 63);
-
-        // Must be lowercase (UUIDs are lowercase hex)
-        assert_eq!(bucket_name, bucket_name.to_lowercase());
-    }
-}

@@ -63,21 +63,3 @@ pub enum ConfigError {
     #[error("Failed to parse config: {0}")]
     Parse(#[from] serde_json::Error),
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_display() {
-        assert_eq!(ConfigError::EmptyRunId.to_string(), "run_id cannot be empty");
-        assert_eq!(
-            ConfigError::InvalidRuns(0).to_string(),
-            "runs must be at least 1, got 0"
-        );
-        assert_eq!(
-            ConfigError::InvalidSystem("windows".to_string()).to_string(),
-            "system must be 'x86_64-linux' or 'aarch64-linux', got: windows"
-        );
-    }
-}

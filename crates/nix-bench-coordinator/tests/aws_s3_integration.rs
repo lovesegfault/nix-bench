@@ -9,7 +9,6 @@ mod aws_test_helpers;
 
 use aws_test_helpers::*;
 use nix_bench_coordinator::aws::S3Client;
-use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use std::io::Write;
 

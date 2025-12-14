@@ -131,10 +131,8 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
 
     // Calculate scroll offset to keep current/latest run visible
     let current_run = instance.run_progress as usize + 1;
-    let scroll_offset = if total_runs as usize <= visible_rows {
-        0 // All rows fit, no scrolling needed
-    } else if current_run <= visible_rows {
-        0 // Current run is in first visible chunk
+    let scroll_offset = if total_runs as usize <= visible_rows || current_run <= visible_rows {
+        0 // All rows fit, or current run is in first visible chunk
     } else {
         // Scroll to keep current run visible (near bottom of visible area)
         (current_run.saturating_sub(visible_rows.saturating_sub(1))).min(

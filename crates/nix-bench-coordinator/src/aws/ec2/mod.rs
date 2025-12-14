@@ -8,9 +8,6 @@ mod types;
 pub use operations::Ec2Operations;
 pub use types::{LaunchInstanceConfig, LaunchedInstance};
 
-#[cfg(test)]
-pub use operations::MockEc2Operations;
-
 use crate::aws::context::AwsContext;
 use anyhow::{Context, Result};
 use aws_sdk_ec2::{types::Filter, Client};

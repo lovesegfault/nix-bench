@@ -3,9 +3,9 @@
 //! Provides common helpers for cleaning up AWS resources with consistent
 //! error handling and ordering.
 
-use crate::aws::{classify_anyhow_error, Ec2Client, IamClient, S3Client};
+use crate::aws::{Ec2Client, IamClient, S3Client};
 use crate::state::{self, DbPool, ResourceType};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Result of a single resource cleanup operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,8 @@ pub async fn delete_resource(
         }
     };
 
+    // All cleanup methods now handle not-found internally and return Ok(())
+    // So we only need to distinguish between success and failure
     match result {
         Ok(()) => {
             info!(resource_type = %resource_type.as_str(), resource_id = %resource_id, "Deleted");
@@ -58,21 +60,13 @@ pub async fn delete_resource(
             CleanupResult::Deleted
         }
         Err(e) => {
-            if classify_anyhow_error(&e).is_not_found() {
-                debug!(resource_type = %resource_type.as_str(), resource_id = %resource_id, "Already deleted");
-                if let Some(pool) = db {
-                    let _ = state::mark_resource_deleted(pool, resource_type, resource_id).await;
-                }
-                CleanupResult::AlreadyDeleted
-            } else {
-                warn!(
-                    resource_type = %resource_type.as_str(),
-                    resource_id = %resource_id,
-                    error = ?e,
-                    "Cleanup failed"
-                );
-                CleanupResult::Failed
-            }
+            warn!(
+                resource_type = %resource_type.as_str(),
+                resource_id = %resource_id,
+                error = ?e,
+                "Cleanup failed"
+            );
+            CleanupResult::Failed
         }
     }
 }

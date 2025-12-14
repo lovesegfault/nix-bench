@@ -6,6 +6,16 @@ service LogStream {
   rpc GetStatus(StatusRequest) returns (StatusResponse);
 }
 
+// Canonical status codes for agent/coordinator communication
+enum StatusCode {
+  STATUS_CODE_PENDING = 0;   // Not yet started
+  STATUS_CODE_RUNNING = 1;   // Currently running
+  STATUS_CODE_COMPLETE = 2;  // Successfully completed
+  STATUS_CODE_FAILED = 3;    // Failed with error (changed from -1 to 3)
+  STATUS_CODE_BOOTSTRAP = 4; // Bootstrap phase (setting up environment)
+  STATUS_CODE_WARMUP = 5;    // Warmup phase (cache warming build)
+}
+
 message StreamLogsRequest {
   string instance_type = 1;
   string run_id = 2;
@@ -26,19 +36,17 @@ message RunResult {
 }
 
 message StatusResponse {
-  string status = 1;  // Deprecated: use status_code instead
+  StatusCode status_code = 1; // Canonical status code
   uint32 run_progress = 2;
   uint32 total_runs = 3;
   // Total number of log messages dropped due to slow client consumption
   uint64 dropped_log_count = 4;
   // Build durations in seconds for completed runs (deprecated: use run_results)
   repeated double durations = 5;
-  // Canonical status code: 0=pending, 1=running, 2=complete, -1=failed
-  int32 status_code = 6;
   // Detailed results per run with success/failure status
-  repeated RunResult run_results = 7;
+  repeated RunResult run_results = 6;
   // Nix attribute that was built (e.g., "shallow.hello")
-  string attr = 8;
+  string attr = 7;
   // System architecture (e.g., "x86_64-linux", "aarch64-linux")
-  string system = 9;
+  string system = 8;
 }

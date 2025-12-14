@@ -81,28 +81,3 @@ impl std::fmt::Debug for AwsContext {
             .finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Note: These tests require AWS credentials and are marked as integration tests
-    // They are skipped in regular test runs
-
-    #[tokio::test]
-    #[ignore = "requires AWS credentials"]
-    async fn test_context_creation() {
-        let ctx = AwsContext::new("us-east-2").await;
-        assert_eq!(ctx.region(), "us-east-2");
-    }
-
-    #[tokio::test]
-    #[ignore = "requires AWS credentials"]
-    async fn test_context_clone() {
-        let ctx1 = AwsContext::new("us-east-2").await;
-        let ctx2 = ctx1.clone();
-
-        // Both should point to the same Arc'd config
-        assert_eq!(ctx1.region(), ctx2.region());
-    }
-}

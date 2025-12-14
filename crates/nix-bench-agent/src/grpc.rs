@@ -1,8 +1,8 @@
 //! gRPC server for real-time log streaming
 
 use anyhow::Result;
-use nix_bench_common::{RunResult, StatusCode, TlsConfig};
-use nix_bench_proto::{LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult, StatusRequest, StatusResponse, StreamLogsRequest};
+use nix_bench_common::{RunResult, TlsConfig};
+use nix_bench_proto::{LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult, StatusCode as ProtoStatusCode, StatusRequest, StatusResponse, StreamLogsRequest};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,10 +14,13 @@ use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
+// Re-export StatusCode from common for convenience
+pub use nix_bench_common::StatusCode;
+
 /// Agent status for gRPC queries
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AgentStatus {
-    pub status: String,
+    pub status: StatusCode,
     pub run_progress: u32,
     pub total_runs: u32,
     /// Build durations in seconds for completed runs (kept for backward compat)
@@ -28,6 +31,20 @@ pub struct AgentStatus {
     pub attr: String,
     /// System architecture
     pub system: String,
+}
+
+impl Default for AgentStatus {
+    fn default() -> Self {
+        Self {
+            status: StatusCode::Pending,
+            run_progress: 0,
+            total_runs: 0,
+            durations: Vec::new(),
+            run_results: Vec::new(),
+            attr: String::new(),
+            system: String::new(),
+        }
+    }
 }
 
 /// Maximum number of messages to buffer for late subscribers
@@ -206,10 +223,15 @@ impl LogStream for LogStreamService {
     ) -> Result<Response<StatusResponse>, Status> {
         let status = self.status.read().await;
 
-        // Convert status string to canonical status code
-        let status_code = StatusCode::parse(&status.status)
-            .map(|c| c.as_i32())
-            .unwrap_or(0); // Default to pending if unknown
+        // Convert StatusCode enum to proto enum
+        let proto_status_code = match status.status {
+            StatusCode::Pending => ProtoStatusCode::Pending,
+            StatusCode::Running => ProtoStatusCode::Running,
+            StatusCode::Complete => ProtoStatusCode::Complete,
+            StatusCode::Failed => ProtoStatusCode::Failed,
+            StatusCode::Bootstrap => ProtoStatusCode::Bootstrap,
+            StatusCode::Warmup => ProtoStatusCode::Warmup,
+        };
 
         // Convert run_results to proto format
         let run_results: Vec<ProtoRunResult> = status
@@ -223,12 +245,11 @@ impl LogStream for LogStreamService {
             .collect();
 
         Ok(Response::new(StatusResponse {
-            status: status.status.clone(),
+            status_code: proto_status_code.into(),
             run_progress: status.run_progress,
             total_runs: status.total_runs,
             dropped_log_count: self.dropped_messages.load(Ordering::Relaxed),
             durations: status.durations.clone(),
-            status_code,
             run_results,
             attr: status.attr.clone(),
             system: status.system.clone(),
@@ -282,13 +303,6 @@ mod tests {
     use std::time::Duration;
     use tokio::time::timeout;
 
-    #[test]
-    fn test_log_broadcaster_creation() {
-        let broadcaster = LogBroadcaster::new(100);
-        // Should be able to subscribe
-        let _receiver = broadcaster.subscribe();
-    }
-
     #[tokio::test]
     async fn test_log_broadcaster_single_subscriber() {
         let broadcaster = LogBroadcaster::new(100);
@@ -330,18 +344,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agent_status_default() {
-        let status = AgentStatus::default();
-        assert_eq!(status.status, "");
-        assert_eq!(status.run_progress, 0);
-        assert_eq!(status.total_runs, 0);
-    }
-
-    #[tokio::test]
     async fn test_get_status_returns_current_status() {
         let broadcaster = Arc::new(LogBroadcaster::new(100));
         let status = Arc::new(RwLock::new(AgentStatus {
-            status: "running".to_string(),
+            status: StatusCode::Running,
             run_progress: 3,
             total_runs: 10,
             durations: Vec::new(),
@@ -363,7 +369,7 @@ mod tests {
         let response = service.get_status(request).await.unwrap();
         let inner = response.into_inner();
 
-        assert_eq!(inner.status, "running");
+        assert_eq!(inner.status_code, ProtoStatusCode::Running as i32);
         assert_eq!(inner.run_progress, 3);
         assert_eq!(inner.total_runs, 10);
         assert_eq!(inner.dropped_log_count, 0); // No dropped messages yet

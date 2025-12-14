@@ -21,6 +21,12 @@ use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
 use nix_bench_coordinator::aws::{get_coordinator_public_ip, Ec2Client, IamClient, S3Client};
 use std::time::Duration;
 
+/// Instance type to use for integration tests
+const TEST_INSTANCE_TYPE: &str = "c7a.medium";
+
+/// Timeout for instance operations (5 minutes)
+const INSTANCE_TIMEOUT_SECS: u64 = 300;
+
 /// Full end-to-end test of the benchmark infrastructure
 ///
 /// This test takes ~2-3 minutes and actually spins up real AWS resources.
@@ -31,11 +37,6 @@ async fn test_minimal_benchmark_run() {
     let region = get_test_region();
     let run_id = test_run_id();
     let bucket_name = format!("nix-bench-{}", run_id);
-
-    // Track resources for cleanup
-    let mut instance_id: Option<String> = None;
-    let mut sg_id: Option<String> = None;
-    let mut role_name: Option<String> = None;
 
     // Create clients
     let ec2 = Ec2Client::new(&region)
@@ -70,11 +71,10 @@ async fn test_minimal_benchmark_run() {
 
     // === Step 2: Create IAM role ===
     println!("Creating IAM role...");
-    let (role, _profile) = iam
+    let (role_name, _profile) = iam
         .create_benchmark_role(&run_id, &bucket_name, None)
         .await
         .expect("Should create IAM role");
-    role_name = Some(role.clone());
 
     // === Step 3: Create security group ===
     println!("Creating security group...");
@@ -83,11 +83,10 @@ async fn test_minimal_benchmark_run() {
         .unwrap_or_else(|_| "0.0.0.0".to_string());
     let coordinator_cidr = format!("{}/32", coordinator_ip);
 
-    let sg = ec2
+    let sg_id = ec2
         .create_security_group(&run_id, &coordinator_cidr, None)
         .await
         .expect("Should create security group");
-    sg_id = Some(sg.clone());
 
     // === Step 4: Launch instance ===
     println!("Launching {} instance...", TEST_INSTANCE_TYPE);
@@ -105,13 +104,13 @@ echo "Listener started on port 50051"
 "#;
 
     let launch_config = LaunchInstanceConfig::new(&run_id, TEST_INSTANCE_TYPE, "x86_64-linux", user_data)
-        .with_security_group(&sg)
-        .with_iam_profile(&role);
+        .with_security_group(&sg_id)
+        .with_iam_profile(&role_name);
     let instance = ec2
         .launch_instance(launch_config)
         .await
         .expect("Should launch instance");
-    instance_id = Some(instance.instance_id.clone());
+    let instance_id = instance.instance_id.clone();
     println!("Launched instance: {}", instance.instance_id);
 
     // === Step 5: Wait for running and get dynamic public IP ===
@@ -145,31 +144,25 @@ echo "Listener started on port 50051"
     println!("Cleaning up resources...");
 
     // Terminate instance
-    if let Some(id) = &instance_id {
-        println!("Terminating instance: {}", id);
-        if let Err(e) = ec2.terminate_instance(id).await {
-            eprintln!("Warning: Failed to terminate instance: {}", e);
-        }
-        // Wait for termination before deleting SG
-        let _ = ec2.wait_for_terminated(id).await;
+    println!("Terminating instance: {}", instance_id);
+    if let Err(e) = ec2.terminate_instance(&instance_id).await {
+        eprintln!("Warning: Failed to terminate instance: {}", e);
     }
+    // Wait for termination before deleting SG
+    let _ = ec2.wait_for_terminated(&instance_id).await;
 
     // Delete security group
-    if let Some(sg) = &sg_id {
-        println!("Deleting security group: {}", sg);
-        // May need to wait for instance to fully terminate
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        if let Err(e) = ec2.delete_security_group(sg).await {
-            eprintln!("Warning: Failed to delete security group: {}", e);
-        }
+    println!("Deleting security group: {}", sg_id);
+    // May need to wait for instance to fully terminate
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    if let Err(e) = ec2.delete_security_group(&sg_id).await {
+        eprintln!("Warning: Failed to delete security group: {}", e);
     }
 
     // Delete IAM role
-    if let Some(role) = &role_name {
-        println!("Deleting IAM role: {}", role);
-        if let Err(e) = iam.delete_benchmark_role(role).await {
-            eprintln!("Warning: Failed to delete IAM role: {}", e);
-        }
+    println!("Deleting IAM role: {}", role_name);
+    if let Err(e) = iam.delete_benchmark_role(&role_name).await {
+        eprintln!("Warning: Failed to delete IAM role: {}", e);
     }
 
     // Delete S3 bucket

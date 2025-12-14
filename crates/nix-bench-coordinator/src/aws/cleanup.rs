@@ -88,8 +88,10 @@ impl TagBasedCleanup {
 
         let resources = self.scanner.scan_all(&scan_config).await?;
 
-        let mut report = CleanupReport::default();
-        report.total_found = resources.len();
+        let mut report = CleanupReport {
+            total_found: resources.len(),
+            ..Default::default()
+        };
 
         if resources.is_empty() {
             info!("No orphaned resources found");

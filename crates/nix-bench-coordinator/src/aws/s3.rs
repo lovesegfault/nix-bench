@@ -1,10 +1,13 @@
 //! S3 bucket and object management
 
 use crate::aws::context::AwsContext;
+use crate::aws::error::classify_aws_error;
 use anyhow::{Context, Result};
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use chrono::Utc;
 use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use std::future::Future;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -142,6 +145,8 @@ impl S3Client {
     }
 
     /// Delete a bucket and all its objects
+    ///
+    /// Returns Ok(()) if the bucket was deleted or if it doesn't exist (idempotent for cleanup).
     pub async fn delete_bucket(&self, bucket: &str) -> Result<()> {
         info!(bucket = %bucket, "Deleting bucket and contents");
 
@@ -154,64 +159,97 @@ impl S3Client {
                 request = request.continuation_token(token);
             }
 
-            let response = request.send().await.context("Failed to list objects")?;
+            match request.send().await {
+                Ok(response) => {
+                    for object in response.contents() {
+                        if let Some(key) = object.key() {
+                            debug!(key = %key, "Deleting object");
+                            // Ignore not-found errors for individual objects
+                            if let Err(sdk_error) = self
+                                .client
+                                .delete_object()
+                                .bucket(bucket)
+                                .key(key)
+                                .send()
+                                .await
+                            {
+                                if !classify_aws_error(sdk_error.code(), sdk_error.message())
+                                    .is_not_found()
+                                {
+                                    return Err(anyhow::Error::from(sdk_error)
+                                        .context("Failed to delete object"));
+                                }
+                            }
+                        }
+                    }
 
-            for object in response.contents() {
-                if let Some(key) = object.key() {
-                    debug!(key = %key, "Deleting object");
-                    self.client
-                        .delete_object()
-                        .bucket(bucket)
-                        .key(key)
-                        .send()
-                        .await
-                        .context("Failed to delete object")?;
+                    if response.is_truncated() == Some(true) {
+                        continuation_token =
+                            response.next_continuation_token().map(|s| s.to_string());
+                    } else {
+                        break;
+                    }
                 }
-            }
-
-            if response.is_truncated() == Some(true) {
-                continuation_token = response.next_continuation_token().map(|s| s.to_string());
-            } else {
-                break;
+                Err(sdk_error) => {
+                    // If bucket doesn't exist, we're done
+                    if classify_aws_error(sdk_error.code(), sdk_error.message()).is_not_found() {
+                        debug!(bucket = %bucket, "Bucket already deleted or doesn't exist");
+                        return Ok(());
+                    }
+                    return Err(anyhow::Error::from(sdk_error).context("Failed to list objects"));
+                }
             }
         }
 
         // Delete the bucket itself
-        self.client
-            .delete_bucket()
-            .bucket(bucket)
-            .send()
-            .await
-            .context("Failed to delete bucket")?;
-
-        Ok(())
+        match self.client.delete_bucket().bucket(bucket).send().await {
+            Ok(_) => {
+                info!(bucket = %bucket, "Bucket deleted");
+                Ok(())
+            }
+            Err(sdk_error) => {
+                if classify_aws_error(sdk_error.code(), sdk_error.message()).is_not_found() {
+                    debug!(bucket = %bucket, "Bucket already deleted or doesn't exist");
+                    Ok(())
+                } else {
+                    Err(anyhow::Error::from(sdk_error).context("Failed to delete bucket"))
+                }
+            }
+        }
     }
 }
 
 /// Trait for S3 operations that can be mocked in tests.
-#[allow(async_fn_in_trait)] // Internal use only, Send+Sync bounds on trait are sufficient
-#[cfg_attr(test, mockall::automock)]
 pub trait S3Operations: Send + Sync {
     /// Create a bucket
-    async fn create_bucket(&self, bucket_name: &str) -> Result<()>;
+    fn create_bucket(&self, bucket_name: &str) -> impl Future<Output = Result<()>> + Send;
 
     /// Apply standard nix-bench tags to a bucket
-    async fn tag_bucket(&self, bucket_name: &str, run_id: &str) -> Result<()>;
+    fn tag_bucket(
+        &self,
+        bucket_name: &str,
+        run_id: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Upload a file to S3
-    async fn upload_file(&self, bucket: &str, key: &str, path: &std::path::Path) -> Result<()>;
+    fn upload_file(
+        &self,
+        bucket: &str,
+        key: &str,
+        path: &Path,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Upload bytes to S3
-    async fn upload_bytes(
+    fn upload_bytes(
         &self,
         bucket: &str,
         key: &str,
         data: Vec<u8>,
         content_type: &str,
-    ) -> Result<()>;
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Delete a bucket and all its objects
-    async fn delete_bucket(&self, bucket: &str) -> Result<()>;
+    fn delete_bucket(&self, bucket: &str) -> impl Future<Output = Result<()>> + Send;
 }
 
 impl S3Operations for S3Client {

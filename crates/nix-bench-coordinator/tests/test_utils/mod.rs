@@ -109,11 +109,6 @@ impl GrpcTestFixture {
         }
     }
 
-    /// Get the server address as a string
-    pub fn addr(&self) -> String {
-        format!("127.0.0.1:{}", self.port)
-    }
-
     /// Update the agent status
     pub async fn set_status(&self, new_status: AgentStatus) {
         *self.status.write().await = new_status;

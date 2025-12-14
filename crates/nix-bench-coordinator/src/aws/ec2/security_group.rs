@@ -1,7 +1,9 @@
 //! Security group management
 
 use super::Ec2Client;
+use crate::aws::error::classify_aws_error;
 use anyhow::{Context, Result};
+use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{Filter, IpPermission, IpRange, ResourceType, Tag, TagSpecification};
 use chrono::Utc;
 use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
@@ -116,19 +118,31 @@ impl Ec2Client {
     }
 
     /// Delete a security group
+    ///
+    /// Returns Ok(()) if the security group was deleted or if it doesn't exist (idempotent for cleanup).
     pub async fn delete_security_group(&self, security_group_id: &str) -> Result<()> {
         info!(sg_id = %security_group_id, "Deleting security group");
 
-        self.client
+        match self
+            .client
             .delete_security_group()
             .group_id(security_group_id)
             .send()
             .await
-            .context("Failed to delete security group")?;
-
-        info!(sg_id = %security_group_id, "Security group deleted");
-
-        Ok(())
+        {
+            Ok(_) => {
+                info!(sg_id = %security_group_id, "Security group deleted");
+                Ok(())
+            }
+            Err(sdk_error) => {
+                if classify_aws_error(sdk_error.code(), sdk_error.message()).is_not_found() {
+                    debug!(sg_id = %security_group_id, "Security group already deleted or doesn't exist");
+                    Ok(())
+                } else {
+                    Err(anyhow::Error::from(sdk_error).context("Failed to delete security group"))
+                }
+            }
+        }
     }
 
     /// Add an ingress rule to a security group for gRPC traffic (port 50051)
@@ -169,6 +183,8 @@ impl Ec2Client {
     }
 
     /// Remove an ingress rule from a security group for gRPC traffic (port 50051)
+    ///
+    /// Returns Ok(()) if the rule was removed or if it doesn't exist (idempotent for cleanup).
     pub async fn remove_grpc_ingress_rule(
         &self,
         security_group_id: &str,
@@ -187,16 +203,30 @@ impl Ec2Client {
             .ip_ranges(IpRange::builder().cidr_ip(cidr_ip).build())
             .build();
 
-        self.client
+        match self
+            .client
             .revoke_security_group_ingress()
             .group_id(security_group_id)
             .ip_permissions(ip_permission)
             .send()
             .await
-            .context("Failed to remove gRPC ingress rule")?;
-
-        debug!(security_group_id = %security_group_id, "Successfully removed gRPC ingress rule");
-
-        Ok(())
+        {
+            Ok(_) => {
+                debug!(security_group_id = %security_group_id, "Successfully removed gRPC ingress rule");
+                Ok(())
+            }
+            Err(sdk_error) => {
+                if classify_aws_error(sdk_error.code(), sdk_error.message()).is_not_found() {
+                    debug!(
+                        security_group_id = %security_group_id,
+                        cidr_ip = %cidr_ip,
+                        "Security group rule already removed or doesn't exist"
+                    );
+                    Ok(())
+                } else {
+                    Err(anyhow::Error::from(sdk_error).context("Failed to remove gRPC ingress rule"))
+                }
+            }
+        }
     }
 }

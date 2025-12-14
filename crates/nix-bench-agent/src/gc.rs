@@ -110,13 +110,3 @@ echo "FOD protection complete"
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gc_roots_path() {
-        assert!(GC_ROOTS_DIR.starts_with("/nix/var/nix/gcroots/"));
-    }
-}

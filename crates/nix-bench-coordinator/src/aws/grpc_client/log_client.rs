@@ -1,8 +1,10 @@
 //! gRPC log streaming client
 
-use super::channel::{jittered_delay, ChannelOptions, GrpcChannelBuilder};
+use super::channel::{ChannelOptions, GrpcChannelBuilder};
 use crate::tui::TuiMessage;
+use crate::wait::{wait_for_resource, WaitConfig};
 use anyhow::{Context, Result};
+use backon::{ExponentialBuilder, Retryable};
 use nix_bench_common::TlsConfig;
 use nix_bench_proto::{LogStreamClient, StatusRequest, StreamLogsRequest};
 use std::time::Duration;
@@ -49,65 +51,58 @@ impl GrpcLogClient {
         GrpcChannelBuilder::new(&self.public_ip, self.port, &self.tls_config)
     }
 
-    /// Connect to the agent with retry logic
+    /// Connect to the agent with retry logic using exponential backoff
     pub async fn connect_with_retry(
         &self,
         max_retries: u32,
         initial_delay: Duration,
     ) -> Result<LogStreamClient<Channel>> {
-        let mut delay = initial_delay;
-        let mut attempts = 0;
+        let endpoint = self.channel_builder().endpoint().to_string();
+        let instance_type = self.instance_type.clone();
 
-        loop {
-            attempts += 1;
+        let channel = (|| async {
             let builder = self.channel_builder();
-            let endpoint = builder.endpoint().to_string();
-
             debug!(
-                instance_type = %self.instance_type,
+                instance_type = %instance_type,
                 endpoint = %endpoint,
-                attempt = attempts,
                 tls = true,
                 "Attempting gRPC connection"
             );
+            builder.connect().await
+        })
+        .retry(
+            ExponentialBuilder::default()
+                .with_min_delay(initial_delay)
+                .with_max_delay(Duration::from_secs(30))
+                .with_max_times(max_retries as usize),
+        )
+        .notify(|e, dur| {
+            debug!(
+                instance_type = %instance_type,
+                endpoint = %endpoint,
+                error = %e,
+                delay = ?dur,
+                "gRPC connection failed, retrying"
+            );
+        })
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to connect to {} after {} attempts: {}",
+                endpoint,
+                max_retries,
+                e
+            )
+        })?;
 
-            match builder.connect().await {
-                Ok(channel) => {
-                    info!(
-                        instance_type = %self.instance_type,
-                        endpoint = %endpoint,
-                        tls = true,
-                        "gRPC connection established"
-                    );
-                    return Ok(LogStreamClient::new(channel));
-                }
-                Err(e) => {
-                    if attempts >= max_retries {
-                        return Err(anyhow::anyhow!(
-                            "Failed to connect to {} after {} attempts: {}",
-                            endpoint,
-                            attempts,
-                            e
-                        ));
-                    }
+        info!(
+            instance_type = %self.instance_type,
+            endpoint = %endpoint,
+            tls = true,
+            "gRPC connection established"
+        );
 
-                    let jittered = jittered_delay(delay);
-
-                    debug!(
-                        instance_type = %self.instance_type,
-                        endpoint = %endpoint,
-                        attempt = attempts,
-                        max_retries = max_retries,
-                        error = %e,
-                        delay_ms = jittered.as_millis(),
-                        "gRPC connection failed, retrying"
-                    );
-
-                    tokio::time::sleep(jittered).await;
-                    delay = (delay * 2).min(Duration::from_secs(30));
-                }
-            }
-        }
+        Ok(LogStreamClient::new(channel))
     }
 
     /// Wait for the agent to be ready by polling the GetStatus RPC
@@ -120,62 +115,62 @@ impl GrpcLogClient {
             "Waiting for agent to be ready"
         );
 
+        // Initial delay before starting to poll
         tokio::time::sleep(initial_delay).await;
 
-        let start = std::time::Instant::now();
-        let mut delay = Duration::from_secs(5);
-        let max_delay = Duration::from_secs(30);
+        let config = WaitConfig {
+            initial_delay: Duration::from_secs(5),
+            max_delay: Duration::from_secs(30),
+            timeout: max_wait,
+            jitter: 0.25,
+        };
 
-        loop {
-            if start.elapsed() > max_wait {
-                return Err(anyhow::anyhow!(
-                    "Agent {} not ready after {:?}",
-                    self.instance_type,
-                    max_wait
-                ));
-            }
+        wait_for_resource(
+            config,
+            None,
+            || async {
+                let builder = self
+                    .channel_builder()
+                    .with_options(ChannelOptions::for_readiness());
 
-            let builder = self
-                .channel_builder()
-                .with_options(ChannelOptions::for_readiness());
-
-            match builder.connect().await {
-                Ok(channel) => {
-                    let mut client = LogStreamClient::new(channel);
-                    match client.get_status(StatusRequest {}).await {
-                        Ok(response) => {
-                            let status = response.into_inner();
-                            info!(
-                                instance_type = %self.instance_type,
-                                status = %status.status,
-                                run_progress = status.run_progress,
-                                total_runs = status.total_runs,
-                                "Agent is ready"
-                            );
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            debug!(
-                                instance_type = %self.instance_type,
-                                error = %e,
-                                "GetStatus failed, agent not ready yet"
-                            );
+                match builder.connect().await {
+                    Ok(channel) => {
+                        let mut client = LogStreamClient::new(channel);
+                        match client.get_status(StatusRequest {}).await {
+                            Ok(response) => {
+                                let status = response.into_inner();
+                                info!(
+                                    instance_type = %self.instance_type,
+                                    status_code = status.status_code,
+                                    run_progress = status.run_progress,
+                                    total_runs = status.total_runs,
+                                    "Agent is ready"
+                                );
+                                Ok(true) // Ready
+                            }
+                            Err(e) => {
+                                debug!(
+                                    instance_type = %self.instance_type,
+                                    error = %e,
+                                    "GetStatus failed, agent not ready yet"
+                                );
+                                Ok(false) // Not ready, keep waiting
+                            }
                         }
                     }
+                    Err(e) => {
+                        debug!(
+                            instance_type = %self.instance_type,
+                            error = %e,
+                            "Connection failed, agent not ready yet"
+                        );
+                        Ok(false) // Not ready, keep waiting
+                    }
                 }
-                Err(e) => {
-                    debug!(
-                        instance_type = %self.instance_type,
-                        error = %e,
-                        elapsed_secs = start.elapsed().as_secs(),
-                        "Connection failed, agent not ready yet"
-                    );
-                }
-            }
-
-            tokio::time::sleep(jittered_delay(delay)).await;
-            delay = (delay * 2).min(max_delay);
-        }
+            },
+            &format!("agent {} readiness", self.instance_type),
+        )
+        .await
     }
 
     /// Full RPC health check
@@ -210,7 +205,7 @@ impl GrpcLogClient {
         let status = result.into_inner();
         debug!(
             instance_type = %self.instance_type,
-            status = %status.status,
+            status_code = status.status_code,
             run_progress = status.run_progress,
             total_runs = status.total_runs,
             elapsed_ms = start.elapsed().as_millis(),

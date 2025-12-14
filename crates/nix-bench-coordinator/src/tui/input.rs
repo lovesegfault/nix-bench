@@ -189,18 +189,3 @@ impl KeyHandler {
         KeyResult::Handled
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Basic tests for the key handler
-    // Full integration tests would require setting up App state
-
-    #[test]
-    fn test_key_result_variants() {
-        assert_eq!(KeyResult::Handled, KeyResult::Handled);
-        assert_ne!(KeyResult::Handled, KeyResult::Cancel);
-        assert_ne!(KeyResult::Handled, KeyResult::Unhandled);
-    }
-}

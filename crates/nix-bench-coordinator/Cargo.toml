@@ -77,7 +77,5 @@ backon.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-proptest.workspace = true
-mockall = "0.13"
 # Integration tests require the agent crate
 nix-bench-agent = { path = "../nix-bench-agent" }

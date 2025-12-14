@@ -1,7 +1,7 @@
 //! gRPC status polling
 
 use super::channel::{ChannelOptions, GrpcChannelBuilder};
-use nix_bench_common::{RunResult, TlsConfig};
+use nix_bench_common::{RunResult, StatusCode, TlsConfig};
 use nix_bench_proto::LogStreamClient;
 use std::collections::HashMap;
 use tracing::debug;
@@ -9,8 +9,8 @@ use tracing::debug;
 /// Instance status from gRPC GetStatus RPC
 #[derive(Debug, Clone, Default)]
 pub struct GrpcInstanceStatus {
-    /// Status: 1=running, 2=complete, -1=failed
-    pub status: Option<i32>,
+    /// Status code from proto enum
+    pub status: Option<StatusCode>,
     /// Current run progress (completed runs)
     pub run_progress: Option<u32>,
     /// Total number of runs
@@ -76,11 +76,8 @@ impl GrpcStatusPoller {
             {
                 Ok(response) => {
                     let status = response.into_inner();
-                    let status_code = if status.status_code != 0 {
-                        Some(status.status_code)
-                    } else {
-                        nix_bench_common::StatusCode::parse(&status.status).map(|c| c.as_i32())
-                    };
+                    // Convert proto enum i32 to StatusCode
+                    let status_code = StatusCode::from_i32(status.status_code);
 
                     let run_results: Vec<RunResult> = status
                         .run_results

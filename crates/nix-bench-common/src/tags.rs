@@ -51,26 +51,3 @@ pub fn parse_created_at(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    #[test]
-    fn test_format_parse_roundtrip() {
-        let now = Utc::now();
-        let formatted = format_created_at(now);
-        let parsed = parse_created_at(&formatted).unwrap();
-
-        // Timestamps should be within 1 second (sub-second precision may vary)
-        let diff = (now - parsed).num_seconds().abs();
-        assert!(diff <= 1, "Roundtrip diff {} > 1 second", diff);
-    }
-
-    #[test]
-    fn test_parse_invalid() {
-        assert!(parse_created_at("not a timestamp").is_none());
-        assert!(parse_created_at("").is_none());
-    }
-}

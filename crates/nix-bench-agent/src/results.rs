@@ -114,23 +114,3 @@ async fn download_config_raw(
 
     Ok(config)
 }
-
-#[cfg(test)]
-mod tests {
-    /// Format S3 config key path (test-only helper)
-    fn config_key(run_id: &str, instance_type: &str) -> String {
-        format!("{}/config-{}.json", run_id, instance_type)
-    }
-
-    #[test]
-    fn test_config_key_format() {
-        assert_eq!(
-            config_key("run-123", "c6i.xlarge"),
-            "run-123/config-c6i.xlarge.json"
-        );
-        assert_eq!(
-            config_key("abc-def-ghi", "g4dn.xlarge"),
-            "abc-def-ghi/config-g4dn.xlarge.json"
-        );
-    }
-}

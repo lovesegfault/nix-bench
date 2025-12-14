@@ -3,14 +3,11 @@
 //! This module provides logging that streams directly to gRPC clients,
 //! with no CloudWatch dependencies.
 
+use crate::command::{run_command_streaming, CommandConfig};
 use crate::grpc::LogBroadcaster;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use nix_bench_common::timestamp_millis;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
-use tracing::{info, warn};
 
 /// gRPC-only logger for streaming output to connected clients
 pub struct GrpcLogger {
@@ -45,106 +42,11 @@ impl GrpcLogger {
         args: &[&str],
         timeout_secs: Option<u64>,
     ) -> Result<bool> {
-        // Default timeout: 2 hours
-        let timeout = Duration::from_secs(timeout_secs.unwrap_or(7200));
-        info!(
-            cmd = %cmd,
-            timeout_secs = timeout.as_secs(),
-            "Starting command with timeout"
-        );
-
-        let mut child = Command::new(cmd)
-            .args(args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .context("Failed to spawn command")?;
-
-        let stdout = child
-            .stdout
-            .take()
-            .context("Failed to capture stdout - was Stdio::piped() used?")?;
-        let stderr = child
-            .stderr
-            .take()
-            .context("Failed to capture stderr - was Stdio::piped() used?")?;
-
-        let broadcaster_stdout = self.broadcaster.clone();
-        let broadcaster_stderr = self.broadcaster.clone();
-
-        // Stream stdout
-        let stdout_handle = tokio::spawn(async move {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                broadcaster_stdout.broadcast(timestamp_millis(), line);
-            }
-        });
-
-        // Stream stderr
-        let stderr_handle = tokio::spawn(async move {
-            let reader = BufReader::new(stderr);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                broadcaster_stderr.broadcast(timestamp_millis(), line);
-            }
-        });
-
-        // Wait for command to complete with timeout
-        let wait_result = tokio::time::timeout(timeout, child.wait()).await;
-
-        // Handle timeout or completion
-        let success = match wait_result {
-            Ok(Ok(status)) => {
-                // Command completed normally
-                status.success()
-            }
-            Ok(Err(e)) => {
-                // Error waiting for child
-                return Err(e).context("Failed waiting for command");
-            }
-            Err(_) => {
-                // Timeout - kill the child process
-                warn!(
-                    cmd = %cmd,
-                    timeout_secs = timeout.as_secs(),
-                    "Command timed out, killing process"
-                );
-                if let Err(e) = child.kill().await {
-                    warn!(error = %e, "Failed to kill timed-out process");
-                }
-                // Give streaming tasks a moment to flush remaining output
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                return Err(anyhow::anyhow!(
-                    "Command '{}' timed out after {}s",
-                    cmd,
-                    timeout.as_secs()
-                ));
-            }
+        let config = match timeout_secs {
+            Some(secs) => CommandConfig::with_timeout_secs(secs),
+            None => CommandConfig::for_benchmark(), // Default 2 hours
         };
-
-        // Wait for log streaming to finish (with a short timeout to avoid blocking forever)
-        let stream_timeout = Duration::from_secs(5);
-
-        match tokio::time::timeout(stream_timeout, stdout_handle).await {
-            Err(_) => warn!("Timed out waiting for stdout streaming to finish"),
-            Ok(Err(e)) if e.is_panic() => {
-                warn!("Stdout streaming task panicked: {:?}", e);
-            }
-            Ok(Err(e)) => warn!(error = ?e, "Stdout streaming task failed"),
-            Ok(Ok(())) => {}
-        }
-
-        match tokio::time::timeout(stream_timeout, stderr_handle).await {
-            Err(_) => warn!("Timed out waiting for stderr streaming to finish"),
-            Ok(Err(e)) if e.is_panic() => {
-                warn!("Stderr streaming task panicked: {:?}", e);
-            }
-            Ok(Err(e)) => warn!(error = ?e, "Stderr streaming task failed"),
-            Ok(Ok(())) => {}
-        }
-
-        Ok(success)
+        run_command_streaming(&self.broadcaster, cmd, args, &config).await
     }
 }
 

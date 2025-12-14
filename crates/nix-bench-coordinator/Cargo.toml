@@ -1,0 +1,82 @@
+[package]
+name = "nix-bench-coordinator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TUI-based EC2 orchestrator for nix-bench benchmarks"
+
+[[bin]]
+name = "nix-bench-coordinator"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+nix-bench-proto = { path = "../nix-bench-proto" }
+nix-bench-common = { path = "../nix-bench-common", features = ["tonic-tls"] }
+
+# Core async runtime
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+
+# AWS SDK (full set for coordinator)
+aws-config.workspace = true
+aws-sdk-cloudwatch.workspace = true
+aws-sdk-cloudwatchlogs.workspace = true
+aws-sdk-s3.workspace = true
+aws-sdk-ec2.workspace = true
+aws-sdk-iam.workspace = true
+aws-sdk-sts.workspace = true
+
+# gRPC client
+tonic.workspace = true
+async-stream.workspace = true
+
+# TUI
+ratatui.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+tui-logger.workspace = true
+throbber-widgets-tui.workspace = true
+tui-scrollview.workspace = true
+unicode-width.workspace = true
+unicode-truncate.workspace = true
+log.workspace = true
+
+# CLI
+clap.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# State persistence
+sqlx.workspace = true
+directories.workspace = true
+comfy-table.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Utilities
+chrono.workspace = true
+uuid.workspace = true
+base64.workspace = true
+reqwest.workspace = true
+rand.workspace = true
+
+# TLS crypto provider
+rustls.workspace = true
+
+# Retry with exponential backoff
+backon.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

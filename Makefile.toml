@@ -1,4 +1,4 @@
-# cargo-make configuration for nix-bench
+# cargo-make configuration for nix-bench workspace
 # Run tasks with: cargo make <task>
 
 [config]
@@ -13,8 +13,7 @@ description = "Build agents for x86_64 and aarch64 (statically linked with musl)
 command = "cargo"
 args = [
     "build",
-    "--features", "agent",
-    "--bin", "nix-bench-agent",
+    "-p", "nix-bench-agent",
     "--release",
     "--target", "x86_64-unknown-linux-musl",
     "--target", "aarch64-unknown-linux-musl",
@@ -25,8 +24,7 @@ description = "Build agent for x86_64 only"
 command = "cargo"
 args = [
     "build",
-    "--features", "agent",
-    "--bin", "nix-bench-agent",
+    "-p", "nix-bench-agent",
     "--release",
     "--target", "x86_64-unknown-linux-musl",
 ]
@@ -36,8 +34,7 @@ description = "Build agent for aarch64 only"
 command = "cargo"
 args = [
     "build",
-    "--features", "agent",
-    "--bin", "nix-bench-agent",
+    "-p", "nix-bench-agent",
     "--release",
     "--target", "aarch64-unknown-linux-musl",
 ]
@@ -51,28 +48,26 @@ description = "Build coordinator in release mode"
 command = "cargo"
 args = [
     "build",
-    "--features", "coordinator",
-    "--bin", "nix-bench-coordinator",
+    "-p", "nix-bench-coordinator",
     "--release",
 ]
 
 [tasks.b]
-description = "Build agents then coordinator (release)"
-dependencies = ["agent"]
-run_task = "build-coordinator"
+description = "Build agents (musl) and coordinator in parallel"
+run_task = { name = ["agent", "build-coordinator"], parallel = true }
 
 [tasks.build]
-description = "Build agents then coordinator (release)"
+description = "Build agents and coordinator in parallel"
 alias = "b"
 
 [tasks.run-coordinator]
 description = "Run coordinator (pass args after --)"
 command = "cargo"
-args = ["run", "--features", "coordinator", "--bin", "nix-bench-coordinator", "--release"]
+args = ["run", "-p", "nix-bench-coordinator", "--release", "--"]
 
 [tasks.r]
-description = "Build agents then run coordinator with 'run' subcommand"
-dependencies = ["agent", "build-coordinator"]
+description = "Build agents and coordinator, then run with 'run' subcommand"
+dependencies = ["b"]
 command = "./target/release/nix-bench-coordinator"
 args = ["run", "${@}"]
 
@@ -132,6 +127,21 @@ args = ["nextest", "run", "--run-ignored", "all"]
 description = "Run all tests including AWS integration"
 alias = "ta"
 
+[tasks.t-agent]
+description = "Run agent tests only"
+command = "cargo"
+args = ["nextest", "run", "-p", "nix-bench-agent"]
+
+[tasks.t-coordinator]
+description = "Run coordinator tests only"
+command = "cargo"
+args = ["nextest", "run", "-p", "nix-bench-coordinator"]
+
+[tasks.t-common]
+description = "Run common crate tests only"
+command = "cargo"
+args = ["nextest", "run", "-p", "nix-bench-common"]
+
 # ============================================================================
 # Check/Lint Tasks
 # ============================================================================
@@ -159,7 +169,7 @@ alias = "cl"
 [tasks.build-coordinator-debug]
 description = "Build coordinator in debug mode"
 command = "cargo"
-args = ["build", "--features", "coordinator", "--bin", "nix-bench-coordinator"]
+args = ["build", "-p", "nix-bench-coordinator"]
 
 [tasks.dev]
 description = "Build agents then run coordinator in dev mode (debug build)"

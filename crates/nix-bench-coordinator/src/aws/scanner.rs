@@ -76,17 +76,19 @@ impl ResourceScanner {
         let mut resources = Vec::new();
 
         // Scan in parallel
-        let (ec2, sg, s3, iam) = tokio::join!(
+        let (ec2, sg, s3, iam_roles, iam_profiles) = tokio::join!(
             self.scan_ec2_instances(config),
             self.scan_security_groups(config),
             self.scan_s3_buckets(config),
-            self.scan_iam_resources(config),
+            self.scan_iam_roles(config),
+            self.scan_iam_instance_profiles(config),
         );
 
         resources.extend(ec2?);
         resources.extend(sg?);
         resources.extend(s3?);
-        resources.extend(iam?);
+        resources.extend(iam_roles?);
+        resources.extend(iam_profiles?);
 
         Ok(resources)
     }
@@ -216,6 +218,10 @@ impl ResourceScanner {
     }
 
     /// Scan S3 buckets by listing and checking tags
+    ///
+    /// This method handles two cases:
+    /// 1. Properly tagged buckets: identified by `nix-bench:tool` tag
+    /// 2. Orphaned untagged buckets: have `nix-bench-` prefix but no tags (e.g., crash between create and tag)
     pub async fn scan_s3_buckets(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
         let client = self.ctx.s3_client();
 
@@ -234,89 +240,275 @@ impl ResourceScanner {
                 continue;
             }
 
-            // Get bucket tags
+            // Get bucket tags - handle both tagged and untagged cases
             let tags_result = client.get_bucket_tagging().bucket(bucket_name).send().await;
 
-            let tags = match tags_result {
-                Ok(resp) => extract_s3_tags(resp.tag_set()),
-                Err(_) => continue, // No tags or access denied
+            let (tags, is_untagged_orphan) = match tags_result {
+                Ok(resp) => (extract_s3_tags(resp.tag_set()), false),
+                Err(_) => {
+                    // Bucket has nix-bench- prefix but no tags = likely orphaned
+                    // Include it so it can be cleaned up
+                    debug!(bucket = %bucket_name, "Found untagged bucket with nix-bench- prefix");
+                    (HashMap::new(), true)
+                }
             };
 
-            // Check if this is a nix-bench bucket
-            if tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
+            // For tagged buckets, verify the tool tag
+            if !is_untagged_orphan && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
                 continue;
             }
 
-            if !self.should_include(&tags, config, now) {
+            // For age filtering on untagged buckets, use the bucket creation date
+            let created_at = if is_untagged_orphan {
+                bucket
+                    .creation_date()
+                    .and_then(|dt| DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
+                    .unwrap_or_else(Utc::now)
+            } else {
+                parse_created_at(&tags)
+            };
+
+            // Apply age filter for untagged buckets
+            if is_untagged_orphan {
+                let age = now - created_at;
+                if age < config.min_age {
+                    debug!(bucket = %bucket_name, age_mins = age.num_minutes(), "Skipping untagged bucket in grace period");
+                    continue;
+                }
+            } else if !self.should_include(&tags, config, now) {
                 continue;
             }
 
-            if let Some(run_id) = tags.get(TAG_RUN_ID) {
-                resources.push(DiscoveredResource {
-                    resource_type: ResourceKind::S3Bucket,
-                    resource_id: bucket_name.to_string(),
-                    region: self.region.clone(),
-                    run_id: run_id.clone(),
-                    created_at: parse_created_at(&tags),
-                    status: tags.get(TAG_STATUS).cloned().unwrap_or_default(),
-                    tags,
-                });
-            }
+            // Extract run_id: from tags if available, otherwise from bucket name
+            // Bucket name format: nix-bench-{run_id}
+            let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
+                rid.clone()
+            } else {
+                // Extract run_id from bucket name: "nix-bench-{run_id}" -> "{run_id}"
+                bucket_name.strip_prefix("nix-bench-").unwrap_or("unknown").to_string()
+            };
+
+            let status = if is_untagged_orphan {
+                "orphaned".to_string()
+            } else {
+                tags.get(TAG_STATUS).cloned().unwrap_or_default()
+            };
+
+            resources.push(DiscoveredResource {
+                resource_type: ResourceKind::S3Bucket,
+                resource_id: bucket_name.to_string(),
+                region: self.region.clone(),
+                run_id,
+                created_at,
+                status,
+                tags,
+            });
         }
 
         debug!(count = resources.len(), "Found S3 buckets");
         Ok(resources)
     }
 
-    /// Scan IAM roles and instance profiles by tag
-    pub async fn scan_iam_resources(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
+    /// Scan IAM roles by tag
+    pub async fn scan_iam_roles(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
         let client = self.ctx.iam_client();
 
-        // List roles
-        let roles_response = client.list_roles().send().await?;
-
+        // List roles - handle pagination for large accounts
         let mut resources = Vec::new();
         let now = Utc::now();
+        let mut marker: Option<String> = None;
 
-        for role in roles_response.roles() {
-            let role_name = role.role_name();
-
-            // Quick filter: nix-bench roles start with "nix-bench-agent-"
-            if !role_name.starts_with("nix-bench-agent-") {
-                continue;
+        loop {
+            let mut request = client.list_roles();
+            if let Some(m) = &marker {
+                request = request.marker(m);
             }
 
-            // Get role tags
-            let tags_result = client.list_role_tags().role_name(role_name).send().await;
+            let roles_response = request.send().await?;
 
-            let tags = match tags_result {
-                Ok(resp) => extract_iam_tags(resp.tags()),
-                Err(_) => continue,
-            };
+            for role in roles_response.roles() {
+                let role_name = role.role_name();
 
-            // Check if this is a nix-bench role
-            if tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
-                continue;
-            }
+                // Quick filter: nix-bench roles start with "nix-bench-agent-"
+                if !role_name.starts_with("nix-bench-agent-") {
+                    continue;
+                }
 
-            if !self.should_include(&tags, config, now) {
-                continue;
-            }
+                // Get role tags
+                let tags_result = client.list_role_tags().role_name(role_name).send().await;
 
-            if let Some(run_id) = tags.get(TAG_RUN_ID) {
+                let (tags, is_untagged) = match tags_result {
+                    Ok(resp) => (extract_iam_tags(resp.tags()), false),
+                    Err(_) => {
+                        // Role has prefix but no tags or access denied
+                        debug!(role = %role_name, "Found role with prefix but couldn't get tags");
+                        (HashMap::new(), true)
+                    }
+                };
+
+                // For tagged roles, verify the tool tag
+                if !is_untagged && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
+                    continue;
+                }
+
+                // For untagged roles with the prefix, include them as orphans
+                let created_at = if is_untagged {
+                    let dt = role.create_date();
+                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
+                        .unwrap_or_else(Utc::now)
+                } else {
+                    parse_created_at(&tags)
+                };
+
+                if is_untagged {
+                    let age = now - created_at;
+                    if age < config.min_age {
+                        continue;
+                    }
+                } else if !self.should_include(&tags, config, now) {
+                    continue;
+                }
+
+                // Extract run_id from tags or role name
+                // Role name format: nix-bench-agent-{truncated_run_id}
+                let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
+                    rid.clone()
+                } else {
+                    role_name.strip_prefix("nix-bench-agent-").unwrap_or("unknown").to_string()
+                };
+
+                let status = if is_untagged {
+                    "orphaned".to_string()
+                } else {
+                    tags.get(TAG_STATUS).cloned().unwrap_or_default()
+                };
+
                 resources.push(DiscoveredResource {
                     resource_type: ResourceKind::IamRole,
                     resource_id: role_name.to_string(),
                     region: self.region.clone(),
-                    run_id: run_id.clone(),
-                    created_at: parse_created_at(&tags),
-                    status: tags.get(TAG_STATUS).cloned().unwrap_or_default(),
+                    run_id,
+                    created_at,
+                    status,
                     tags,
                 });
+            }
+
+            // Handle pagination
+            if roles_response.is_truncated() {
+                marker = roles_response.marker().map(|s| s.to_string());
+            } else {
+                break;
             }
         }
 
         debug!(count = resources.len(), "Found IAM roles");
+        Ok(resources)
+    }
+
+    /// Scan IAM instance profiles by tag
+    ///
+    /// This catches orphaned instance profiles that may exist without their paired role
+    /// (e.g., if role deletion succeeded but profile deletion failed).
+    pub async fn scan_iam_instance_profiles(
+        &self,
+        config: &ScanConfig,
+    ) -> Result<Vec<DiscoveredResource>> {
+        let client = self.ctx.iam_client();
+
+        let mut resources = Vec::new();
+        let now = Utc::now();
+        let mut marker: Option<String> = None;
+
+        loop {
+            let mut request = client.list_instance_profiles();
+            if let Some(m) = &marker {
+                request = request.marker(m);
+            }
+
+            let profiles_response = request.send().await?;
+
+            for profile in profiles_response.instance_profiles() {
+                let profile_name = profile.instance_profile_name();
+
+                // Quick filter: nix-bench profiles start with "nix-bench-agent-"
+                if !profile_name.starts_with("nix-bench-agent-") {
+                    continue;
+                }
+
+                // Get profile tags
+                let tags_result = client
+                    .list_instance_profile_tags()
+                    .instance_profile_name(profile_name)
+                    .send()
+                    .await;
+
+                let (tags, is_untagged) = match tags_result {
+                    Ok(resp) => (extract_iam_tags(resp.tags()), false),
+                    Err(_) => {
+                        debug!(profile = %profile_name, "Found profile with prefix but couldn't get tags");
+                        (HashMap::new(), true)
+                    }
+                };
+
+                // For tagged profiles, verify the tool tag
+                if !is_untagged && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
+                    continue;
+                }
+
+                let created_at = if is_untagged {
+                    let dt = profile.create_date();
+                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
+                        .unwrap_or_else(Utc::now)
+                } else {
+                    parse_created_at(&tags)
+                };
+
+                if is_untagged {
+                    let age = now - created_at;
+                    if age < config.min_age {
+                        continue;
+                    }
+                } else if !self.should_include(&tags, config, now) {
+                    continue;
+                }
+
+                // Extract run_id from tags or profile name
+                let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
+                    rid.clone()
+                } else {
+                    profile_name
+                        .strip_prefix("nix-bench-agent-")
+                        .unwrap_or("unknown")
+                        .to_string()
+                };
+
+                let status = if is_untagged {
+                    "orphaned".to_string()
+                } else {
+                    tags.get(TAG_STATUS).cloned().unwrap_or_default()
+                };
+
+                resources.push(DiscoveredResource {
+                    resource_type: ResourceKind::IamInstanceProfile,
+                    resource_id: profile_name.to_string(),
+                    region: self.region.clone(),
+                    run_id,
+                    created_at,
+                    status,
+                    tags,
+                });
+            }
+
+            // Handle pagination
+            if profiles_response.is_truncated() {
+                marker = profiles_response.marker().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+
+        debug!(count = resources.len(), "Found IAM instance profiles");
         Ok(resources)
     }
 

@@ -2,24 +2,45 @@
 //!
 //! Provides `BenchmarkInitializer` for setting up AWS resources needed for
 //! benchmark runs, with progress reporting through the `InitProgressReporter` trait.
+//!
+//! Resources are recorded to the database immediately after creation to minimize
+//! the window where orphaned resources could exist.
 
 use super::progress::{InitProgressReporter, InstanceUpdate};
 use super::types::{InstanceState, InstanceStatus};
+use crate::aws::context::AwsContext;
 use crate::aws::ec2::LaunchInstanceConfig;
+use crate::aws::resource_guard::{
+    create_cleanup_system, Ec2InstanceGuard, IamRoleGuard, ResourceGuardBuilder, S3BucketGuard,
+    SecurityGroupGuard, SecurityGroupRuleGuard,
+};
 use crate::aws::{
     get_coordinator_public_ip, get_current_account_id, AccountId, Ec2Client, IamClient, S3Client,
 };
-use crate::aws::context::AwsContext;
 use crate::config::{detect_system, AgentConfig, RunConfig};
 use crate::state::{self, DbPool, ResourceType};
-use nix_bench_common::tls::{generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig};
 use crate::tui::{InitPhase, LogBuffer};
 use anyhow::{Context, Result};
+use nix_bench_common::tls::{
+    generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig,
+};
 use std::collections::HashMap;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// Map of instance_type -> (ca_cert_pem, agent_cert_pem, agent_key_pem)
 type AgentCertificateMap = HashMap<String, (String, String, String)>;
+
+/// Services and state needed during initialization
+///
+/// Bundles together the AWS clients, database, and resource guards to simplify
+/// passing them between initialization helper methods.
+struct InitServices<'a> {
+    ec2: &'a Ec2Client,
+    db: &'a DbPool,
+    account_id: &'a AccountId,
+    builder: &'a ResourceGuardBuilder,
+    guards: &'a mut ResourceGuards,
+}
 
 /// Context holding all resources created during initialization
 pub struct InitContext {
@@ -79,7 +100,7 @@ impl<'a> BenchmarkInitializer<'a> {
         reporter.report_run_info(&self.run_id, &self.bucket_name);
         info!(run_id = %self.run_id, bucket = %self.bucket_name, "Starting benchmark run");
 
-        // Phase 1: AWS setup
+        // Phase 1: AWS setup and open database early for incremental recording
         let aws = AwsContext::new(&self.config.region).await;
         let account_id = get_current_account_id(aws.sdk_config()).await?;
         info!(account_id = %account_id, "AWS account validated");
@@ -88,13 +109,47 @@ impl<'a> BenchmarkInitializer<'a> {
         let ec2 = Ec2Client::from_context(&aws);
         let s3 = S3Client::from_context(&aws);
 
+        // Open database early so we can record resources immediately after creation
+        let db = state::open_db().await?;
+
+        // Create the cleanup system for RAII resource protection
+        let (registry, executor) = create_cleanup_system();
+        let executor_handle = tokio::spawn(executor.run());
+        let builder = ResourceGuardBuilder::new(registry.clone(), &self.run_id, &self.config.region);
+
+        // Track all guards so they aren't dropped until we're done
+        let mut guards = ResourceGuards::default();
+
+        // Create run record first
+        state::insert_run(
+            &db,
+            &self.run_id,
+            &account_id,
+            &self.config.region,
+            &self.config.instance_types,
+            &self.config.attr,
+        )
+        .await?;
+
         // Phase 2: Create S3 bucket and apply tags
         reporter.report_phase(InitPhase::CreatingBucket);
         s3.create_bucket(&self.bucket_name).await?;
         s3.tag_bucket(&self.bucket_name, &self.run_id).await?;
+        // Immediately record to DB, then create guard
+        state::insert_resource(
+            &db,
+            &self.run_id,
+            &account_id,
+            ResourceType::S3Bucket,
+            &self.bucket_name,
+            &self.config.region,
+        )
+        .await?;
+        guards.s3_bucket = Some(builder.s3_bucket(self.bucket_name.clone()));
+        debug!(bucket = %self.bucket_name, "S3 bucket created and recorded");
 
         // Phase 3: Create IAM role/profile if needed
-        let (instance_profile_name, iam_role_name) = if self.config.instance_profile.is_some() {
+        let (instance_profile_name, _iam_role_name) = if self.config.instance_profile.is_some() {
             (self.config.instance_profile.clone(), None)
         } else {
             reporter.report_phase(InitPhase::CreatingIamRole);
@@ -102,6 +157,28 @@ impl<'a> BenchmarkInitializer<'a> {
             let (role_name, profile_name) = iam
                 .create_benchmark_role(&self.run_id, &self.bucket_name, None)
                 .await?;
+            // Immediately record both to DB
+            state::insert_resource(
+                &db,
+                &self.run_id,
+                &account_id,
+                ResourceType::IamRole,
+                &role_name,
+                &self.config.region,
+            )
+            .await?;
+            state::insert_resource(
+                &db,
+                &self.run_id,
+                &account_id,
+                ResourceType::IamInstanceProfile,
+                &profile_name,
+                &self.config.region,
+            )
+            .await?;
+            guards.iam_role =
+                Some(builder.iam_role(role_name.clone(), profile_name.clone()));
+            debug!(role = %role_name, profile = %profile_name, "IAM role/profile created and recorded");
             (Some(profile_name), Some(role_name))
         };
 
@@ -110,12 +187,25 @@ impl<'a> BenchmarkInitializer<'a> {
         self.upload_agents(&s3).await?;
 
         // Phase 5: Setup security group
-        let (security_group_id, coordinator_ip, sg_rule_id) = self.setup_security_group(&ec2).await?;
+        let mut services = InitServices {
+            ec2: &ec2,
+            db: &db,
+            account_id: &account_id,
+            builder: &builder,
+            guards: &mut guards,
+        };
+        let (security_group_id, coordinator_ip, _sg_rule_id) =
+            self.setup_security_group(&mut services).await?;
 
         // Phase 6: Launch instances
         reporter.report_phase(InitPhase::LaunchingInstances);
         let launched = self
-            .launch_instances(&ec2, security_group_id.as_deref(), instance_profile_name.as_deref(), reporter)
+            .launch_instances(
+                &mut services,
+                security_group_id.as_deref(),
+                instance_profile_name.as_deref(),
+                reporter,
+            )
             .await?;
 
         if launched.is_empty() {
@@ -143,44 +233,168 @@ impl<'a> BenchmarkInitializer<'a> {
         self.upload_configs(&s3, &agent_certs).await?;
         info!("Agent configs with TLS certificates uploaded - agents will poll and start gRPC");
 
-        // All async work done, now record to database
-        let db = state::open_db().await?;
+        // All resources created and recorded - commit all guards
+        guards.commit_all();
+        debug!("All resource guards committed");
 
-        state::insert_run(&db, &self.run_id, &account_id, &self.config.region, &self.config.instance_types, &self.config.attr).await?;
-        state::insert_resource(&db, &self.run_id, &account_id, ResourceType::S3Bucket, &self.bucket_name, &self.config.region).await?;
-
-        if let Some(ref role_name) = iam_role_name {
-            state::insert_resource(&db, &self.run_id, &account_id, ResourceType::IamRole, role_name, &self.config.region).await?;
-        }
-        if let Some(ref profile_name) = instance_profile_name {
-            if iam_role_name.is_some() {
-                state::insert_resource(&db, &self.run_id, &account_id, ResourceType::IamInstanceProfile, profile_name, &self.config.region).await?;
-            }
-        }
-
-        if let Some(ref sg_id) = security_group_id {
-            if self.config.security_group_id.is_none() {
-                state::insert_resource(&db, &self.run_id, &account_id, ResourceType::SecurityGroup, sg_id, &self.config.region).await?;
-            }
-        }
-
-        if let Some(ref rule_id) = sg_rule_id {
-            state::insert_resource(&db, &self.run_id, &account_id, ResourceType::SecurityGroupRule, rule_id, &self.config.region).await?;
-        }
-
-        for state in instances.values() {
-            state::insert_resource(&db, &self.run_id, &account_id, ResourceType::Ec2Instance, &state.instance_id, &self.config.region).await?;
-        }
+        // Shutdown cleanup system
+        registry.shutdown();
+        let _ = executor_handle.await;
 
         Ok(InitContext {
             run_id: self.run_id.clone(),
             bucket_name: self.bucket_name.clone(),
             account_id,
             region: self.config.region.clone(),
-            db, ec2, s3,
-            instance_profile_name, security_group_id, coordinator_ip,
-            agent_certs, coordinator_tls_config, instances,
+            db,
+            ec2,
+            s3,
+            instance_profile_name,
+            security_group_id,
+            coordinator_ip,
+            agent_certs,
+            coordinator_tls_config,
+            instances,
         })
+    }
+
+    /// Setup security group with immediate DB recording
+    async fn setup_security_group(
+        &self,
+        svc: &mut InitServices<'_>,
+    ) -> Result<(Option<String>, Option<String>, Option<String>)> {
+        let coordinator_ip = get_coordinator_public_ip().await.ok();
+        let mut sg_rule_id = None;
+
+        let security_group_id = if let Some(ref sg_id) = self.config.security_group_id {
+            // User-provided security group - just add the rule
+            if let Some(ref ip) = coordinator_ip {
+                let cidr = format!("{}/32", ip);
+                if svc.ec2.add_grpc_ingress_rule(sg_id, &cidr).await.is_ok() {
+                    let rule_id = format!("{}:{}", sg_id, cidr);
+                    state::insert_resource(
+                        svc.db,
+                        &self.run_id,
+                        svc.account_id,
+                        ResourceType::SecurityGroupRule,
+                        &rule_id,
+                        &self.config.region,
+                    )
+                    .await?;
+                    svc.guards
+                        .sg_rules
+                        .push(svc.builder.security_group_rule(sg_id.clone(), cidr.clone()));
+                    sg_rule_id = Some(rule_id);
+                }
+            }
+            Some(sg_id.clone())
+        } else if let Some(ref ip) = coordinator_ip {
+            // Create new security group
+            match svc
+                .ec2
+                .create_security_group(&self.run_id, &format!("{}/32", ip), None)
+                .await
+            {
+                Ok(sg_id) => {
+                    state::insert_resource(
+                        svc.db,
+                        &self.run_id,
+                        svc.account_id,
+                        ResourceType::SecurityGroup,
+                        &sg_id,
+                        &self.config.region,
+                    )
+                    .await?;
+                    svc.guards.security_group = Some(svc.builder.security_group(sg_id.clone()));
+                    debug!(sg_id = %sg_id, "Security group created and recorded");
+                    Some(sg_id)
+                }
+                Err(e) => {
+                    error!(error = ?e, "Failed to create security group");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok((security_group_id, coordinator_ip, sg_rule_id))
+    }
+
+    /// Launch instances with immediate DB recording
+    async fn launch_instances<R: InitProgressReporter>(
+        &self,
+        svc: &mut InitServices<'_>,
+        security_group_id: Option<&str>,
+        instance_profile_name: Option<&str>,
+        reporter: &R,
+    ) -> Result<HashMap<String, InstanceState>> {
+        let mut instances = HashMap::new();
+        for instance_type in &self.config.instance_types {
+            let system = detect_system(instance_type);
+            let user_data =
+                super::user_data::generate_user_data(&self.bucket_name, &self.run_id, instance_type);
+            let mut launch_config =
+                LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
+            if let Some(subnet) = &self.config.subnet_id {
+                launch_config = launch_config.with_subnet(subnet);
+            }
+            if let Some(sg) = security_group_id {
+                launch_config = launch_config.with_security_group(sg);
+            }
+            if let Some(profile) = instance_profile_name {
+                launch_config = launch_config.with_iam_profile(profile);
+            }
+            match svc.ec2.launch_instance(launch_config).await {
+                Ok(launched) => {
+                    // Immediately record to DB
+                    state::insert_resource(
+                        svc.db,
+                        &self.run_id,
+                        svc.account_id,
+                        ResourceType::Ec2Instance,
+                        &launched.instance_id,
+                        &self.config.region,
+                    )
+                    .await?;
+                    svc.guards
+                        .ec2_instances
+                        .push(svc.builder.ec2_instance(launched.instance_id.clone()));
+                    debug!(instance_id = %launched.instance_id, instance_type = %instance_type, "Instance launched and recorded");
+
+                    reporter.report_instance_update(InstanceUpdate {
+                        instance_type: instance_type.clone(),
+                        instance_id: launched.instance_id.clone(),
+                        status: InstanceStatus::Launching,
+                        public_ip: None,
+                    });
+                    instances.insert(
+                        instance_type.clone(),
+                        InstanceState {
+                            instance_id: launched.instance_id,
+                            instance_type: instance_type.clone(),
+                            system: system.to_string(),
+                            status: InstanceStatus::Launching,
+                            run_progress: 0,
+                            total_runs: self.config.runs,
+                            durations: Vec::new(),
+                            public_ip: None,
+                            console_output: LogBuffer::default(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    error!(instance_type = %instance_type, error = ?e, "Failed to launch");
+                    reporter.report_instance_update(InstanceUpdate {
+                        instance_type: instance_type.clone(),
+                        instance_id: String::new(),
+                        status: InstanceStatus::Failed,
+                        public_ip: None,
+                    });
+                }
+            }
+        }
+        Ok(instances)
     }
 
     fn generate_certificates(&self, public_ips: &HashMap<String, String>) -> Result<(AgentCertificateMap, TlsConfig)> {
@@ -237,59 +451,6 @@ impl<'a> BenchmarkInitializer<'a> {
         Ok(())
     }
 
-    async fn setup_security_group(&self, ec2: &Ec2Client) -> Result<(Option<String>, Option<String>, Option<String>)> {
-        let coordinator_ip = get_coordinator_public_ip().await.ok();
-        let mut sg_rule_id = None;
-
-        let security_group_id = if let Some(ref sg_id) = self.config.security_group_id {
-            if let Some(ref ip) = coordinator_ip {
-                let cidr = format!("{}/32", ip);
-                if ec2.add_grpc_ingress_rule(sg_id, &cidr).await.is_ok() {
-                    sg_rule_id = Some(format!("{}:{}", sg_id, cidr));
-                }
-            }
-            Some(sg_id.clone())
-        } else if let Some(ref ip) = coordinator_ip {
-            ec2.create_security_group(&self.run_id, &format!("{}/32", ip), None).await.ok()
-        } else { None };
-
-        Ok((security_group_id, coordinator_ip, sg_rule_id))
-    }
-
-    async fn launch_instances<R: InitProgressReporter>(&self, ec2: &Ec2Client, security_group_id: Option<&str>, instance_profile_name: Option<&str>, reporter: &R) -> Result<HashMap<String, InstanceState>> {
-        let mut instances = HashMap::new();
-        for instance_type in &self.config.instance_types {
-            let system = detect_system(instance_type);
-            let user_data = super::user_data::generate_user_data(&self.bucket_name, &self.run_id, instance_type);
-            let mut launch_config = LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
-            if let Some(subnet) = &self.config.subnet_id {
-                launch_config = launch_config.with_subnet(subnet);
-            }
-            if let Some(sg) = security_group_id {
-                launch_config = launch_config.with_security_group(sg);
-            }
-            if let Some(profile) = instance_profile_name {
-                launch_config = launch_config.with_iam_profile(profile);
-            }
-            match ec2.launch_instance(launch_config).await {
-                Ok(launched) => {
-                    reporter.report_instance_update(InstanceUpdate { instance_type: instance_type.clone(), instance_id: launched.instance_id.clone(), status: InstanceStatus::Launching, public_ip: None });
-                    instances.insert(instance_type.clone(), InstanceState {
-                        instance_id: launched.instance_id, instance_type: instance_type.clone(),
-                        system: system.to_string(), status: InstanceStatus::Launching,
-                        run_progress: 0, total_runs: self.config.runs, durations: Vec::new(),
-                        public_ip: None, console_output: LogBuffer::default(),
-                    });
-                }
-                Err(e) => {
-                    error!(instance_type = %instance_type, error = ?e, "Failed to launch");
-                    reporter.report_instance_update(InstanceUpdate { instance_type: instance_type.clone(), instance_id: String::new(), status: InstanceStatus::Failed, public_ip: None });
-                }
-            }
-        }
-        Ok(instances)
-    }
-
     async fn wait_for_instances<R: InitProgressReporter>(&self, mut instances: HashMap<String, InstanceState>, ec2: &Ec2Client, reporter: &R) -> Result<HashMap<String, InstanceState>> {
         for (instance_type, state) in instances.iter_mut() {
             match ec2.wait_for_running(&state.instance_id, None).await {
@@ -306,5 +467,40 @@ impl<'a> BenchmarkInitializer<'a> {
             }
         }
         Ok(instances)
+    }
+}
+
+/// Container for all resource guards created during initialization
+///
+/// Holds guards until they can be committed after successful DB recording.
+/// If dropped without commit (e.g., due to panic or early return), the guards
+/// will trigger cleanup of the associated AWS resources.
+#[derive(Default)]
+struct ResourceGuards {
+    s3_bucket: Option<S3BucketGuard>,
+    iam_role: Option<IamRoleGuard>,
+    security_group: Option<SecurityGroupGuard>,
+    sg_rules: Vec<SecurityGroupRuleGuard>,
+    ec2_instances: Vec<Ec2InstanceGuard>,
+}
+
+impl ResourceGuards {
+    /// Commit all guards, indicating successful initialization
+    fn commit_all(&mut self) {
+        if let Some(guard) = self.s3_bucket.take() {
+            guard.commit();
+        }
+        if let Some(guard) = self.iam_role.take() {
+            guard.commit();
+        }
+        if let Some(guard) = self.security_group.take() {
+            guard.commit();
+        }
+        for guard in self.sg_rules.drain(..) {
+            guard.commit();
+        }
+        for guard in self.ec2_instances.drain(..) {
+            guard.commit();
+        }
     }
 }

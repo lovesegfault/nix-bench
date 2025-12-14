@@ -116,3 +116,70 @@ async fn setup_schema(pool: &DbPool) -> Result<()> {
 
     Ok(())
 }
+
+/// Open an in-memory test database with schema
+///
+/// This is only available in tests and creates a fresh database
+/// with the full schema set up.
+#[cfg(test)]
+pub(crate) async fn open_test_db() -> Result<DbPool> {
+    use std::str::FromStr;
+
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")?.create_if_missing(true);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1) // Single connection for in-memory to maintain state
+        .connect_with(options)
+        .await
+        .context("Failed to open test database")?;
+
+    setup_schema(&pool).await?;
+
+    Ok(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_open_test_db_creates_schema() {
+        let pool = open_test_db().await.unwrap();
+
+        // Verify runs table exists
+        let runs_exists: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='runs'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(runs_exists, "runs table should exist");
+
+        // Verify resources table exists
+        let resources_exists: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='resources'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(resources_exists, "resources table should exist");
+
+        // Verify account_id column exists in resources
+        let has_account_id: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('resources') WHERE name='account_id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(has_account_id, "resources should have account_id column");
+    }
+
+    #[tokio::test]
+    async fn test_schema_is_idempotent() {
+        let pool = open_test_db().await.unwrap();
+
+        // Run schema setup again - should not error
+        let result = setup_schema(&pool).await;
+        assert!(result.is_ok(), "Schema setup should be idempotent");
+    }
+}

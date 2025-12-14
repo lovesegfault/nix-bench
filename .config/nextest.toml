@@ -3,16 +3,20 @@
 [profile.default]
 # Increase timeout for integration tests that spin up AWS resources
 slow-timeout = { period = "60s", terminate-after = 3 }
-# Run tests serially to avoid AWS rate limiting
-test-threads = 1
+# Use all available threads for unit tests (default behavior)
+# test-threads is not set, so nextest uses num_cpus
 
 [profile.default.junit]
 path = "target/nextest/default/junit.xml"
 
-# Override timeout for AWS integration tests (instance launch can take 5+ min)
+# AWS integration tests: limit to exactly 4 concurrent, longer timeouts
 [[profile.default.overrides]]
-filter = 'binary(~aws)'
+filter = 'binary(~aws) | binary(~agent_e2e)'
+test-group = 'aws-tests'
 slow-timeout = { period = "120s", terminate-after = 5 }
+
+[test-groups.aws-tests]
+max-threads = 4
 
 [profile.ci]
 # CI profile with longer timeouts

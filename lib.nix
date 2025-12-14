@@ -18,6 +18,9 @@ rec {
     - `large`: 18 packages including browsers, compilers, kernel
   */
   defaultTiers = {
+    hello = [
+      "hello"
+    ];
     small = [
       "hello"
       "coreutils"

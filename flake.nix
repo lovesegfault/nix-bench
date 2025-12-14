@@ -78,7 +78,7 @@
             commonArgs = {
               inherit src;
               strictDeps = true;
-              pname = "nix-bench";
+              pname = "nix-bench-workspace";
               version = "0.1.0";
               buildInputs = with pkgs; [
                 openssl
@@ -89,7 +89,7 @@
               ];
             };
 
-            # Build dependencies (for caching)
+            # Build dependencies (for caching) - builds all workspace crates' deps
             cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
             # Test with nextest using nix profile (skips AWS integration tests)
@@ -108,7 +108,7 @@
               // {
                 inherit cargoArtifacts;
                 pname = "nix-bench-coordinator";
-                cargoExtraArgs = "--features coordinator --bin nix-bench-coordinator";
+                cargoExtraArgs = "-p nix-bench-coordinator";
                 # Skip default cargo test, we use nextest separately
                 doCheck = false;
               }
@@ -120,7 +120,7 @@
               // {
                 inherit cargoArtifacts;
                 pname = "nix-bench-agent";
-                cargoExtraArgs = "--features agent --bin nix-bench-agent";
+                cargoExtraArgs = "-p nix-bench-agent";
                 # Skip default cargo test, we use nextest separately
                 doCheck = false;
               }
@@ -166,7 +166,7 @@
                   crossArgs
                   // {
                     cargoArtifacts = crossCraneLib.buildDepsOnly crossArgs;
-                    cargoExtraArgs = "--features agent --bin nix-bench-agent";
+                    cargoExtraArgs = "-p nix-bench-agent";
                   }
                 )
               else

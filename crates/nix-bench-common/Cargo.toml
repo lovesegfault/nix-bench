@@ -1,0 +1,27 @@
+[package]
+name = "nix-bench-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared types and utilities for nix-bench (no AWS dependencies)"
+
+[dependencies]
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# TLS certificate generation
+rcgen.workspace = true
+pem.workspace = true
+rand.workspace = true
+
+# Optional tonic integration for TlsConfig methods
+tonic = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enable tonic-specific TlsConfig methods (identity, ca_certificate, etc.)
+tonic-tls = ["tonic"]
+
+[dev-dependencies]

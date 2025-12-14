@@ -1,0 +1,55 @@
+[package]
+name = "nix-bench-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Benchmark agent for EC2 instances (cross-compiled to musl)"
+
+[[bin]]
+name = "nix-bench-agent"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+nix-bench-proto = { path = "../nix-bench-proto" }
+nix-bench-common = { path = "../nix-bench-common", features = ["tonic-tls"] }
+
+# Core async runtime
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+
+# AWS SDK (only what agent needs)
+aws-config.workspace = true
+aws-sdk-cloudwatch.workspace = true
+aws-sdk-cloudwatchlogs.workspace = true
+aws-sdk-s3.workspace = true
+
+# gRPC server
+tonic.workspace = true
+async-stream.workspace = true
+
+# CLI
+clap.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# TLS crypto provider
+rustls.workspace = true
+
+# Retry with exponential backoff
+backon.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

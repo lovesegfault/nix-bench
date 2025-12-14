@@ -17,6 +17,8 @@ pub struct LogsClient {
     log_group: String,
     log_stream: String,
     sequence_token: Arc<Mutex<Option<String>>>,
+    /// Optional gRPC broadcaster - when set, all log lines are also broadcast to gRPC clients
+    broadcaster: Arc<Mutex<Option<Arc<LogBroadcaster>>>>,
 }
 
 impl LogsClient {
@@ -54,10 +56,16 @@ impl LogsClient {
             log_group,
             log_stream,
             sequence_token: Arc::new(Mutex::new(None)),
+            broadcaster: Arc::new(Mutex::new(None)),
         })
     }
 
-    /// Write a log line
+    /// Set the gRPC broadcaster for streaming logs to connected clients
+    pub async fn set_broadcaster(&self, broadcaster: Arc<LogBroadcaster>) {
+        *self.broadcaster.lock().await = Some(broadcaster);
+    }
+
+    /// Write a log line to CloudWatch Logs and broadcast to gRPC clients (if broadcaster is set)
     pub async fn write_line(&self, message: &str) -> Result<()> {
         use aws_sdk_cloudwatchlogs::types::InputLogEvent;
 
@@ -65,6 +73,11 @@ impl LogsClient {
             .duration_since(std::time::UNIX_EPOCH)
             .context("System time is before UNIX epoch")?
             .as_millis() as i64;
+
+        // Broadcast to gRPC clients if broadcaster is set
+        if let Some(ref broadcaster) = *self.broadcaster.lock().await {
+            broadcaster.broadcast(timestamp, message.to_string());
+        }
 
         let event = InputLogEvent::builder()
             .timestamp(timestamp)

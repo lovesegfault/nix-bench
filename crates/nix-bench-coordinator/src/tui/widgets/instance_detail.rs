@@ -8,7 +8,7 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, Table},
 };
-use tui_scrollview::{ScrollView, ScrollViewState, ScrollbarVisibility};
+use tui_scrollview::ScrollViewState;
 
 pub fn render(
     frame: &mut Frame,
@@ -338,25 +338,36 @@ fn render_logs(
     } else {
         inner.width
     };
-    let scroll_view_area = Rect::new(inner.x, inner.y, content_width, inner.height);
 
-    // Create scroll view with content dimensions (disable internal scrollbar - we use our own)
-    let mut scroll_view = ScrollView::new(Size::new(content_width, content_height))
-        .scrollbars_visibility(ScrollbarVisibility::Never);
-
-    // Render each line into the scroll view
-    for (i, line) in lines.iter().enumerate() {
-        let line_area = Rect::new(0, i as u16, content_width, 1);
-        scroll_view.render_widget(Paragraph::new(*line).style(t.dim()), line_area);
-    }
+    // Virtualized rendering: only render visible lines for O(viewport) instead of O(total_lines)
+    let viewport_height = inner.height as usize;
 
     // If auto-follow is enabled and there's content, scroll to bottom
-    if auto_follow && line_count > inner.height as usize {
-        scroll_state.scroll_to_bottom();
+    if auto_follow && line_count > viewport_height {
+        // Set scroll offset to show the last viewport_height lines
+        let max_scroll = line_count.saturating_sub(viewport_height);
+        scroll_state.set_offset(ratatui::layout::Position::new(0, max_scroll as u16));
     }
 
-    // Render the scroll view in the content area (not full inner)
-    frame.render_stateful_widget(scroll_view, scroll_view_area, scroll_state);
+    // Get current scroll position and clamp to valid range
+    let max_scroll = line_count.saturating_sub(viewport_height);
+    let raw_scroll_y = scroll_state.offset().y as usize;
+    let scroll_y = raw_scroll_y.min(max_scroll);
+
+    // Update scroll state if it was out of bounds (prevents scrolling past end)
+    if raw_scroll_y != scroll_y {
+        scroll_state.set_offset(ratatui::layout::Position::new(0, scroll_y as u16));
+    }
+
+    // Calculate visible line range (virtualized - only render what's on screen)
+    let visible_start = scroll_y;
+    let visible_end = (scroll_y + viewport_height).min(line_count);
+
+    // Render only visible lines directly to frame (bypasses ScrollView overhead)
+    for (viewport_row, line_idx) in (visible_start..visible_end).enumerate() {
+        let line_area = Rect::new(inner.x, inner.y + viewport_row as u16, content_width, 1);
+        frame.render_widget(Paragraph::new(lines[line_idx]).style(t.dim()), line_area);
+    }
 
     // Render themed scrollbar if content overflows
     if needs_scrollbar {

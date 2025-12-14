@@ -10,7 +10,7 @@
 
 pub mod account;
 pub mod cleanup;
-pub mod context;
+pub(crate) mod context;
 pub mod ec2;
 pub mod error;
 pub mod grpc_client;
@@ -19,16 +19,20 @@ pub mod resource_guard;
 pub mod s3;
 pub mod scanner;
 
+// Core clients
 pub use account::{get_current_account_id, AccountId};
-pub use context::AwsContext;
 pub use ec2::{get_coordinator_public_ip, Ec2Client, Ec2Operations, LaunchInstanceConfig, LaunchedInstance};
-pub use error::{classify_anyhow_error, classify_aws_error, AwsError};
-pub use grpc_client::{
-    start_log_streaming_unified, wait_for_tcp_ready, ChannelOptions, GrpcChannelBuilder,
-    GrpcInstanceStatus, GrpcLogClient, GrpcStatusPoller, LogOutput, LogStreamingOptions,
-};
 pub use iam::{IamClient, IamOperations};
 pub use s3::{S3Client, S3Operations};
+
+// Error handling
+pub use error::{classify_anyhow_error, classify_aws_error, AwsError};
+
+// gRPC client
+pub use grpc_client::{
+    start_log_streaming_unified, GrpcInstanceStatus, GrpcLogClient, GrpcStatusPoller,
+    LogStreamingOptions,
+};
 
 // Re-export mock types for tests
 #[cfg(test)]

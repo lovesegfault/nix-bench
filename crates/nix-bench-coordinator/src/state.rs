@@ -155,7 +155,7 @@ fn parse_resource_type(s: &str) -> ResourceType {
 }
 
 /// A tracked resource
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Resource {
     pub id: i64,
     pub run_id: String,
@@ -357,45 +357,29 @@ pub async fn list_resources() -> Result<()> {
     Ok(())
 }
 
-/// Check if an error indicates a resource doesn't exist
-fn is_not_found_error(e: &anyhow::Error) -> bool {
-    crate::aws::classify_anyhow_error(e).is_not_found()
-}
+use crate::aws::CleanupResult;
 
-/// Handle the result of a cleanup operation, updating DB and collecting errors
-async fn handle_cleanup_result(
-    pool: &DbPool,
+/// Handle the result of a cleanup operation for CLI output
+fn handle_cli_cleanup_result(
+    result: CleanupResult,
     resource: &Resource,
-    result: Result<()>,
     cleanup_errors: &mut Vec<String>,
-) -> Result<()> {
+) {
     match result {
-        Ok(()) => {
-            mark_resource_deleted(pool, resource.resource_type, &resource.resource_id).await?;
-            println!("    Deleted successfully");
+        CleanupResult::Deleted => println!("    Deleted successfully"),
+        CleanupResult::AlreadyDeleted => println!("    Already deleted (marking in DB)"),
+        CleanupResult::Failed => {
+            let error_msg = format!("{} {}: cleanup failed", resource.resource_type.as_str(), resource.resource_id);
+            println!("    Failed to delete");
+            cleanup_errors.push(error_msg);
         }
-        Err(e) => {
-            if is_not_found_error(&e) {
-                mark_resource_deleted(pool, resource.resource_type, &resource.resource_id).await?;
-                println!("    Already deleted (marking in DB)");
-            } else {
-                let error_msg = format!(
-                    "{} {}: {}",
-                    resource.resource_type.as_str(),
-                    resource.resource_id,
-                    e
-                );
-                println!("    Failed to delete: {}", e);
-                cleanup_errors.push(error_msg);
-            }
-        }
+        CleanupResult::Skipped => println!("    Skipped (handled by parent resource)"),
     }
-    Ok(())
 }
 
 /// Cleanup orphaned resources by actually terminating/deleting them in AWS
 pub async fn cleanup_resources() -> Result<()> {
-    use crate::aws::{get_current_account_id, Ec2Client, IamClient, S3Client};
+    use crate::aws::{delete_resource, get_current_account_id, partition_resources_for_cleanup, Ec2Client, IamClient, S3Client};
     use std::collections::HashMap;
 
     let pool = open_db().await?;
@@ -441,22 +425,20 @@ pub async fn cleanup_resources() -> Result<()> {
         let s3 = S3Client::new(&region).await?;
         let iam = IamClient::new(&region).await?;
 
-        let (instances, other_resources): (Vec<_>, Vec<_>) = region_resources
-            .into_iter()
-            .partition(|r| r.resource_type == ResourceType::Ec2Instance);
-
-        let (security_groups, non_sg_resources): (Vec<_>, Vec<_>) = other_resources
-            .into_iter()
-            .partition(|r| r.resource_type == ResourceType::SecurityGroup);
+        // Partition resources into cleanup order
+        let (instances, other, security_groups) = partition_resources_for_cleanup(
+            region_resources.into_iter().cloned().collect(),
+            |r| r.resource_type,
+        );
 
         // Terminate EC2 instances
         for resource in &instances {
             println!("  Cleaning up {} {}...", resource.resource_type.as_str(), resource.resource_id);
-            let result = ec2.terminate_instance(&resource.resource_id).await;
-            handle_cleanup_result(&pool, resource, result, &mut cleanup_errors).await?;
+            let result = delete_resource(resource.resource_type, &resource.resource_id, &ec2, &s3, &iam, Some(&pool)).await;
+            handle_cli_cleanup_result(result, resource, &mut cleanup_errors);
         }
 
-        // Wait for instances to terminate
+        // Wait for instances to terminate before deleting security groups
         if !instances.is_empty() && !security_groups.is_empty() {
             println!("  Waiting for instances to terminate...");
             for resource in &instances {
@@ -465,32 +447,17 @@ pub async fn cleanup_resources() -> Result<()> {
         }
 
         // Delete non-security-group resources
-        for resource in &non_sg_resources {
+        for resource in &other {
             println!("  Cleaning up {} {}...", resource.resource_type.as_str(), resource.resource_id);
-
-            let result = match resource.resource_type {
-                ResourceType::Ec2Instance => unreachable!(),
-                ResourceType::S3Bucket => s3.delete_bucket(&resource.resource_id).await,
-                ResourceType::S3Object => Ok(()),
-                ResourceType::IamRole => iam.delete_benchmark_role(&resource.resource_id).await,
-                ResourceType::IamInstanceProfile => Ok(()),
-                ResourceType::SecurityGroupRule => {
-                    if let Some((sg_id, cidr_ip)) = resource.resource_id.split_once(':') {
-                        ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await
-                    } else {
-                        Err(anyhow::anyhow!("Invalid SecurityGroupRule resource_id format"))
-                    }
-                }
-                ResourceType::SecurityGroup => unreachable!(),
-            };
-            handle_cleanup_result(&pool, resource, result, &mut cleanup_errors).await?;
+            let result = delete_resource(resource.resource_type, &resource.resource_id, &ec2, &s3, &iam, Some(&pool)).await;
+            handle_cli_cleanup_result(result, resource, &mut cleanup_errors);
         }
 
-        // Delete security groups
+        // Delete security groups (must be last)
         for resource in &security_groups {
             println!("  Cleaning up {} {}...", resource.resource_type.as_str(), resource.resource_id);
-            let result = ec2.delete_security_group(&resource.resource_id).await;
-            handle_cleanup_result(&pool, resource, result, &mut cleanup_errors).await?;
+            let result = delete_resource(resource.resource_type, &resource.resource_id, &ec2, &s3, &iam, Some(&pool)).await;
+            handle_cli_cleanup_result(result, resource, &mut cleanup_errors);
         }
     }
 

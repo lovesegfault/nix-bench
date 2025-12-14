@@ -10,6 +10,7 @@
 
 pub mod account;
 pub mod cleanup;
+pub mod cleanup_util;
 pub(crate) mod context;
 pub mod ec2;
 pub mod error;
@@ -27,6 +28,9 @@ pub use s3::{S3Client, S3Operations};
 
 // Error handling
 pub use error::{classify_anyhow_error, classify_aws_error, AwsError};
+
+// Cleanup utilities
+pub use cleanup_util::{delete_resource, partition_resources_for_cleanup, CleanupResult};
 
 // gRPC client
 pub use grpc_client::{

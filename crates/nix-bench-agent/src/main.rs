@@ -205,6 +205,9 @@ async fn main() -> Result<()> {
         durations: Vec::new(),
     }));
 
+    // Connect broadcaster to logs client so ALL log lines are streamed to gRPC clients
+    logs_client.set_broadcaster(broadcaster.clone()).await;
+
     // Create shutdown token for graceful gRPC server shutdown
     let shutdown_token = CancellationToken::new();
 

@@ -162,6 +162,11 @@ impl KeyHandler {
                     app.scroll_to_bottom();
                 }
             }
+            KeyCode::Char('f') => {
+                if app.ui.focus == PanelFocus::BuildOutput {
+                    app.scroll.log_auto_follow = !app.scroll.log_auto_follow;
+                }
+            }
             KeyCode::Char('l') => {
                 app.ui.logs_fullscreen = !app.ui.logs_fullscreen;
             }

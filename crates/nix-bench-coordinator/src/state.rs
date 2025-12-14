@@ -6,12 +6,16 @@ use crate::aws::AccountId;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
+use nix_bench_common::ResourceKind;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::warn;
+
+/// Type alias for backward compatibility
+pub type ResourceType = ResourceKind;
 
 /// Database connection pool type alias
 pub type DbPool = SqlitePool;
@@ -145,43 +149,9 @@ impl RunStatus {
     }
 }
 
-/// Resource type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceType {
-    Ec2Instance,
-    S3Bucket,
-    S3Object,
-    IamRole,
-    IamInstanceProfile,
-    SecurityGroup,
-    SecurityGroupRule,
-}
-
-impl ResourceType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ResourceType::Ec2Instance => "ec2_instance",
-            ResourceType::S3Bucket => "s3_bucket",
-            ResourceType::S3Object => "s3_object",
-            ResourceType::IamRole => "iam_role",
-            ResourceType::IamInstanceProfile => "iam_instance_profile",
-            ResourceType::SecurityGroup => "security_group",
-            ResourceType::SecurityGroupRule => "security_group_rule",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "ec2_instance" => ResourceType::Ec2Instance,
-            "s3_bucket" => ResourceType::S3Bucket,
-            "s3_object" => ResourceType::S3Object,
-            "iam_role" => ResourceType::IamRole,
-            "iam_instance_profile" => ResourceType::IamInstanceProfile,
-            "security_group" => ResourceType::SecurityGroup,
-            "security_group_rule" => ResourceType::SecurityGroupRule,
-            _ => ResourceType::S3Object,
-        }
-    }
+/// Parse ResourceType from string with fallback to S3Object
+fn parse_resource_type(s: &str) -> ResourceType {
+    ResourceKind::from_str(s).unwrap_or(ResourceKind::S3Object)
 }
 
 /// A tracked resource
@@ -306,7 +276,7 @@ pub async fn get_run_resources(pool: &DbPool, run_id: &str) -> Result<Vec<Resour
             id: row.get("id"),
             run_id: row.get("run_id"),
             account_id: row.get("account_id"),
-            resource_type: ResourceType::from_str(row.get("resource_type")),
+            resource_type: parse_resource_type(row.get("resource_type")),
             resource_id: row.get("resource_id"),
             region: row.get("region"),
             created_at,
@@ -337,7 +307,7 @@ pub async fn get_undeleted_resources(pool: &DbPool) -> Result<Vec<Resource>> {
             id: row.get("id"),
             run_id: row.get("run_id"),
             account_id: row.get("account_id"),
-            resource_type: ResourceType::from_str(row.get("resource_type")),
+            resource_type: parse_resource_type(row.get("resource_type")),
             resource_id: row.get("resource_id"),
             region: row.get("region"),
             created_at,

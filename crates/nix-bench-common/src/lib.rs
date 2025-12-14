@@ -24,6 +24,7 @@ pub mod tls;
 
 // Re-export commonly used types
 pub use agent_config::AgentConfig;
+pub use resource_kind::ResourceKind;
 pub use run_result::RunResult;
 pub use stats::DurationStats;
 pub use status::StatusCode;

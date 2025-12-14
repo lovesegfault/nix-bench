@@ -2457,6 +2457,7 @@ dependencies = [
  "directories",
  "futures",
  "log",
+ "nix-bench-agent",
  "nix-bench-common",
  "nix-bench-proto",
  "proptest",

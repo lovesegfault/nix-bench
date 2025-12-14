@@ -43,6 +43,8 @@ pub enum TuiMessage {
     AccountInfo { account_id: String },
     /// Set run ID and bucket name
     RunInfo { run_id: String, bucket_name: String },
+    /// Set TLS configuration for gRPC status polling
+    TlsConfig { config: nix_bench_common::TlsConfig },
     /// Update instance state
     InstanceUpdate {
         instance_type: String,

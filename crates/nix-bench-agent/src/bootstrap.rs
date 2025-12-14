@@ -3,76 +3,13 @@
 //! This module handles all host setup that was previously done in cloud-init user-data.
 //! All output is streamed via gRPC for real-time visibility in the TUI.
 
+use crate::command::{run_command_streaming, CommandConfig};
 use crate::grpc::LogBroadcaster;
 use anyhow::{Context, Result};
 use nix_bench_common::timestamp_millis;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
-use tracing::{debug, info, warn};
-
-/// Run a command and stream output to gRPC, returning success status
-async fn run_command_streaming(
-    broadcaster: &Arc<LogBroadcaster>,
-    cmd: &str,
-    args: &[&str],
-    timeout_secs: Option<u64>,
-) -> Result<bool> {
-    let timeout = Duration::from_secs(timeout_secs.unwrap_or(600)); // Default 10 min for setup commands
-    info!(cmd = %cmd, args = ?args, "Running command");
-
-    let mut child = Command::new(cmd)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Failed to spawn command: {}", cmd))?;
-
-    let stdout = child.stdout.take().context("Failed to capture stdout")?;
-    let stderr = child.stderr.take().context("Failed to capture stderr")?;
-
-    let broadcaster_stdout = broadcaster.clone();
-    let broadcaster_stderr = broadcaster.clone();
-
-    // Stream stdout
-    let stdout_handle = tokio::spawn(async move {
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            broadcaster_stdout.broadcast(timestamp_millis(), line);
-        }
-    });
-
-    // Stream stderr
-    let stderr_handle = tokio::spawn(async move {
-        let reader = BufReader::new(stderr);
-        let mut lines = reader.lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            broadcaster_stderr.broadcast(timestamp_millis(), line);
-        }
-    });
-
-    // Wait for command with timeout
-    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
-
-    let success = match wait_result {
-        Ok(Ok(status)) => status.success(),
-        Ok(Err(e)) => return Err(e).context("Failed waiting for command"),
-        Err(_) => {
-            warn!(cmd = %cmd, "Command timed out, killing process");
-            let _ = child.kill().await;
-            return Err(anyhow::anyhow!("Command '{}' timed out", cmd));
-        }
-    };
-
-    // Wait for streaming to finish
-    let _ = tokio::time::timeout(Duration::from_secs(2), stdout_handle).await;
-    let _ = tokio::time::timeout(Duration::from_secs(2), stderr_handle).await;
-
-    Ok(success)
-}
+use tracing::{debug, info};
 
 /// Broadcast a log message to gRPC clients
 fn log_message(broadcaster: &Arc<LogBroadcaster>, message: &str) {
@@ -146,7 +83,7 @@ pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> 
         // Install mdadm if not present
         if !Path::new("/sbin/mdadm").exists() {
             log_message(broadcaster, "Installing mdadm...");
-            run_command_streaming(broadcaster, "yum", &["install", "-y", "mdadm"], Some(120))
+            run_command_streaming(broadcaster, "yum", &["install", "-y", "mdadm"], &CommandConfig::with_timeout_secs(120))
                 .await?;
         }
 
@@ -163,7 +100,7 @@ pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> 
         }
         mdadm_args.push("--force");
 
-        run_command_streaming(broadcaster, "mdadm", &mdadm_args, Some(60)).await?;
+        run_command_streaming(broadcaster, "mdadm", &mdadm_args, &CommandConfig::with_timeout_secs(60)).await?;
 
         "/dev/md0".to_string()
     } else {
@@ -174,14 +111,14 @@ pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> 
         broadcaster,
         &format!("Formatting {} with ext4...", target_dev),
     );
-    run_command_streaming(broadcaster, "mkfs.ext4", &["-F", &target_dev], Some(120)).await?;
+    run_command_streaming(broadcaster, "mkfs.ext4", &["-F", &target_dev], &CommandConfig::with_timeout_secs(120)).await?;
 
     log_message(broadcaster, "Mounting NVMe storage...");
 
     // Create mount point
     std::fs::create_dir_all("/mnt/nvme").context("Failed to create /mnt/nvme")?;
 
-    run_command_streaming(broadcaster, "mount", &[&target_dev, "/mnt/nvme"], Some(30)).await?;
+    run_command_streaming(broadcaster, "mount", &[&target_dev, "/mnt/nvme"], &CommandConfig::with_timeout_secs(30)).await?;
 
     // Create directories on NVMe
     std::fs::create_dir_all("/mnt/nvme/nix").context("Failed to create /mnt/nvme/nix")?;
@@ -196,7 +133,7 @@ pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> 
         broadcaster,
         "mount",
         &["--bind", "/mnt/nvme/nix", "/nix"],
-        Some(30),
+        &CommandConfig::with_timeout_secs(30),
     )
     .await?;
 
@@ -226,7 +163,7 @@ pub(crate) async fn install_nix(broadcaster: &Arc<LogBroadcaster>) -> Result<()>
         broadcaster,
         "sh",
         &["-c", &install_cmd],
-        Some(600), // 10 minute timeout for Nix install
+        &CommandConfig::for_bootstrap(), // 10 minute timeout
     )
     .await?;
 

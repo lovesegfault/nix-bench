@@ -51,16 +51,16 @@ pub enum ConfigError {
     #[error("broadcast_capacity must be at least 1")]
     InvalidBroadcastCapacity,
 
-    /// TLS required but CA cert missing
-    #[error("require_tls is true but ca_cert_pem is not provided")]
+    /// TLS CA cert missing (required for mTLS)
+    #[error("TLS is required but ca_cert_pem is not provided")]
     MissingCaCert,
 
-    /// TLS required but agent cert missing
-    #[error("require_tls is true but agent_cert_pem is not provided")]
+    /// TLS agent cert missing (required for mTLS)
+    #[error("TLS is required but agent_cert_pem is not provided")]
     MissingAgentCert,
 
-    /// TLS required but agent key missing
-    #[error("require_tls is true but agent_key_pem is not provided")]
+    /// TLS agent key missing (required for mTLS)
+    #[error("TLS is required but agent_key_pem is not provided")]
     MissingAgentKey,
 
     /// Failed to parse JSON configuration

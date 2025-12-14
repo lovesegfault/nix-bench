@@ -199,8 +199,9 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
         }
         println!();
         println!("  Options:");
-        println!("    - Keep instances: {}", config.keep);
-        println!("    - TUI mode:       {}", !config.no_tui);
+        println!("    - Keep instances:   {}", config.keep);
+        println!("    - TUI mode:         {}", !config.no_tui);
+        println!("    - GC between runs:  {}", config.gc_between_runs);
         if let Some(output) = &config.output {
             println!("    - Output file:    {}", output);
         }
@@ -398,15 +399,12 @@ async fn run_init_task(
     let eip_allocations = ctx.eip_allocations;
 
     // Send TLS config to TUI for status polling
-    if let Some(ref tls) = coordinator_tls_config {
-        let _ = tx.send(TuiMessage::TlsConfig { config: tls.clone() }).await;
-    }
+    let _ = tx.send(TuiMessage::TlsConfig { config: coordinator_tls_config.clone() }).await;
 
     // Switch to running phase
     let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
 
-    // Start gRPC log streaming for instances with public IPs
-    // Use mTLS if we have coordinator TLS config
+    // Start gRPC log streaming for instances with public IPs (using mTLS)
     let instances_with_ips: Vec<(String, String)> = instances
         .iter()
         .filter_map(|(instance_type, state)| {
@@ -423,17 +421,13 @@ async fn run_init_task(
     if !instances_with_ips.is_empty() {
         info!(
             count = instances_with_ips.len(),
-            tls_enabled = coordinator_tls_config.is_some(),
-            "Starting gRPC log streaming for instances"
+            "Starting gRPC log streaming for instances with mTLS"
         );
 
         // Use unified log streaming with options
         use crate::aws::{LogStreamingOptions, start_log_streaming_unified};
-        let mut options = LogStreamingOptions::new(&instances_with_ips, &run_id, GRPC_PORT)
+        let options = LogStreamingOptions::new(&instances_with_ips, &run_id, GRPC_PORT, coordinator_tls_config)
             .with_channel(tx.clone());
-        if let Some(tls_config) = coordinator_tls_config {
-            options = options.with_tls(tls_config);
-        }
         let grpc_handles = start_log_streaming_unified(options);
 
         // Spawn a monitor task to log any gRPC streaming errors/panics
@@ -587,7 +581,7 @@ async fn watch_and_terminate_completed(
     eip_allocations: HashMap<String, (String, String)>,
     region: String,
     _run_id: String,
-    tls_config: Option<nix_bench_common::TlsConfig>,
+    tls_config: nix_bench_common::TlsConfig,
 ) {
     use crate::aws::GrpcStatusPoller;
     use nix_bench_common::StatusCode;
@@ -638,12 +632,8 @@ async fn watch_and_terminate_completed(
             break;
         }
 
-        // Poll status from all instances
-        let poller = if let Some(ref tls) = tls_config {
-            GrpcStatusPoller::new_with_tls(&instances_with_ips, GRPC_PORT, tls.clone())
-        } else {
-            GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT)
-        };
+        // Poll status from all instances with mTLS
+        let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT, tls_config.clone());
 
         let status_map = poller.poll_status().await;
 
@@ -663,41 +653,49 @@ async fn watch_and_terminate_completed(
                         let instance_id = &state.instance_id;
 
                         // Terminate the instance
-                        match ec2.terminate_instance(instance_id).await {
+                        let termination_succeeded = match ec2.terminate_instance(instance_id).await {
                             Ok(()) => {
                                 info!(instance_id = %instance_id, instance_type = %instance_type, "Instance terminated");
                                 let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
+                                true
                             }
                             Err(e) => {
                                 let error_str = format!("{:?}", e);
                                 if error_str.contains("InvalidInstanceID.NotFound") {
                                     // Already terminated
                                     let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
+                                    true
                                 } else {
                                     warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
+                                    false
                                 }
                             }
-                        }
+                        };
 
-                        // Release the Elastic IP
-                        if let Some((allocation_id, public_ip)) = eip_allocations.get(instance_type) {
-                            match ec2.release_elastic_ip(allocation_id).await {
-                                Ok(()) => {
-                                    info!(allocation_id = %allocation_id, public_ip = %public_ip, "Released Elastic IP");
-                                    let _ = state::mark_resource_deleted(&db, ResourceType::ElasticIp, allocation_id).await;
-                                }
-                                Err(e) => {
-                                    let error_str = format!("{:?}", e);
-                                    if error_str.contains("InvalidAllocationID.NotFound") {
+                        // Only proceed with EIP release and mark as terminated if EC2 termination succeeded
+                        if termination_succeeded {
+                            // Release the Elastic IP
+                            if let Some((allocation_id, public_ip)) = eip_allocations.get(instance_type) {
+                                match ec2.release_elastic_ip(allocation_id).await {
+                                    Ok(()) => {
+                                        info!(allocation_id = %allocation_id, public_ip = %public_ip, "Released Elastic IP");
                                         let _ = state::mark_resource_deleted(&db, ResourceType::ElasticIp, allocation_id).await;
-                                    } else {
-                                        warn!(allocation_id = %allocation_id, error = ?e, "Failed to release EIP");
+                                    }
+                                    Err(e) => {
+                                        let error_str = format!("{:?}", e);
+                                        if error_str.contains("InvalidAllocationID.NotFound") {
+                                            let _ = state::mark_resource_deleted(&db, ResourceType::ElasticIp, allocation_id).await;
+                                        } else {
+                                            // EIP release failed but instance is terminated - cleanup will retry EIP
+                                            warn!(allocation_id = %allocation_id, error = ?e, "Failed to release EIP");
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        terminated.insert(instance_type.clone());
+                            terminated.insert(instance_type.clone());
+                        }
+                        // If termination failed, don't add to terminated set - watcher will retry
                     }
                 }
             }
@@ -749,16 +747,12 @@ async fn run_benchmarks_no_tui(
     let grpc_handles = if !instances_with_ips.is_empty() {
         info!(
             count = instances_with_ips.len(),
-            tls_enabled = coordinator_tls_config.is_some(),
-            "Starting gRPC log streaming to stdout"
+            "Starting gRPC log streaming to stdout with mTLS"
         );
 
         // Use unified log streaming with stdout output
         use crate::aws::{LogStreamingOptions, start_log_streaming_unified};
-        let mut options = LogStreamingOptions::new(&instances_with_ips, &run_id, GRPC_PORT);
-        if let Some(ref tls_config) = coordinator_tls_config {
-            options = options.with_tls(tls_config.clone());
-        }
+        let options = LogStreamingOptions::new(&instances_with_ips, &run_id, GRPC_PORT, coordinator_tls_config.clone());
         let handles = start_log_streaming_unified(options);
 
         // Spawn a monitor task to log any gRPC streaming errors/panics
@@ -841,11 +835,7 @@ async fn run_benchmarks_no_tui(
 
         let status_map = if !instances_with_ips.is_empty() {
             use crate::aws::GrpcStatusPoller;
-            let poller = if let Some(ref tls) = coordinator_tls_config {
-                GrpcStatusPoller::new_with_tls(&instances_with_ips, GRPC_PORT, tls.clone())
-            } else {
-                GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT)
-            };
+            let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT, coordinator_tls_config.clone());
             poller.poll_status().await
         } else {
             std::collections::HashMap::new()
@@ -991,30 +981,34 @@ async fn cleanup_resources(
     let s3 = S3Client::new(&config.region).await?;
 
     if !config.keep {
-        // Get all resources from the database
+        // Get all undeleted resources from the database
+        // Note: get_run_resources only returns resources with deleted_at IS NULL,
+        // so resources already cleaned up by the termination watcher are excluded
         let db_resources = state::get_run_resources(&db, run_id).await.unwrap_or_default();
 
-        // Collect instance IDs that are NOT already deleted (check database)
-        // This accounts for instances terminated early by the termination watcher
-        let deleted_instances: std::collections::HashSet<String> = db_resources
-            .iter()
-            .filter(|r| r.resource_type == ResourceType::Ec2Instance && r.deleted_at.is_some())
-            .map(|r| r.resource_id.clone())
-            .collect();
-
+        // Collect instance IDs to terminate from both the HashMap and database
+        // (database includes instances created but not tracked in HashMap, e.g., if user quit early)
         let mut instance_ids: std::collections::HashSet<String> = instances
             .values()
-            .filter(|s| !s.instance_id.is_empty() && !deleted_instances.contains(&s.instance_id))
+            .filter(|s| !s.instance_id.is_empty())
             .map(|s| s.instance_id.clone())
             .collect();
 
-        // Also add any instances from the database that might have been created
-        // but not tracked in the HashMap (e.g., if user quit early during init)
+        // Add any instances from the database not in the HashMap
         for resource in &db_resources {
-            if resource.resource_type == ResourceType::Ec2Instance && resource.deleted_at.is_none() {
+            if resource.resource_type == ResourceType::Ec2Instance {
                 instance_ids.insert(resource.resource_id.clone());
             }
         }
+
+        // Filter out instances that are already deleted according to DB
+        // (the HashMap might have stale data if termination watcher already cleaned them)
+        let db_instance_ids: std::collections::HashSet<String> = db_resources
+            .iter()
+            .filter(|r| r.resource_type == ResourceType::Ec2Instance)
+            .map(|r| r.resource_id.clone())
+            .collect();
+        instance_ids.retain(|id| db_instance_ids.contains(id));
 
         // Count resources for progress tracking
         let eip_ids: Vec<_> = db_resources
@@ -1579,5 +1573,183 @@ Agent started successfully
         // We can't assert is_some because the binary might not exist,
         // but we can assert the function doesn't panic
         let _ = result;
+    }
+
+    // ========================================================================
+    // Mock-based async tests for AWS operations
+    // ========================================================================
+
+    use crate::aws::{Ec2Operations, LaunchedInstance, MockEc2Operations, MockS3Operations, S3Operations};
+    use mockall::predicate::eq;
+
+    #[tokio::test]
+    async fn test_mock_ec2_terminate_is_called() {
+        let mut mock = MockEc2Operations::new();
+
+        // Expect terminate to be called with specific instance ID
+        mock.expect_terminate_instance()
+            .with(eq("i-1234567890abcdef0"))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        // Call the mock
+        let result = mock.terminate_instance("i-1234567890abcdef0").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mock_ec2_launch_instance() {
+        let mut mock = MockEc2Operations::new();
+
+        mock.expect_launch_instance()
+            .returning(|run_id, instance_type, system, _, _, _, _| {
+                Ok(LaunchedInstance {
+                    instance_id: format!("i-{}", run_id),
+                    instance_type: instance_type.to_string(),
+                    system: system.to_string(),
+                    public_ip: None,
+                })
+            });
+
+        let result = mock
+            .launch_instance(
+                "test-run",
+                "c6i.xlarge",
+                "x86_64-linux",
+                "#!/bin/bash\necho test",
+                None,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let instance = result.unwrap();
+        assert_eq!(instance.instance_id, "i-test-run");
+        assert_eq!(instance.instance_type, "c6i.xlarge");
+    }
+
+    #[tokio::test]
+    async fn test_mock_ec2_handles_launch_failure() {
+        let mut mock = MockEc2Operations::new();
+
+        mock.expect_launch_instance()
+            .returning(|_, _, _, _, _, _, _| {
+                Err(anyhow::anyhow!("InsufficientInstanceCapacity"))
+            });
+
+        let result = mock
+            .launch_instance(
+                "test-run",
+                "c6i.xlarge",
+                "x86_64-linux",
+                "#!/bin/bash",
+                None,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("InsufficientInstanceCapacity"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_s3_delete_bucket() {
+        let mut mock = MockS3Operations::new();
+
+        mock.expect_delete_bucket()
+            .with(eq("nix-bench-test-bucket"))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let result = mock.delete_bucket("nix-bench-test-bucket").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mock_ec2_console_output_with_failure() {
+        let mut mock = MockEc2Operations::new();
+
+        mock.expect_get_console_output()
+            .returning(|_| Ok(Some("nix-bench-agent: command not found".to_string())));
+
+        let result = mock.get_console_output("i-failing").await;
+        assert!(result.is_ok());
+        let output = result.unwrap().unwrap();
+
+        // Verify that detect_bootstrap_failure would catch this
+        let failure = detect_bootstrap_failure(&output);
+        assert!(failure.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mock_ec2_wait_for_running() {
+        let mut mock = MockEc2Operations::new();
+
+        mock.expect_wait_for_running()
+            .with(eq("i-test"), eq(Some(300u64)))
+            .returning(|_, _| Ok(Some("1.2.3.4".to_string())));
+
+        let result = mock.wait_for_running("i-test", Some(300)).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some("1.2.3.4".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_mock_ec2_security_group_lifecycle() {
+        let mut mock = MockEc2Operations::new();
+
+        // Create security group
+        mock.expect_create_security_group()
+            .returning(|_, _, _| Ok("sg-12345".to_string()));
+
+        // Add ingress rule
+        mock.expect_add_grpc_ingress_rule()
+            .with(eq("sg-12345"), eq("10.0.0.1/32"))
+            .returning(|_, _| Ok(()));
+
+        // Remove ingress rule
+        mock.expect_remove_grpc_ingress_rule()
+            .with(eq("sg-12345"), eq("10.0.0.1/32"))
+            .returning(|_, _| Ok(()));
+
+        // Delete security group
+        mock.expect_delete_security_group()
+            .with(eq("sg-12345"))
+            .returning(|_| Ok(()));
+
+        // Execute the lifecycle
+        let sg_id = mock.create_security_group("run-123", "10.0.0.1/32", None).await.unwrap();
+        assert_eq!(sg_id, "sg-12345");
+
+        mock.add_grpc_ingress_rule(&sg_id, "10.0.0.1/32").await.unwrap();
+        mock.remove_grpc_ingress_rule(&sg_id, "10.0.0.1/32").await.unwrap();
+        mock.delete_security_group(&sg_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mock_ec2_elastic_ip_lifecycle() {
+        let mut mock = MockEc2Operations::new();
+
+        mock.expect_allocate_elastic_ip()
+            .returning(|_| Ok(("eipalloc-123".to_string(), "54.1.2.3".to_string())));
+
+        mock.expect_associate_elastic_ip()
+            .with(eq("eipalloc-123"), eq("i-test"))
+            .returning(|_, _| Ok("eipassoc-456".to_string()));
+
+        mock.expect_release_elastic_ip()
+            .with(eq("eipalloc-123"))
+            .returning(|_| Ok(()));
+
+        let (alloc_id, public_ip) = mock.allocate_elastic_ip("run-123").await.unwrap();
+        assert_eq!(alloc_id, "eipalloc-123");
+        assert_eq!(public_ip, "54.1.2.3");
+
+        let assoc_id = mock.associate_elastic_ip(&alloc_id, "i-test").await.unwrap();
+        assert_eq!(assoc_id, "eipassoc-456");
+
+        mock.release_elastic_ip(&alloc_id).await.unwrap();
     }
 }

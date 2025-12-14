@@ -764,11 +764,12 @@ impl App {
             return;
         }
 
-        let poller = if let Some(ref tls) = self.context.tls_config {
-            GrpcStatusPoller::new_with_tls(&instances_with_ips, GRPC_PORT, tls.clone())
-        } else {
-            GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT)
+        // TLS is required for gRPC polling - skip if not configured yet
+        let tls_config = match &self.context.tls_config {
+            Some(tls) => tls.clone(),
+            None => return, // Can't poll without TLS
         };
+        let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT, tls_config);
         let status_map = poller.poll_status().await;
         if !status_map.is_empty() {
             self.update_from_grpc_status(&status_map);

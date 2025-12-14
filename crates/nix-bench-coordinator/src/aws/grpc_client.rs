@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Add 0-25% jitter to a duration to prevent thundering herd
 fn jittered_delay(base: Duration) -> Duration {
@@ -58,30 +58,21 @@ impl ChannelOptions {
     }
 }
 
-/// Unified gRPC channel builder
-///
-/// Consolidates TLS and non-TLS channel construction into a single builder.
+/// Unified gRPC channel builder with required mTLS
 pub struct GrpcChannelBuilder<'a> {
     endpoint: String,
-    tls_config: Option<&'a TlsConfig>,
+    tls_config: &'a TlsConfig,
     options: ChannelOptions,
 }
 
 impl<'a> GrpcChannelBuilder<'a> {
-    /// Create a new channel builder for the given host and port
-    pub fn new(host: &str, port: u16) -> Self {
+    /// Create a new channel builder for the given host and port with TLS
+    pub fn new(host: &str, port: u16, tls_config: &'a TlsConfig) -> Self {
         Self {
-            endpoint: format!("http://{}:{}", host, port),
-            tls_config: None,
+            endpoint: format!("https://{}:{}", host, port),
+            tls_config,
             options: ChannelOptions::default(),
         }
-    }
-
-    /// Enable TLS for this channel
-    pub fn with_tls(mut self, tls_config: &'a TlsConfig) -> Self {
-        self.endpoint = self.endpoint.replace("http://", "https://");
-        self.tls_config = Some(tls_config);
-        self
     }
 
     /// Set custom channel options
@@ -97,19 +88,17 @@ impl<'a> GrpcChannelBuilder<'a> {
 
     /// Build and connect the channel
     pub async fn connect(self) -> Result<Channel> {
-        let mut endpoint_builder = Channel::from_shared(self.endpoint.clone())
+        let tls_config = self.tls_config.client_tls_config().context("Failed to create TLS config")?;
+
+        Channel::from_shared(self.endpoint.clone())
             .context("Invalid endpoint")?
             .connect_timeout(self.options.connect_timeout)
-            .timeout(self.options.request_timeout);
-
-        if let Some(tls) = self.tls_config {
-            let tls_config = tls.client_tls_config().context("Failed to create TLS config")?;
-            endpoint_builder = endpoint_builder
-                .tls_config(tls_config)
-                .context("Failed to configure TLS")?;
-        }
-
-        endpoint_builder.connect().await.context("gRPC connection failed")
+            .timeout(self.options.request_timeout)
+            .tls_config(tls_config)
+            .context("Failed to configure TLS")?
+            .connect()
+            .await
+            .context("gRPC connection failed")
     }
 
     /// Try to build and connect, returning None on failure (for polling)
@@ -140,28 +129,22 @@ pub struct LogStreamingOptions {
     pub run_id: String,
     /// gRPC port
     pub port: u16,
-    /// Optional TLS configuration
-    pub tls_config: Option<TlsConfig>,
+    /// TLS configuration (required)
+    pub tls_config: TlsConfig,
     /// Output destination
     pub output: LogOutput,
 }
 
 impl LogStreamingOptions {
-    /// Create new options for the given instances
-    pub fn new(instances: &[(String, String)], run_id: &str, port: u16) -> Self {
+    /// Create new options for the given instances with TLS
+    pub fn new(instances: &[(String, String)], run_id: &str, port: u16, tls_config: TlsConfig) -> Self {
         Self {
             instances: instances.to_vec(),
             run_id: run_id.to_string(),
             port,
-            tls_config: None,
+            tls_config,
             output: LogOutput::Stdout,
         }
-    }
-
-    /// Enable TLS
-    pub fn with_tls(mut self, tls: TlsConfig) -> Self {
-        self.tls_config = Some(tls);
-        self
     }
 
     /// Set output to TUI channel
@@ -173,7 +156,7 @@ impl LogStreamingOptions {
 
 /// Start log streaming for multiple instances (unified function)
 ///
-/// Spawns a background task for each instance that streams logs via gRPC.
+/// Spawns a background task for each instance that streams logs via gRPC with mTLS.
 /// Returns handles to all spawned tasks.
 pub fn start_log_streaming_unified(
     options: LogStreamingOptions,
@@ -181,17 +164,13 @@ pub fn start_log_streaming_unified(
     let mut handles = Vec::new();
 
     for (instance_type, public_ip) in options.instances {
-        let client = if let Some(ref tls) = options.tls_config {
-            GrpcLogClient::new_with_tls(
-                &instance_type,
-                &public_ip,
-                options.port,
-                &options.run_id,
-                tls.clone(),
-            )
-        } else {
-            GrpcLogClient::new(&instance_type, &public_ip, options.port, &options.run_id)
-        };
+        let client = GrpcLogClient::new(
+            &instance_type,
+            &public_ip,
+            options.port,
+            &options.run_id,
+            options.tls_config.clone(),
+        );
 
         let handle = match &options.output {
             LogOutput::Channel(tx) => client.spawn_stream(tx.clone()),
@@ -235,7 +214,7 @@ pub async fn wait_for_tcp_ready(addr: &str, timeout: Duration) -> Result<()> {
     ))
 }
 
-/// gRPC log streaming client for connecting to benchmark agents
+/// gRPC log streaming client for connecting to benchmark agents with mTLS
 #[derive(Debug, Clone)]
 pub struct GrpcLogClient {
     /// Instance type identifier
@@ -246,24 +225,13 @@ pub struct GrpcLogClient {
     pub port: u16,
     /// Run ID for filtering logs
     pub run_id: String,
-    /// Optional TLS configuration for mTLS
-    tls_config: Option<TlsConfig>,
+    /// TLS configuration for mTLS (required)
+    tls_config: TlsConfig,
 }
 
 impl GrpcLogClient {
-    /// Create a new gRPC log client (without TLS - insecure)
-    pub fn new(instance_type: &str, public_ip: &str, port: u16, run_id: &str) -> Self {
-        Self {
-            instance_type: instance_type.to_string(),
-            public_ip: public_ip.to_string(),
-            port,
-            run_id: run_id.to_string(),
-            tls_config: None,
-        }
-    }
-
-    /// Create a new gRPC log client with TLS configuration
-    pub fn new_with_tls(
+    /// Create a new gRPC log client with TLS configuration (required)
+    pub fn new(
         instance_type: &str,
         public_ip: &str,
         port: u16,
@@ -275,17 +243,13 @@ impl GrpcLogClient {
             public_ip: public_ip.to_string(),
             port,
             run_id: run_id.to_string(),
-            tls_config: Some(tls_config),
+            tls_config,
         }
     }
 
     /// Create a channel builder for this client
     pub fn channel_builder(&self) -> GrpcChannelBuilder<'_> {
-        let mut builder = GrpcChannelBuilder::new(&self.public_ip, self.port);
-        if let Some(ref tls) = self.tls_config {
-            builder = builder.with_tls(tls);
-        }
-        builder
+        GrpcChannelBuilder::new(&self.public_ip, self.port, &self.tls_config)
     }
 
     /// Connect to the agent with retry logic
@@ -308,7 +272,7 @@ impl GrpcLogClient {
                 instance_type = %self.instance_type,
                 endpoint = %endpoint,
                 attempt = attempts,
-                tls = self.tls_config.is_some(),
+                tls = true,
                 "Attempting gRPC connection"
             );
 
@@ -317,7 +281,7 @@ impl GrpcLogClient {
                     info!(
                         instance_type = %self.instance_type,
                         endpoint = %endpoint,
-                        tls = self.tls_config.is_some(),
+                        tls = true,
                         "gRPC connection established"
                     );
                     return Ok(LogStreamClient::new(channel));
@@ -334,7 +298,8 @@ impl GrpcLogClient {
 
                     let jittered = jittered_delay(delay);
 
-                    warn!(
+                    // Use debug level for retries - connection failures during bootstrap are expected
+                    debug!(
                         instance_type = %self.instance_type,
                         endpoint = %endpoint,
                         attempt = attempts,
@@ -366,7 +331,7 @@ impl GrpcLogClient {
             instance_type = %self.instance_type,
             initial_delay_secs = initial_delay.as_secs(),
             max_wait_secs = max_wait.as_secs(),
-            tls = self.tls_config.is_some(),
+            tls = true,
             "Waiting for agent to be ready"
         );
 
@@ -653,92 +618,12 @@ impl GrpcLogClient {
     }
 }
 
-/// Start log streaming for multiple instances
-///
-/// Spawns a background task for each instance that streams logs via gRPC.
-/// Returns handles to all spawned tasks.
-pub fn start_log_streaming(
-    instances: &[(String, String)], // (instance_type, public_ip)
-    run_id: &str,
-    port: u16,
-    tx: mpsc::Sender<TuiMessage>,
-) -> Vec<tokio::task::JoinHandle<Result<()>>> {
-    let mut handles = Vec::new();
-
-    for (instance_type, public_ip) in instances {
-        let client = GrpcLogClient::new(instance_type, public_ip, port, run_id);
-        let handle = client.spawn_stream(tx.clone());
-        handles.push(handle);
-    }
-
-    handles
-}
-
-/// Start log streaming for multiple instances to stdout (no-TUI mode)
-///
-/// Spawns a background task for each instance that streams logs via gRPC
-/// and prints them to stdout with instance prefixes.
-/// Returns handles to all spawned tasks.
-pub fn start_log_streaming_stdout(
-    instances: &[(String, String)], // (instance_type, public_ip)
-    run_id: &str,
-    port: u16,
-) -> Vec<tokio::task::JoinHandle<Result<()>>> {
-    let mut handles = Vec::new();
-
-    for (instance_type, public_ip) in instances {
-        let client = GrpcLogClient::new(instance_type, public_ip, port, run_id);
-        let handle = client.spawn_stream_stdout();
-        handles.push(handle);
-    }
-
-    handles
-}
-
-/// Start log streaming for multiple instances with TLS
-///
-/// Spawns a background task for each instance that streams logs via gRPC with mTLS.
-/// Returns handles to all spawned tasks.
-pub fn start_log_streaming_with_tls(
-    instances: &[(String, String)], // (instance_type, public_ip)
-    run_id: &str,
-    port: u16,
-    tls_config: TlsConfig,
-    tx: mpsc::Sender<TuiMessage>,
-) -> Vec<tokio::task::JoinHandle<Result<()>>> {
-    let mut handles = Vec::new();
-
-    for (instance_type, public_ip) in instances {
-        let client =
-            GrpcLogClient::new_with_tls(instance_type, public_ip, port, run_id, tls_config.clone());
-        let handle = client.spawn_stream(tx.clone());
-        handles.push(handle);
-    }
-
-    handles
-}
-
-/// Start log streaming for multiple instances to stdout with TLS (no-TUI mode)
-///
-/// Spawns a background task for each instance that streams logs via gRPC with mTLS
-/// and prints them to stdout with instance prefixes.
-/// Returns handles to all spawned tasks.
-pub fn start_log_streaming_stdout_with_tls(
-    instances: &[(String, String)], // (instance_type, public_ip)
-    run_id: &str,
-    port: u16,
-    tls_config: TlsConfig,
-) -> Vec<tokio::task::JoinHandle<Result<()>>> {
-    let mut handles = Vec::new();
-
-    for (instance_type, public_ip) in instances {
-        let client =
-            GrpcLogClient::new_with_tls(instance_type, public_ip, port, run_id, tls_config.clone());
-        let handle = client.spawn_stream_stdout();
-        handles.push(handle);
-    }
-
-    handles
+/// Single run result info from gRPC
+#[derive(Debug, Clone)]
+pub struct RunResultInfo {
+    pub run_number: u32,
+    pub duration_secs: f64,
+    pub success: bool,
 }
 
 /// Instance status from gRPC GetStatus RPC
@@ -754,36 +639,31 @@ pub struct GrpcInstanceStatus {
     pub durations: Vec<f64>,
     /// Number of dropped log messages (for monitoring)
     pub dropped_log_count: u64,
+    /// Detailed run results with success/failure
+    pub run_results: Vec<RunResultInfo>,
+    /// Nix attribute being built
+    pub attr: Option<String>,
+    /// System architecture
+    pub system: Option<String>,
 }
 
-/// Polls status from multiple gRPC agents
+/// Polls status from multiple gRPC agents with mTLS
 pub struct GrpcStatusPoller {
     /// Map of instance_type to (public_ip, port)
     instances: Vec<(String, String, u16)>,
-    /// Optional TLS configuration
-    tls_config: Option<TlsConfig>,
+    /// TLS configuration (required)
+    tls_config: TlsConfig,
 }
 
 impl GrpcStatusPoller {
-    /// Create a new status poller for the given instances
-    pub fn new(instances: &[(String, String)], port: u16) -> Self {
+    /// Create a new status poller for the given instances with TLS
+    pub fn new(instances: &[(String, String)], port: u16, tls_config: TlsConfig) -> Self {
         Self {
             instances: instances
                 .iter()
                 .map(|(t, ip)| (t.clone(), ip.clone(), port))
                 .collect(),
-            tls_config: None,
-        }
-    }
-
-    /// Create a new status poller with TLS configuration
-    pub fn new_with_tls(instances: &[(String, String)], port: u16, tls_config: TlsConfig) -> Self {
-        Self {
-            instances: instances
-                .iter()
-                .map(|(t, ip)| (t.clone(), ip.clone(), port))
-                .collect(),
-            tls_config: Some(tls_config),
+            tls_config,
         }
     }
 
@@ -800,12 +680,8 @@ impl GrpcStatusPoller {
 
         for (instance_type, public_ip, port) in &self.instances {
             // Build channel using the builder with polling options
-            let mut builder = GrpcChannelBuilder::new(public_ip, *port)
+            let builder = GrpcChannelBuilder::new(public_ip, *port, &self.tls_config)
                 .with_options(ChannelOptions::for_polling());
-
-            if let Some(ref tls) = self.tls_config {
-                builder = builder.with_tls(tls);
-            }
 
             let channel = match builder.try_connect().await {
                 Some(ch) => ch,
@@ -830,6 +706,18 @@ impl GrpcStatusPoller {
                         nix_bench_common::StatusCode::from_str(&status.status)
                             .map(|c| c.as_i32())
                     };
+
+                    // Convert run_results from proto format
+                    let run_results: Vec<RunResultInfo> = status
+                        .run_results
+                        .iter()
+                        .map(|r| RunResultInfo {
+                            run_number: r.run_number,
+                            duration_secs: r.duration_secs,
+                            success: r.success,
+                        })
+                        .collect();
+
                     results.insert(
                         instance_type.clone(),
                         GrpcInstanceStatus {
@@ -838,6 +726,9 @@ impl GrpcStatusPoller {
                             total_runs: Some(status.total_runs),
                             durations: status.durations,
                             dropped_log_count: status.dropped_log_count,
+                            run_results,
+                            attr: if status.attr.is_empty() { None } else { Some(status.attr) },
+                            system: if status.system.is_empty() { None } else { Some(status.system) },
                         },
                     );
                 }
@@ -859,9 +750,18 @@ impl GrpcStatusPoller {
 mod tests {
     use super::*;
 
+    fn test_tls_config() -> TlsConfig {
+        TlsConfig {
+            ca_cert_pem: "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----".to_string(),
+            cert_pem: "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----".to_string(),
+            key_pem: "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----".to_string(),
+        }
+    }
+
     #[test]
     fn test_grpc_log_client_creation() {
-        let client = GrpcLogClient::new("c6i.xlarge", "192.168.1.100", 50051, "run-123");
+        let tls = test_tls_config();
+        let client = GrpcLogClient::new("c6i.xlarge", "192.168.1.100", 50051, "run-123", tls);
 
         assert_eq!(client.instance_type, "c6i.xlarge");
         assert_eq!(client.public_ip, "192.168.1.100");
@@ -871,22 +771,25 @@ mod tests {
 
     #[test]
     fn test_grpc_log_client_endpoint() {
-        let client = GrpcLogClient::new("c6i.xlarge", "10.0.0.1", 50051, "run-456");
-        assert_eq!(client.channel_builder().endpoint(), "http://10.0.0.1:50051");
+        let tls = test_tls_config();
+        let client = GrpcLogClient::new("c6i.xlarge", "10.0.0.1", 50051, "run-456", tls);
+        assert_eq!(client.channel_builder().endpoint(), "https://10.0.0.1:50051");
     }
 
     #[test]
     fn test_grpc_log_client_endpoint_with_different_port() {
-        let client = GrpcLogClient::new("c6g.xlarge", "192.168.1.50", 9000, "run-789");
+        let tls = test_tls_config();
+        let client = GrpcLogClient::new("c6g.xlarge", "192.168.1.50", 9000, "run-789", tls);
         assert_eq!(
             client.channel_builder().endpoint(),
-            "http://192.168.1.50:9000"
+            "https://192.168.1.50:9000"
         );
     }
 
     #[tokio::test]
     async fn test_connect_with_retry_fails_after_max_retries() {
-        let client = GrpcLogClient::new("c6i.xlarge", "127.0.0.1", 59999, "test-run");
+        let tls = test_tls_config();
+        let client = GrpcLogClient::new("c6i.xlarge", "127.0.0.1", 59999, "test-run", tls);
 
         // Try to connect to a port where nothing is listening
         // Use minimal retries and delay for fast test
@@ -912,8 +815,9 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel(100);
 
-        // Use the unified log streaming function
-        let options = LogStreamingOptions::new(&instances, "test-run", 50051)
+        // Use the unified log streaming function with TLS
+        let tls = test_tls_config();
+        let options = LogStreamingOptions::new(&instances, "test-run", 50051, tls)
             .with_channel(tx);
         let handles = start_log_streaming_unified(options);
 

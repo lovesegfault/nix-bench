@@ -6,35 +6,38 @@
 //! - S3: Results storage and agent binary distribution
 //! - STS: Account ID lookup
 //! - gRPC: Client for communicating with agents
+//! - resource_guard: RAII cleanup for AWS resources
 
 pub mod account;
+pub mod cleanup;
 pub mod context;
 pub mod ec2;
 pub mod error;
 pub mod grpc_client;
 pub mod iam;
+pub mod resource_guard;
 pub mod s3;
+pub mod scanner;
 
 pub use account::{get_current_account_id, AccountId};
 pub use context::AwsContext;
-pub use ec2::{get_coordinator_public_ip, Ec2Client};
+pub use ec2::{get_coordinator_public_ip, Ec2Client, Ec2Operations, LaunchedInstance};
 pub use error::{classify_anyhow_error, classify_aws_error, AwsError};
 pub use grpc_client::{
     start_log_streaming_unified, wait_for_tcp_ready, ChannelOptions, GrpcChannelBuilder,
     GrpcInstanceStatus, GrpcLogClient, GrpcStatusPoller, LogOutput, LogStreamingOptions,
 };
-pub use iam::IamClient;
-pub use s3::S3Client;
+pub use iam::{IamClient, IamOperations};
+pub use s3::{S3Client, S3Operations};
 
-// Deprecated: Use start_log_streaming_unified with LogStreamingOptions instead
-#[deprecated(since = "0.2.0", note = "Use start_log_streaming_unified with LogStreamingOptions")]
-pub use grpc_client::start_log_streaming;
-#[deprecated(since = "0.2.0", note = "Use start_log_streaming_unified with LogStreamingOptions")]
-pub use grpc_client::start_log_streaming_stdout;
-#[deprecated(since = "0.2.0", note = "Use start_log_streaming_unified with LogStreamingOptions")]
-pub use grpc_client::start_log_streaming_with_tls;
-#[deprecated(since = "0.2.0", note = "Use start_log_streaming_unified with LogStreamingOptions")]
-pub use grpc_client::start_log_streaming_stdout_with_tls;
+// Re-export mock types for tests
+#[cfg(test)]
+pub use ec2::MockEc2Operations;
+#[cfg(test)]
+pub use iam::MockIamOperations;
+#[cfg(test)]
+pub use s3::MockS3Operations;
+
 
 use aws_sdk_cloudwatch::types::Dimension;
 use nix_bench_common::metrics::dimensions;

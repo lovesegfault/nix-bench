@@ -1,8 +1,9 @@
-//! S3 operations: config download and results upload
+//! S3 operations: config download only
+//!
+//! Results are now sent via gRPC, not S3.
 
 use crate::config::Config;
 use anyhow::{Context, Result};
-use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use serde::Serialize;
 use tracing::{debug, info};
@@ -13,16 +14,6 @@ pub struct RunResult {
     pub run: u32,
     pub duration_secs: f64,
     pub success: bool,
-}
-
-/// Complete benchmark results
-#[derive(Debug, Serialize)]
-struct BenchmarkResults {
-    run_id: String,
-    instance_type: String,
-    system: String,
-    attr: String,
-    runs: Vec<RunResult>,
 }
 
 /// Download config JSON from S3
@@ -69,61 +60,73 @@ pub async fn download_config(
     Ok(config)
 }
 
-/// S3 client for uploading results
-pub struct S3Client {
-    client: Client,
-    bucket: String,
-    run_id: String,
-    instance_type: String,
-    system: String,
-    attr: String,
+/// Format S3 config key path
+pub fn config_key(run_id: &str, instance_type: &str) -> String {
+    format!("{}/config-{}.json", run_id, instance_type)
 }
 
-impl S3Client {
-    /// Create a new S3 client
-    pub async fn new(config: &Config) -> Result<Self> {
-        let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(config.region.clone()))
-            .load()
-            .await;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let client = Client::new(&aws_config);
-
-        Ok(Self {
-            client,
-            bucket: config.bucket.clone(),
-            run_id: config.run_id.clone(),
-            instance_type: config.instance_type.clone(),
-            system: config.system.clone(),
-            attr: config.attr.clone(),
-        })
-    }
-
-    /// Upload benchmark results to S3
-    pub async fn upload_results(&self, runs: &[RunResult]) -> Result<()> {
-        let results = BenchmarkResults {
-            run_id: self.run_id.clone(),
-            instance_type: self.instance_type.clone(),
-            system: self.system.clone(),
-            attr: self.attr.clone(),
-            runs: runs.to_vec(),
+    #[test]
+    fn test_run_result_serialization() {
+        let result = RunResult {
+            run: 1,
+            duration_secs: 45.678,
+            success: true,
         };
 
-        let json = serde_json::to_string_pretty(&results).context("Failed to serialize results")?;
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"run\":1"));
+        assert!(json.contains("\"duration_secs\":45.678"));
+        assert!(json.contains("\"success\":true"));
 
-        let key = format!("{}/{}/results.json", self.run_id, self.instance_type);
-        debug!(bucket = %self.bucket, key = %key, "Uploading results");
+        // Verify roundtrip
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["run"], 1);
+        assert_eq!(parsed["duration_secs"], 45.678);
+        assert_eq!(parsed["success"], true);
+    }
 
-        self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(&key)
-            .body(ByteStream::from(json.into_bytes()))
-            .content_type("application/json")
-            .send()
-            .await
-            .context("Failed to upload results to S3")?;
+    #[test]
+    fn test_run_result_failed_run() {
+        let result = RunResult {
+            run: 3,
+            duration_secs: 0.0,
+            success: false,
+        };
 
-        Ok(())
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"success\":false"));
+    }
+
+    #[test]
+    fn test_config_key_format() {
+        assert_eq!(
+            config_key("run-123", "c6i.xlarge"),
+            "run-123/config-c6i.xlarge.json"
+        );
+        assert_eq!(
+            config_key("abc-def-ghi", "g4dn.xlarge"),
+            "abc-def-ghi/config-g4dn.xlarge.json"
+        );
+    }
+
+    #[test]
+    fn test_run_result_duration_precision() {
+        // Test that we preserve decimal precision
+        let result = RunResult {
+            run: 1,
+            duration_secs: 123.456789,
+            success: true,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // JSON should preserve reasonable precision
+        let duration = parsed["duration_secs"].as_f64().unwrap();
+        assert!((duration - 123.456789).abs() < 1e-6);
     }
 }

@@ -17,4 +17,4 @@ pub use nix_bench::log_stream_server::{LogStream, LogStreamServer};
 pub use nix_bench::log_stream_client::LogStreamClient;
 
 // Message types (used by both)
-pub use nix_bench::{LogEntry, StatusRequest, StatusResponse, StreamLogsRequest};
+pub use nix_bench::{LogEntry, RunResult, StatusRequest, StatusResponse, StreamLogsRequest};

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nix_bench_agent::{benchmark, bootstrap, grpc, logging, results};
+use nix_bench_agent::{benchmark, bootstrap, gc, grpc, logging, results};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -113,10 +113,25 @@ async fn run_benchmarks_with_retry(
                     success: true,
                 });
 
-                // Update gRPC status with new duration
+                // Update gRPC status with new duration and run result
                 {
                     let mut s = status.write().await;
                     s.durations.push(duration.as_secs_f64());
+                    s.run_results.push(grpc::RunResult {
+                        run_number: slot as u32,
+                        duration_secs: duration.as_secs_f64(),
+                        success: true,
+                    });
+                }
+
+                // Run garbage collection between runs if enabled
+                // Skip on last run since we're about to finish anyway
+                if config.gc_between_runs && successful_runs.len() < config.runs as usize {
+                    if let Err(e) = gc::run_fod_preserving_gc(logger, Some(600)).await {
+                        // GC failure is not fatal - log and continue
+                        warn!(error = %e, "Garbage collection failed, continuing");
+                        logger.write_line(&format!("Warning: GC failed: {}. Continuing...", e));
+                    }
                 }
             }
             Err(e) => {
@@ -174,43 +189,18 @@ async fn main() -> Result<()> {
         "Starting nix-bench-agent"
     );
 
-    // Create gRPC infrastructure immediately - coordinator connects right after EC2 starts
+    // Create gRPC infrastructure - broadcaster for log streaming, status for queries
     let broadcaster = Arc::new(grpc::LogBroadcaster::new(DEFAULT_BROADCAST_CAPACITY));
     let status = Arc::new(RwLock::new(grpc::AgentStatus {
         status: "bootstrap".to_string(),
         run_progress: 0,
         total_runs: 0,
         durations: Vec::new(),
+        run_results: Vec::new(),
+        attr: String::new(),
+        system: String::new(),
     }));
     let shutdown_token = CancellationToken::new();
-
-    // Start gRPC server immediately (no TLS during bootstrap - config not loaded yet)
-    let grpc_broadcaster = broadcaster.clone();
-    let grpc_run_id = args.run_id.clone();
-    let grpc_instance_type = args.instance_type.clone();
-    let grpc_status = status.clone();
-    let grpc_shutdown = shutdown_token.clone();
-    let grpc_port = args.grpc_port;
-
-    info!("Starting gRPC server (bootstrap mode, no TLS)");
-    let grpc_handle = tokio::spawn(async move {
-        if let Err(e) = grpc::run_grpc_server(
-            grpc_port,
-            grpc_broadcaster,
-            grpc_run_id,
-            grpc_instance_type,
-            grpc_status,
-            None, // No TLS during bootstrap
-            grpc_shutdown,
-        )
-        .await
-        {
-            error!(error = %e, "gRPC server error");
-        }
-    });
-
-    // Give gRPC server a moment to start
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // === Bootstrap Phase ===
     // All output streams to gRPC for TUI visibility
@@ -258,15 +248,50 @@ async fn main() -> Result<()> {
         "Config loaded"
     );
 
+    // Get TLS config (required - will fail if missing)
+    let tls_config = config.tls_config().map_err(|e| {
+        error!(error = %e, "TLS configuration is required but missing");
+        anyhow::anyhow!("TLS configuration is required: {}", e)
+    })?;
+
+    // === Start gRPC Server with mTLS ===
+    info!("Starting gRPC server with mTLS");
+    logger.write_line("Starting gRPC server with mTLS...");
+
+    let grpc_broadcaster = broadcaster.clone();
+    let grpc_run_id = args.run_id.clone();
+    let grpc_instance_type = args.instance_type.clone();
+    let grpc_status = status.clone();
+    let grpc_shutdown = shutdown_token.clone();
+    let grpc_port = args.grpc_port;
+
+    let grpc_handle = tokio::spawn(async move {
+        if let Err(e) = grpc::run_grpc_server(
+            grpc_port,
+            grpc_broadcaster,
+            grpc_run_id,
+            grpc_instance_type,
+            grpc_status,
+            tls_config,
+            grpc_shutdown,
+        )
+        .await
+        {
+            error!(error = %e, "gRPC server error");
+        }
+    });
+
+    // Give gRPC server a moment to start
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
     // Update status with config info
     {
         let mut s = status.write().await;
         s.total_runs = config.runs;
+        s.attr = config.attr.clone();
+        s.system = config.system.clone();
         s.status = "warmup".to_string();
     }
-
-    // Initialize S3 client for results
-    let s3 = results::S3Client::new(&config).await?;
 
     // === Cache Warmup Phase ===
     info!("Starting cache warmup build (not timed)");
@@ -308,11 +333,7 @@ async fn main() -> Result<()> {
 
     let run_results = run_benchmarks_with_retry(&config, &logger, &status).await?;
 
-    // Upload final results
-    info!("Uploading results to S3");
-    s3.upload_results(&run_results).await?;
-
-    // Signal completion
+    // Signal completion (results are now available via gRPC GetStatus)
     {
         let mut s = status.write().await;
         s.status = "complete".to_string();

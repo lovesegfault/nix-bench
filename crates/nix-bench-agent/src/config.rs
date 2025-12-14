@@ -32,8 +32,8 @@ fn default_grpc_port() -> u16 {
     50051
 }
 
-/// Default require_tls setting
-fn default_require_tls() -> bool {
+/// Default gc_between_runs setting
+fn default_gc_between_runs() -> bool {
     false
 }
 
@@ -82,10 +82,11 @@ pub struct Config {
     #[serde(default = "default_grpc_port")]
     pub grpc_port: u16,
 
-    /// Require TLS for gRPC server (default: false)
-    /// If true and TLS certificates are not provided, the agent will fail to start
-    #[serde(default = "default_require_tls")]
-    pub require_tls: bool,
+    /// Run garbage collection between benchmark runs (default: false)
+    /// This preserves fixed-output derivations (fetched sources) but removes build outputs,
+    /// keeping disk usage manageable during long benchmark sessions.
+    #[serde(default = "default_gc_between_runs")]
+    pub gc_between_runs: bool,
 
     /// CA certificate (PEM) for mTLS
     #[serde(default)]
@@ -159,39 +160,35 @@ impl Config {
             return Err(ConfigError::InvalidBroadcastCapacity);
         }
 
-        // If require_tls is true, all TLS certificates must be provided
-        if self.require_tls {
-            if self.ca_cert_pem.is_none() {
-                return Err(ConfigError::MissingCaCert);
-            }
-            if self.agent_cert_pem.is_none() {
-                return Err(ConfigError::MissingAgentCert);
-            }
-            if self.agent_key_pem.is_none() {
-                return Err(ConfigError::MissingAgentKey);
-            }
+        // TLS certificates are always required for security
+        if self.ca_cert_pem.is_none() {
+            return Err(ConfigError::MissingCaCert);
+        }
+        if self.agent_cert_pem.is_none() {
+            return Err(ConfigError::MissingAgentCert);
+        }
+        if self.agent_key_pem.is_none() {
+            return Err(ConfigError::MissingAgentKey);
         }
 
         Ok(())
     }
 
-    /// Get TLS configuration if certificates are present
-    pub fn tls_config(&self) -> Option<TlsConfig> {
-        match (&self.ca_cert_pem, &self.agent_cert_pem, &self.agent_key_pem) {
-            (Some(ca), Some(cert), Some(key)) => Some(TlsConfig {
-                ca_cert_pem: ca.clone(),
-                cert_pem: cert.clone(),
-                key_pem: key.clone(),
-            }),
-            _ => None,
-        }
-    }
+    /// Get TLS configuration (required)
+    ///
+    /// # Errors
+    /// Returns an error if any TLS certificate is missing.
+    /// This should not happen if `validate()` was called first.
+    pub fn tls_config(&self) -> Result<TlsConfig, ConfigError> {
+        let ca = self.ca_cert_pem.as_ref().ok_or(ConfigError::MissingCaCert)?;
+        let cert = self.agent_cert_pem.as_ref().ok_or(ConfigError::MissingAgentCert)?;
+        let key = self.agent_key_pem.as_ref().ok_or(ConfigError::MissingAgentKey)?;
 
-    /// Check if TLS is enabled
-    pub fn tls_enabled(&self) -> bool {
-        self.ca_cert_pem.is_some()
-            && self.agent_cert_pem.is_some()
-            && self.agent_key_pem.is_some()
+        Ok(TlsConfig {
+            ca_cert_pem: ca.clone(),
+            cert_pem: cert.clone(),
+            key_pem: key.clone(),
+        })
     }
 }
 
@@ -213,7 +210,10 @@ mod tests {
                 "attr": "large-deep",
                 "runs": 10,
                 "instance_type": "c7id.metal",
-                "system": "x86_64-linux"
+                "system": "x86_64-linux",
+                "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+                "agent_cert_pem": "-----BEGIN CERTIFICATE-----\nAGENT\n-----END CERTIFICATE-----",
+                "agent_key_pem": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----"
             }}"#
         )
         .unwrap();
@@ -243,7 +243,10 @@ mod tests {
                 "system": "aarch64-linux",
                 "flake_ref": "github:myorg/my-bench",
                 "build_timeout": 3600,
-                "max_failures": 5
+                "max_failures": 5,
+                "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+                "agent_cert_pem": "-----BEGIN CERTIFICATE-----\nAGENT\n-----END CERTIFICATE-----",
+                "agent_key_pem": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----"
             }}"#
         )
         .unwrap();
@@ -267,7 +270,10 @@ mod tests {
                 "attr": "large-deep",
                 "runs": 10,
                 "instance_type": "c7id.metal",
-                "system": "x86_64-linux"
+                "system": "x86_64-linux",
+                "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+                "agent_cert_pem": "-----BEGIN CERTIFICATE-----\nAGENT\n-----END CERTIFICATE-----",
+                "agent_key_pem": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----"
             }}"#
         )
         .unwrap();
@@ -289,7 +295,10 @@ mod tests {
                 "attr": "large-deep",
                 "runs": 0,
                 "instance_type": "c7id.metal",
-                "system": "x86_64-linux"
+                "system": "x86_64-linux",
+                "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+                "agent_cert_pem": "-----BEGIN CERTIFICATE-----\nAGENT\n-----END CERTIFICATE-----",
+                "agent_key_pem": "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----"
             }}"#
         )
         .unwrap();
@@ -320,13 +329,12 @@ mod tests {
         .unwrap();
 
         let config = Config::load(file.path()).unwrap();
-        assert!(config.tls_enabled());
         let tls_config = config.tls_config();
-        assert!(tls_config.is_some());
+        assert!(tls_config.is_ok());
     }
 
     #[test]
-    fn test_require_tls_without_certs_fails() {
+    fn test_missing_tls_certs_fails() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
             file,
@@ -337,8 +345,7 @@ mod tests {
                 "attr": "large-deep",
                 "runs": 10,
                 "instance_type": "c7id.metal",
-                "system": "x86_64-linux",
-                "require_tls": true
+                "system": "x86_64-linux"
             }}"#
         )
         .unwrap();
@@ -348,6 +355,6 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("require_tls is true but ca_cert_pem is not provided"));
+            .contains("ca_cert_pem"));
     }
 }

@@ -18,14 +18,27 @@ message LogEntry {
 
 message StatusRequest {}
 
+// Result of a single benchmark run
+message RunResult {
+  uint32 run_number = 1;      // Run slot number (1-based)
+  double duration_secs = 2;   // Duration in seconds
+  bool success = 3;           // Whether the run succeeded
+}
+
 message StatusResponse {
   string status = 1;  // Deprecated: use status_code instead
   uint32 run_progress = 2;
   uint32 total_runs = 3;
   // Total number of log messages dropped due to slow client consumption
   uint64 dropped_log_count = 4;
-  // Build durations in seconds for completed runs
+  // Build durations in seconds for completed runs (deprecated: use run_results)
   repeated double durations = 5;
   // Canonical status code: 0=pending, 1=running, 2=complete, -1=failed
   int32 status_code = 6;
+  // Detailed results per run with success/failure status
+  repeated RunResult run_results = 7;
+  // Nix attribute that was built (e.g., "shallow.hello")
+  string attr = 8;
+  // System architecture (e.g., "x86_64-linux", "aarch64-linux")
+  string system = 9;
 }

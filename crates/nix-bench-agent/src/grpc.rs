@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use nix_bench_common::{StatusCode, TlsConfig};
-use nix_bench_proto::{LogEntry, LogStream, LogStreamServer, StatusRequest, StatusResponse, StreamLogsRequest};
+use nix_bench_proto::{LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult, StatusRequest, StatusResponse, StreamLogsRequest};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,14 +14,28 @@ use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
+/// Result of a single benchmark run
+#[derive(Debug, Clone)]
+pub struct RunResult {
+    pub run_number: u32,
+    pub duration_secs: f64,
+    pub success: bool,
+}
+
 /// Agent status for gRPC queries
 #[derive(Debug, Clone, Default)]
 pub struct AgentStatus {
     pub status: String,
     pub run_progress: u32,
     pub total_runs: u32,
-    /// Build durations in seconds for completed runs
+    /// Build durations in seconds for completed runs (kept for backward compat)
     pub durations: Vec<f64>,
+    /// Detailed run results with success/failure
+    pub run_results: Vec<RunResult>,
+    /// Nix attribute being built
+    pub attr: String,
+    /// System architecture
+    pub system: String,
 }
 
 /// Maximum number of messages to buffer for late subscribers
@@ -210,6 +224,17 @@ impl LogStream for LogStreamService {
             .map(|c| c.as_i32())
             .unwrap_or(0); // Default to pending if unknown
 
+        // Convert run_results to proto format
+        let run_results: Vec<ProtoRunResult> = status
+            .run_results
+            .iter()
+            .map(|r| ProtoRunResult {
+                run_number: r.run_number,
+                duration_secs: r.duration_secs,
+                success: r.success,
+            })
+            .collect();
+
         Ok(Response::new(StatusResponse {
             status: status.status.clone(),
             run_progress: status.run_progress,
@@ -217,11 +242,14 @@ impl LogStream for LogStreamService {
             dropped_log_count: self.dropped_messages.load(Ordering::Relaxed),
             durations: status.durations.clone(),
             status_code,
+            run_results,
+            attr: status.attr.clone(),
+            system: status.system.clone(),
         }))
     }
 }
 
-/// Run the gRPC server on the specified port with optional TLS and graceful shutdown
+/// Run the gRPC server on the specified port with mTLS and graceful shutdown
 ///
 /// # Arguments
 /// * `port` - Port to listen on
@@ -229,7 +257,7 @@ impl LogStream for LogStreamService {
 /// * `run_id` - Unique run identifier for request validation
 /// * `instance_type` - EC2 instance type for request validation
 /// * `status` - Shared agent status
-/// * `tls_config` - Optional TLS configuration for mTLS
+/// * `tls_config` - TLS configuration for mTLS (required)
 /// * `shutdown_token` - Token for graceful shutdown signaling
 ///
 /// # Returns
@@ -241,31 +269,21 @@ pub async fn run_grpc_server(
     run_id: String,
     instance_type: String,
     status: Arc<RwLock<AgentStatus>>,
-    tls_config: Option<TlsConfig>,
+    tls_config: TlsConfig,
     shutdown_token: CancellationToken,
 ) -> Result<()> {
     let addr = format!("0.0.0.0:{}", port).parse()?;
 
     let service = LogStreamService::new(broadcaster, run_id, instance_type, status, shutdown_token.clone());
 
-    let mut server = tonic::transport::Server::builder();
+    let tls = tls_config.server_tls_config()?;
+    info!(%addr, "Starting gRPC server with mTLS");
 
-    // Configure TLS if provided
-    if let Some(tls) = tls_config {
-        let tls_config = tls.server_tls_config()?;
-        info!(%addr, "Starting gRPC server with mTLS");
-        server
-            .tls_config(tls_config)?
-            .add_service(LogStreamServer::new(service))
-            .serve_with_shutdown(addr, shutdown_token.cancelled_owned())
-            .await?;
-    } else {
-        debug!(%addr, "Starting gRPC server without TLS");
-        server
-            .add_service(LogStreamServer::new(service))
-            .serve_with_shutdown(addr, shutdown_token.cancelled_owned())
-            .await?;
-    }
+    tonic::transport::Server::builder()
+        .tls_config(tls)?
+        .add_service(LogStreamServer::new(service))
+        .serve_with_shutdown(addr, shutdown_token.cancelled_owned())
+        .await?;
 
     info!("gRPC server shut down gracefully");
     Ok(())
@@ -340,6 +358,9 @@ mod tests {
             run_progress: 3,
             total_runs: 10,
             durations: Vec::new(),
+            run_results: Vec::new(),
+            attr: "shallow.hello".to_string(),
+            system: "x86_64-linux".to_string(),
         }));
 
         let shutdown_token = CancellationToken::new();

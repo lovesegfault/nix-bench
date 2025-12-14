@@ -13,9 +13,9 @@ use crate::config::{detect_system, AgentConfig, RunConfig};
 use crate::state::{self, DbPool, ResourceType};
 use nix_bench_common::tls::{generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig};
 use crate::tui::{InitPhase, LogBuffer};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 /// Context holding all resources created during initialization
 pub struct InitContext {
@@ -31,7 +31,8 @@ pub struct InitContext {
     pub coordinator_ip: Option<String>,
     pub eip_allocations: HashMap<String, (String, String)>,
     pub agent_certs: HashMap<String, (String, String, String)>,
-    pub coordinator_tls_config: Option<TlsConfig>,
+    /// TLS configuration for coordinator (required for mTLS)
+    pub coordinator_tls_config: TlsConfig,
     pub instances: HashMap<String, InstanceState>,
 }
 
@@ -84,9 +85,10 @@ impl<'a> BenchmarkInitializer<'a> {
         let ec2 = Ec2Client::from_context(&aws);
         let s3 = S3Client::from_context(&aws);
 
-        // Phase 2: Create S3 bucket
+        // Phase 2: Create S3 bucket and apply tags
         reporter.report_phase(InitPhase::CreatingBucket);
         s3.create_bucket(&self.bucket_name).await?;
+        s3.tag_bucket(&self.bucket_name, &self.run_id).await?;
 
         // Phase 3: Create IAM role/profile if needed
         let (instance_profile_name, iam_role_name) = if self.config.instance_profile.is_some() {
@@ -100,10 +102,10 @@ impl<'a> BenchmarkInitializer<'a> {
             (Some(profile_name), Some(role_name))
         };
 
-        // Phase 4: Allocate Elastic IPs
-        let eip_allocations = self.allocate_elastic_ips(&ec2).await;
+        // Phase 4: Allocate Elastic IPs (required for TLS certificates)
+        let eip_allocations = self.allocate_elastic_ips(&ec2).await?;
 
-        // Phase 5: Generate TLS certificates
+        // Phase 5: Generate TLS certificates (required for mTLS)
         let (agent_certs, coordinator_tls_config) = self.generate_certificates(&eip_allocations)?;
 
         // Phase 6: Upload agents
@@ -173,24 +175,20 @@ impl<'a> BenchmarkInitializer<'a> {
         })
     }
 
-    async fn allocate_elastic_ips(&self, ec2: &Ec2Client) -> HashMap<String, (String, String)> {
+    async fn allocate_elastic_ips(&self, ec2: &Ec2Client) -> Result<HashMap<String, (String, String)>> {
         let mut eip_allocations = HashMap::new();
         for instance_type in &self.config.instance_types {
-            match ec2.allocate_elastic_ip(&self.run_id).await {
-                Ok((allocation_id, public_ip)) => {
-                    info!(instance_type = %instance_type, public_ip = %public_ip, "Allocated EIP");
-                    eip_allocations.insert(instance_type.clone(), (allocation_id, public_ip));
-                }
-                Err(e) => error!(instance_type = %instance_type, error = ?e, "Failed to allocate EIP"),
-            }
+            let (allocation_id, public_ip) = ec2.allocate_elastic_ip(&self.run_id).await
+                .with_context(|| format!("Failed to allocate EIP for instance type {}. EIPs are required for mTLS.", instance_type))?;
+            info!(instance_type = %instance_type, public_ip = %public_ip, "Allocated EIP");
+            eip_allocations.insert(instance_type.clone(), (allocation_id, public_ip));
         }
-        eip_allocations
+        Ok(eip_allocations)
     }
 
-    fn generate_certificates(&self, eip_allocations: &HashMap<String, (String, String)>) -> Result<(HashMap<String, (String, String, String)>, Option<TlsConfig>)> {
+    fn generate_certificates(&self, eip_allocations: &HashMap<String, (String, String)>) -> Result<(HashMap<String, (String, String, String)>, TlsConfig)> {
         if eip_allocations.is_empty() {
-            warn!("No EIPs allocated, mTLS disabled");
-            return Ok((HashMap::new(), None));
+            anyhow::bail!("No EIPs allocated - cannot generate TLS certificates. EIPs are required for mTLS.");
         }
 
         let ca = generate_ca(&self.run_id)?;
@@ -203,12 +201,11 @@ impl<'a> BenchmarkInitializer<'a> {
 
         let mut agent_certs = HashMap::new();
         for (instance_type, (_, public_ip)) in eip_allocations {
-            match generate_agent_cert(&ca.cert_pem, &ca.key_pem, instance_type, Some(public_ip)) {
-                Ok(cert) => { agent_certs.insert(instance_type.clone(), (ca.cert_pem.clone(), cert.cert_pem, cert.key_pem)); }
-                Err(e) => error!(instance_type = %instance_type, error = ?e, "Failed to generate cert"),
-            }
+            let cert = generate_agent_cert(&ca.cert_pem, &ca.key_pem, instance_type, Some(public_ip))
+                .with_context(|| format!("Failed to generate TLS certificate for instance type {}", instance_type))?;
+            agent_certs.insert(instance_type.clone(), (ca.cert_pem.clone(), cert.cert_pem, cert.key_pem));
         }
-        Ok((agent_certs, Some(coordinator_tls)))
+        Ok((agent_certs, coordinator_tls))
     }
 
     async fn upload_agents(&self, s3: &S3Client) -> Result<()> {
@@ -234,6 +231,7 @@ impl<'a> BenchmarkInitializer<'a> {
                 runs: self.config.runs, instance_type: instance_type.clone(),
                 system: system.to_string(), flake_ref: self.config.flake_ref.clone(),
                 build_timeout: self.config.build_timeout, max_failures: self.config.max_failures,
+                gc_between_runs: self.config.gc_between_runs,
                 ca_cert_pem, agent_cert_pem, agent_key_pem,
             };
             let config_json = serde_json::to_string_pretty(&agent_config)?;

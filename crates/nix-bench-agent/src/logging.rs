@@ -5,6 +5,7 @@
 
 use crate::grpc::LogBroadcaster;
 use anyhow::{Context, Result};
+use nix_bench_common::timestamp_millis;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -22,17 +23,9 @@ impl GrpcLogger {
         Self { broadcaster }
     }
 
-    /// Get the current timestamp in milliseconds
-    fn timestamp() -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
-    }
-
     /// Write a log line to gRPC clients
     pub fn write_line(&self, message: &str) {
-        self.broadcaster.broadcast(Self::timestamp(), message.to_string());
+        self.broadcaster.broadcast(timestamp_millis(), message.to_string());
     }
 
     /// Run a command and stream its output to gRPC clients
@@ -84,11 +77,7 @@ impl GrpcLogger {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                broadcaster_stdout.broadcast(timestamp, line);
+                broadcaster_stdout.broadcast(timestamp_millis(), line);
             }
         });
 
@@ -97,11 +86,7 @@ impl GrpcLogger {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                broadcaster_stderr.broadcast(timestamp, line);
+                broadcaster_stderr.broadcast(timestamp_millis(), line);
             }
         });
 

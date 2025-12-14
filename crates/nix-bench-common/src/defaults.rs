@@ -31,11 +31,6 @@ pub fn default_max_failures() -> u32 {
     DEFAULT_MAX_FAILURES
 }
 
-/// Returns the default gRPC port
-pub fn default_grpc_port() -> u16 {
-    DEFAULT_GRPC_PORT
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +48,5 @@ mod tests {
         assert_eq!(default_flake_ref(), "github:lovesegfault/nix-bench");
         assert_eq!(default_build_timeout(), 7200);
         assert_eq!(default_max_failures(), 3);
-        assert_eq!(default_grpc_port(), 50051);
     }
 }

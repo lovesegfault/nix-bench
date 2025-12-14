@@ -260,7 +260,7 @@ impl<'a> BenchmarkInitializer<'a> {
         let mut instances = HashMap::new();
         for instance_type in &self.config.instance_types {
             let system = detect_system(instance_type);
-            let user_data = super::generate_user_data(&self.bucket_name, &self.run_id, instance_type);
+            let user_data = super::user_data::generate_user_data(&self.bucket_name, &self.run_id, instance_type);
             let mut launch_config = LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
             if let Some(subnet) = &self.config.subnet_id {
                 launch_config = launch_config.with_subnet(subnet);

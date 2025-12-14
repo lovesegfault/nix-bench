@@ -1,11 +1,11 @@
-//! S3 results upload
+//! S3 operations: config download and results upload
 
 use crate::config::Config;
 use anyhow::{Context, Result};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use serde::Serialize;
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Result of a single benchmark run
 #[derive(Debug, Clone, Serialize)]
@@ -23,6 +23,50 @@ struct BenchmarkResults {
     system: String,
     attr: String,
     runs: Vec<RunResult>,
+}
+
+/// Download config JSON from S3
+///
+/// This is called early in agent startup, before we have a full Config.
+/// Uses the default AWS region from instance metadata.
+pub async fn download_config(
+    bucket: &str,
+    run_id: &str,
+    instance_type: &str,
+) -> Result<Config> {
+    info!(bucket, run_id, instance_type, "Downloading config from S3");
+
+    let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+
+    let client = Client::new(&aws_config);
+
+    let key = format!("{}/config-{}.json", run_id, instance_type);
+    debug!(bucket, key = %key, "Fetching config object");
+
+    let response = client
+        .get_object()
+        .bucket(bucket)
+        .key(&key)
+        .send()
+        .await
+        .with_context(|| format!("Failed to download config from s3://{}/{}", bucket, key))?;
+
+    let body = response
+        .body
+        .collect()
+        .await
+        .context("Failed to read config body from S3")?;
+
+    let json = String::from_utf8(body.into_bytes().to_vec())
+        .context("Config file is not valid UTF-8")?;
+
+    let config: Config = serde_json::from_str(&json)
+        .context("Failed to parse config JSON")?;
+
+    info!("Config downloaded successfully");
+    Ok(config)
 }
 
 /// S3 client for uploading results

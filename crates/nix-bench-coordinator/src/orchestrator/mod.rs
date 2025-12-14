@@ -49,6 +49,9 @@ fn detect_bootstrap_failure(console_output: &str) -> Option<String> {
 }
 
 /// Generate user-data script for an instance
+///
+/// The agent now handles all setup (NVMe, Nix installation) internally.
+/// This script just downloads and starts the agent with CLI args.
 fn generate_user_data(bucket: &str, run_id: &str, instance_type: &str) -> String {
     format!(
         r#"#!/bin/bash
@@ -56,74 +59,21 @@ set -euo pipefail
 
 exec > >(tee /var/log/nix-bench-bootstrap.log) 2>&1
 
-echo "Starting nix-bench bootstrap"
-
 BUCKET="{bucket}"
 RUN_ID="{run_id}"
 INSTANCE_TYPE="{instance_type}"
 ARCH=$(uname -m)
 
-# Setup NVMe instance store for /nix if available (gd/d/i instance types)
-setup_nvme() {{
-    # Find NVMe instance store devices (not EBS - which has "Amazon Elastic Block Store" in model)
-    local nvme_devices=()
-    for dev in /sys/block/nvme*; do
-        [[ -d "$dev" ]] || continue
-        local name=$(basename "$dev")
-        [[ "$name" == *p* ]] && continue  # Skip partitions
-        local model=$(cat "$dev/device/model" 2>/dev/null | tr -d ' ')
-        if [[ "$model" == *"InstanceStorage"* ]] || [[ "$model" == *"NVMeSSD"* ]]; then
-            nvme_devices+=("/dev/$name")
-        fi
-    done
-
-    local count=${{#nvme_devices[@]}}
-    [[ $count -eq 0 ]] && return 0
-
-    echo "Found $count NVMe instance store device(s): ${{nvme_devices[*]}}"
-
-    local target_dev
-    if [[ $count -gt 1 ]]; then
-        echo "Creating RAID0 array..."
-        yum install -y mdadm
-        mdadm --create /dev/md0 --level=0 --raid-devices=$count "${{nvme_devices[@]}}" --force
-        target_dev=/dev/md0
-    else
-        target_dev="${{nvme_devices[0]}}"
-    fi
-
-    echo "Formatting $target_dev with ext4..."
-    mkfs.ext4 -F "$target_dev"
-
-    echo "Mounting NVMe storage..."
-    mkdir -p /mnt/nvme
-    mount "$target_dev" /mnt/nvme
-    mkdir -p /mnt/nvme/nix /mnt/nvme/tmp /mnt/nvme/var
-
-    # Bind mount to use fast NVMe for Nix store
-    mkdir -p /nix
-    mount --bind /mnt/nvme/nix /nix
-}}
-
-setup_nvme
-
-echo "Installing upstream Nix via Determinate installer..."
-curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | \
-    sh -s -- install --no-confirm --prefer-upstream-nix
-
-echo "Sourcing nix profile..."
-export HOME=/root
-. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
-
+# Download and run agent (agent handles all setup internally)
 echo "Fetching agent from S3..."
-mkdir -p /etc/nix-bench
 aws s3 cp "s3://${{BUCKET}}/${{RUN_ID}}/agent-${{ARCH}}" /usr/local/bin/nix-bench-agent
 chmod +x /usr/local/bin/nix-bench-agent
 
-aws s3 cp "s3://${{BUCKET}}/${{RUN_ID}}/config-${{INSTANCE_TYPE}}.json" /etc/nix-bench/config.json
-
 echo "Starting nix-bench-agent..."
-exec /usr/local/bin/nix-bench-agent --config /etc/nix-bench/config.json
+exec /usr/local/bin/nix-bench-agent \
+    --bucket "$BUCKET" \
+    --run-id "$RUN_ID" \
+    --instance-type "$INSTANCE_TYPE"
 "#,
         bucket = bucket,
         run_id = run_id,
@@ -445,6 +395,7 @@ async fn run_init_task(
     // Extract what we need from the context
     let instances = ctx.instances;
     let coordinator_tls_config = ctx.coordinator_tls_config;
+    let eip_allocations = ctx.eip_allocations;
 
     // Send TLS config to TUI for status polling
     if let Some(ref tls) = coordinator_tls_config {
@@ -465,6 +416,9 @@ async fn run_init_task(
                 .map(|ip| (instance_type.clone(), ip.clone()))
         })
         .collect();
+
+    // Clone TLS config for termination watcher before it's moved
+    let tls_config_for_watcher = coordinator_tls_config.clone();
 
     if !instances_with_ips.is_empty() {
         info!(
@@ -515,6 +469,20 @@ async fn run_init_task(
     let start_time = Instant::now();
     tokio::spawn(async move {
         poll_bootstrap_status(instances_for_logs, tx_logs, region, timeout_secs, start_time).await;
+    });
+
+    // Spawn termination watcher to terminate instances immediately when they complete
+    let instances_for_termination = instances.clone();
+    let region_for_termination = config.region.clone();
+    let run_id_for_termination = run_id.clone();
+    tokio::spawn(async move {
+        watch_and_terminate_completed(
+            instances_for_termination,
+            eip_allocations,
+            region_for_termination,
+            run_id_for_termination,
+            tls_config_for_watcher,
+        ).await;
     });
 
     Ok(instances)
@@ -601,6 +569,135 @@ async fn poll_bootstrap_status(
                                 output: console_output,
                             })
                             .await;
+                    }
+                }
+            }
+        }
+
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Watch for completed instances and terminate them immediately
+///
+/// This task polls gRPC status and terminates instances as soon as they report complete,
+/// rather than waiting for all instances to finish before cleanup.
+async fn watch_and_terminate_completed(
+    instances: HashMap<String, InstanceState>,
+    eip_allocations: HashMap<String, (String, String)>,
+    region: String,
+    _run_id: String,
+    tls_config: Option<nix_bench_common::TlsConfig>,
+) {
+    use crate::aws::GrpcStatusPoller;
+    use nix_bench_common::StatusCode;
+    use std::collections::HashSet;
+
+    let ec2 = match Ec2Client::new(&region).await {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = ?e, "Failed to create EC2 client for termination watcher");
+            return;
+        }
+    };
+
+    let db = match state::open_db().await {
+        Ok(d) => d,
+        Err(e) => {
+            error!(error = ?e, "Failed to get database for termination watcher");
+            return;
+        }
+    };
+
+    // Build list of instances with IPs for polling
+    let instances_with_ips: Vec<(String, String)> = instances
+        .iter()
+        .filter_map(|(instance_type, state)| {
+            state
+                .public_ip
+                .as_ref()
+                .map(|ip| (instance_type.clone(), ip.clone()))
+        })
+        .collect();
+
+    if instances_with_ips.is_empty() {
+        debug!("No instances with IPs for termination watcher");
+        return;
+    }
+
+    // Track which instances have been terminated
+    let mut terminated: HashSet<String> = HashSet::new();
+
+    // Poll interval for status checks
+    const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+    loop {
+        // Check if all instances are done
+        if terminated.len() >= instances.len() {
+            debug!("All instances terminated, exiting termination watcher");
+            break;
+        }
+
+        // Poll status from all instances
+        let poller = if let Some(ref tls) = tls_config {
+            GrpcStatusPoller::new_with_tls(&instances_with_ips, GRPC_PORT, tls.clone())
+        } else {
+            GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT)
+        };
+
+        let status_map = poller.poll_status().await;
+
+        for (instance_type, status) in &status_map {
+            // Skip already terminated instances
+            if terminated.contains(instance_type) {
+                continue;
+            }
+
+            // Check if instance is complete
+            if let Some(status_code) = status.status {
+                if let Some(StatusCode::Complete) = StatusCode::from_i32(status_code) {
+                    info!(instance_type = %instance_type, "Instance complete, terminating immediately");
+
+                    // Get instance ID
+                    if let Some(state) = instances.get(instance_type) {
+                        let instance_id = &state.instance_id;
+
+                        // Terminate the instance
+                        match ec2.terminate_instance(instance_id).await {
+                            Ok(()) => {
+                                info!(instance_id = %instance_id, instance_type = %instance_type, "Instance terminated");
+                                let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
+                            }
+                            Err(e) => {
+                                let error_str = format!("{:?}", e);
+                                if error_str.contains("InvalidInstanceID.NotFound") {
+                                    // Already terminated
+                                    let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
+                                } else {
+                                    warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
+                                }
+                            }
+                        }
+
+                        // Release the Elastic IP
+                        if let Some((allocation_id, public_ip)) = eip_allocations.get(instance_type) {
+                            match ec2.release_elastic_ip(allocation_id).await {
+                                Ok(()) => {
+                                    info!(allocation_id = %allocation_id, public_ip = %public_ip, "Released Elastic IP");
+                                    let _ = state::mark_resource_deleted(&db, ResourceType::ElasticIp, allocation_id).await;
+                                }
+                                Err(e) => {
+                                    let error_str = format!("{:?}", e);
+                                    if error_str.contains("InvalidAllocationID.NotFound") {
+                                        let _ = state::mark_resource_deleted(&db, ResourceType::ElasticIp, allocation_id).await;
+                                    } else {
+                                        warn!(allocation_id = %allocation_id, error = ?e, "Failed to release EIP");
+                                    }
+                                }
+                            }
+                        }
+
+                        terminated.insert(instance_type.clone());
                     }
                 }
             }
@@ -894,16 +991,25 @@ async fn cleanup_resources(
     let s3 = S3Client::new(&config.region).await?;
 
     if !config.keep {
-        // Collect instance IDs from the HashMap
+        // Get all resources from the database
+        let db_resources = state::get_run_resources(&db, run_id).await.unwrap_or_default();
+
+        // Collect instance IDs that are NOT already deleted (check database)
+        // This accounts for instances terminated early by the termination watcher
+        let deleted_instances: std::collections::HashSet<String> = db_resources
+            .iter()
+            .filter(|r| r.resource_type == ResourceType::Ec2Instance && r.deleted_at.is_some())
+            .map(|r| r.resource_id.clone())
+            .collect();
+
         let mut instance_ids: std::collections::HashSet<String> = instances
             .values()
-            .filter(|s| !s.instance_id.is_empty())
+            .filter(|s| !s.instance_id.is_empty() && !deleted_instances.contains(&s.instance_id))
             .map(|s| s.instance_id.clone())
             .collect();
 
-        // Also check the database for any instances that might have been created
+        // Also add any instances from the database that might have been created
         // but not tracked in the HashMap (e.g., if user quit early during init)
-        let db_resources = state::get_run_resources(&db, run_id).await.unwrap_or_default();
         for resource in &db_resources {
             if resource.resource_type == ResourceType::Ec2Instance && resource.deleted_at.is_none() {
                 instance_ids.insert(resource.resource_id.clone());
@@ -1426,19 +1532,15 @@ Agent started successfully
         // Check instance_type variable
         assert!(script.contains("INSTANCE_TYPE=\"c6i.xlarge\""));
 
-        // Check Nix installer curl command
-        assert!(script.contains("curl --proto '=https'"));
-        assert!(script.contains("install.determinate.systems/nix"));
-
         // Check S3 agent download
         assert!(script.contains("aws s3 cp"));
         assert!(script.contains("s3://${BUCKET}/${RUN_ID}/agent-${ARCH}"));
 
-        // Check config download with instance type
-        assert!(script.contains("config-${INSTANCE_TYPE}.json"));
-
-        // Check agent execution
+        // Check agent execution with CLI args
         assert!(script.contains("exec /usr/local/bin/nix-bench-agent"));
+        assert!(script.contains("--bucket"));
+        assert!(script.contains("--run-id"));
+        assert!(script.contains("--instance-type"));
     }
 
     #[test]

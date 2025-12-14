@@ -2403,8 +2403,6 @@ dependencies = [
  "anyhow",
  "async-stream",
  "aws-config",
- "aws-sdk-cloudwatch",
- "aws-sdk-cloudwatchlogs",
  "aws-sdk-s3",
  "backon",
  "clap",

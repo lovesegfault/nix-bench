@@ -28,37 +28,25 @@ const EC2_ASSUME_ROLE_POLICY: &str = r#"{
 }"#;
 
 /// Generate the inline policy for nix-bench agent
+///
+/// The agent needs:
+/// - S3 read access to download config
+/// - S3 write access to upload results
 fn generate_agent_policy(bucket_name: &str) -> String {
     serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [
             {
-                "Sid": "S3Access",
+                "Sid": "S3ReadAccess",
                 "Effect": "Allow",
                 "Action": ["s3:GetObject"],
                 "Resource": format!("arn:aws:s3:::{}/*", bucket_name)
             },
             {
-                "Sid": "CloudWatchMetrics",
+                "Sid": "S3WriteAccess",
                 "Effect": "Allow",
-                "Action": ["cloudwatch:PutMetricData"],
-                "Resource": "*",
-                "Condition": {
-                    "StringEquals": {
-                        "cloudwatch:namespace": "NixBench"
-                    }
-                }
-            },
-            {
-                "Sid": "CloudWatchLogs",
-                "Effect": "Allow",
-                "Action": [
-                    "logs:CreateLogGroup",
-                    "logs:CreateLogStream",
-                    "logs:PutLogEvents",
-                    "logs:DescribeLogStreams"
-                ],
-                "Resource": "arn:aws:logs:*:*:log-group:/nix-bench/*"
+                "Action": ["s3:PutObject"],
+                "Resource": format!("arn:aws:s3:::{}/*", bucket_name)
             }
         ]
     })

@@ -27,6 +27,10 @@ pub enum AwsError {
     #[error("Rate limit exceeded")]
     Throttled,
 
+    /// Resource has dependent objects (retryable, e.g., SG with attached ENI)
+    #[error("Resource has dependent objects")]
+    DependencyViolation,
+
     /// Generic AWS SDK error with code and message
     #[error("AWS error: {message}")]
     Sdk {
@@ -43,7 +47,10 @@ impl AwsError {
 
     /// Check if this is a retryable error
     pub fn is_retryable(&self) -> bool {
-        matches!(self, AwsError::IamPropagationDelay | AwsError::Throttled)
+        matches!(
+            self,
+            AwsError::IamPropagationDelay | AwsError::Throttled | AwsError::DependencyViolation
+        )
     }
 
     /// Check if this is an "already exists" error
@@ -73,6 +80,9 @@ const ALREADY_EXISTS_CODES: &[&str] = &[
 
 /// Known AWS error codes for throttling/rate limiting
 const THROTTLING_CODES: &[&str] = &["Throttling", "ThrottlingException", "RequestLimitExceeded"];
+
+/// Known AWS error codes for dependency violations (resource still in use)
+const DEPENDENCY_CODES: &[&str] = &["DependencyViolation"];
 
 /// Classify an AWS SDK error using the error code.
 ///
@@ -109,6 +119,9 @@ pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError
 
         // Throttling errors
         Some(c) if THROTTLING_CODES.contains(&c) => AwsError::Throttled,
+
+        // Dependency violations (e.g., SG with attached ENI)
+        Some(c) if DEPENDENCY_CODES.contains(&c) => AwsError::DependencyViolation,
 
         // IAM propagation delay (specific InvalidParameterValue case)
         Some("InvalidParameterValue") if message.contains("iamInstanceProfile") => {
@@ -156,6 +169,13 @@ pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
     for code in THROTTLING_CODES {
         if error_debug.contains(code) {
             return AwsError::Throttled;
+        }
+    }
+
+    // Check for dependency violations
+    for code in DEPENDENCY_CODES {
+        if error_debug.contains(code) {
+            return AwsError::DependencyViolation;
         }
     }
 

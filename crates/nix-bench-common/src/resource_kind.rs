@@ -22,6 +22,8 @@ pub enum ResourceKind {
     SecurityGroupRule,
     /// Security group (depends on instances being terminated)
     SecurityGroup,
+    /// Elastic IP address
+    ElasticIp,
 }
 
 impl ResourceKind {
@@ -43,6 +45,7 @@ impl ResourceKind {
     pub fn cleanup_priority(self) -> u8 {
         match self {
             ResourceKind::Ec2Instance => 0,
+            ResourceKind::ElasticIp => 0, // Release early, same priority as EC2 instances
             ResourceKind::S3Object => 1,
             ResourceKind::S3Bucket => 2,
             ResourceKind::IamRole => 3,
@@ -62,6 +65,7 @@ impl ResourceKind {
             ResourceKind::IamInstanceProfile => "iam_instance_profile",
             ResourceKind::SecurityGroup => "security_group",
             ResourceKind::SecurityGroupRule => "security_group_rule",
+            ResourceKind::ElasticIp => "elastic_ip",
         }
     }
 
@@ -75,6 +79,7 @@ impl ResourceKind {
             "iam_instance_profile" => Some(ResourceKind::IamInstanceProfile),
             "security_group" => Some(ResourceKind::SecurityGroup),
             "security_group_rule" => Some(ResourceKind::SecurityGroupRule),
+            "elastic_ip" => Some(ResourceKind::ElasticIp),
             _ => None,
         }
     }
@@ -137,6 +142,7 @@ mod tests {
             ResourceKind::IamInstanceProfile,
             ResourceKind::SecurityGroup,
             ResourceKind::SecurityGroupRule,
+            ResourceKind::ElasticIp,
         ];
         for kind in kinds {
             let s = kind.as_str();

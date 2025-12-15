@@ -34,6 +34,7 @@ pub async fn delete_resource(
 ) -> CleanupResult {
     let result = match resource_type {
         ResourceType::Ec2Instance => ec2.terminate_instance(resource_id).await,
+        ResourceType::ElasticIp => ec2.release_elastic_ip(resource_id).await,
         ResourceType::S3Bucket => s3.delete_bucket(resource_id).await,
         ResourceType::S3Object => return CleanupResult::Skipped, // Cleaned with bucket
         ResourceType::IamRole => iam.delete_benchmark_role(resource_id).await,

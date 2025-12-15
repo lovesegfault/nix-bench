@@ -27,8 +27,8 @@ pub fn get_test_region() -> String {
 
 /// Generate a unique run ID for test resources.
 ///
-/// Format: `test-{timestamp}` where timestamp is Unix seconds.
-/// This ensures unique resource names across test runs.
+/// Format: `test-{timestamp_ms}-{random}` using milliseconds and random suffix.
+/// This ensures unique resource names even when tests start simultaneously.
 ///
 /// # Example
 ///
@@ -39,7 +39,12 @@ pub fn get_test_region() -> String {
 /// assert!(run_id.starts_with("test-"));
 /// ```
 pub fn test_run_id() -> String {
-    format!("test-{}", Utc::now().timestamp())
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let ts = Utc::now().timestamp_millis();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("test-{}-{}", ts, counter)
 }
 
 /// Generate a unique bucket name for test resources.
@@ -87,9 +92,20 @@ mod tests {
     fn test_run_id_format() {
         let run_id = test_run_id();
         assert!(run_id.starts_with("test-"));
-        // Should be parseable as a timestamp
-        let ts_str = run_id.strip_prefix("test-").unwrap();
-        ts_str.parse::<i64>().expect("Should be valid timestamp");
+        // Format: test-{timestamp_ms}-{counter}
+        let parts: Vec<&str> = run_id.strip_prefix("test-").unwrap().split('-').collect();
+        assert_eq!(parts.len(), 2);
+        parts[0].parse::<i64>().expect("Should be valid timestamp");
+        parts[1].parse::<u32>().expect("Should be valid counter");
+    }
+
+    #[test]
+    fn test_run_id_unique() {
+        let id1 = test_run_id();
+        let id2 = test_run_id();
+        let id3 = test_run_id();
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
     }
 
     #[test]

@@ -84,3 +84,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # Testing
 tempfile = "3"
 proptest = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

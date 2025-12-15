@@ -51,7 +51,7 @@ pub fn jittered_delay(base: std::time::Duration, jitter_factor: f64) -> std::tim
     if jitter_factor <= 0.0 {
         return base;
     }
-    let jitter = rand::thread_rng().gen_range(0.0..jitter_factor);
+    let jitter = rand::rng().random_range(0.0..jitter_factor);
     std::time::Duration::from_secs_f64(base.as_secs_f64() * (1.0 + jitter))
 }
 

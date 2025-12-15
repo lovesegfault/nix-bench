@@ -13,6 +13,14 @@ use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_T
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// Check if an error is retryable (IAM propagation delay or throttling)
+fn is_retryable_launch_error(e: &anyhow::Error) -> bool {
+    matches!(
+        classify_anyhow_error(e),
+        AwsError::IamPropagationDelay | AwsError::Throttled
+    )
+}
+
 /// Internal parameters for do_launch_instance
 pub(super) struct LaunchParams<'a> {
     ami_id: &'a str,
@@ -29,8 +37,9 @@ pub(super) struct LaunchParams<'a> {
 impl Ec2Client {
     /// Launch an EC2 instance with the given configuration
     ///
-    /// When an IAM instance profile is provided, this function will retry the launch
-    /// if EC2 rejects the profile due to IAM eventual consistency.
+    /// Retries on transient errors including:
+    /// - IAM eventual consistency (profile not yet visible to EC2)
+    /// - AWS rate limiting (throttling)
     pub async fn launch_instance(&self, config: LaunchInstanceConfig) -> Result<LaunchedInstance> {
         let ami_id = self.get_al2023_ami(&config.system).await?;
 
@@ -51,53 +60,60 @@ impl Ec2Client {
             config.user_data.as_bytes(),
         );
 
-        // Only use retry logic if an IAM profile is provided
-        if let Some(ref profile) = config.iam_instance_profile {
-            let profile = profile.clone();
-            (|| async {
-                self.do_launch_instance(LaunchParams {
-                    ami_id: &ami_id,
-                    instance_type_enum: instance_type_enum.clone(),
-                    run_id: &config.run_id,
-                    instance_type: &config.instance_type,
-                    system: &config.system,
-                    user_data_b64: &user_data_b64,
-                    subnet_id: config.subnet_id.as_deref(),
-                    security_group_id: config.security_group_id.as_deref(),
-                    iam_instance_profile: Some(&profile),
-                })
-                .await
-            })
-            .retry(
-                ExponentialBuilder::default()
-                    .with_min_delay(Duration::from_secs(1))
-                    .with_max_delay(Duration::from_secs(10))
-                    .with_max_times(10),
-            )
-            .when(|e| matches!(classify_anyhow_error(e), AwsError::IamPropagationDelay))
-            .notify(|e, dur| {
-                warn!(
-                    delay = ?dur,
-                    profile = %profile,
-                    error = %e,
-                    "IAM instance profile not yet visible to EC2, retrying..."
-                );
-            })
-            .await
-        } else {
+        let iam_profile = config.iam_instance_profile.clone();
+        let instance_type_for_log = config.instance_type.clone();
+
+        (|| async {
             self.do_launch_instance(LaunchParams {
                 ami_id: &ami_id,
-                instance_type_enum,
+                instance_type_enum: instance_type_enum.clone(),
                 run_id: &config.run_id,
                 instance_type: &config.instance_type,
                 system: &config.system,
                 user_data_b64: &user_data_b64,
                 subnet_id: config.subnet_id.as_deref(),
                 security_group_id: config.security_group_id.as_deref(),
-                iam_instance_profile: None,
+                iam_instance_profile: iam_profile.as_deref(),
             })
             .await
-        }
+        })
+        .retry(
+            ExponentialBuilder::default()
+                .with_min_delay(Duration::from_secs(2))
+                .with_max_delay(Duration::from_secs(30))
+                .with_max_times(8),
+        )
+        .when(is_retryable_launch_error)
+        .notify(|e, dur| {
+            let err_type = classify_anyhow_error(e);
+            match err_type {
+                AwsError::IamPropagationDelay => {
+                    warn!(
+                        delay = ?dur,
+                        instance_type = %instance_type_for_log,
+                        error = %e,
+                        "IAM instance profile not yet visible to EC2, retrying..."
+                    );
+                }
+                AwsError::Throttled => {
+                    warn!(
+                        delay = ?dur,
+                        instance_type = %instance_type_for_log,
+                        error = %e,
+                        "AWS rate limited, backing off..."
+                    );
+                }
+                _ => {
+                    warn!(
+                        delay = ?dur,
+                        instance_type = %instance_type_for_log,
+                        error = %e,
+                        "Transient error, retrying..."
+                    );
+                }
+            }
+        })
+        .await
     }
 
     /// Internal method to perform the actual RunInstances call

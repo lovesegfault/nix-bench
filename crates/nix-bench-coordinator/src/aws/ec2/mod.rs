@@ -11,12 +11,16 @@ pub use types::{LaunchInstanceConfig, LaunchedInstance};
 use crate::aws::context::AwsContext;
 use anyhow::{Context, Result};
 use aws_sdk_ec2::{types::Filter, Client};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 use tracing::debug;
 
 /// EC2 client for managing benchmark instances
 pub struct Ec2Client {
     pub(crate) client: Client,
+    /// Cache of AMI IDs by architecture (only 2: x86_64, arm64)
+    ami_cache: Mutex<HashMap<String, String>>,
 }
 
 impl Ec2Client {
@@ -30,10 +34,11 @@ impl Ec2Client {
     pub fn from_context(ctx: &AwsContext) -> Self {
         Self {
             client: ctx.ec2_client(),
+            ami_cache: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Get the latest AL2023 AMI for the given architecture
+    /// Get the latest AL2023 AMI for the given architecture (cached)
     pub async fn get_al2023_ami(&self, arch: &str) -> Result<String> {
         let arch_filter = if arch == "aarch64-linux" {
             "arm64"
@@ -41,6 +46,30 @@ impl Ec2Client {
             "x86_64"
         };
 
+        // Check cache first
+        {
+            let cache = self.ami_cache.lock().unwrap();
+            if let Some(ami) = cache.get(arch_filter) {
+                debug!(ami = %ami, arch = %arch, "Using cached AL2023 AMI");
+                return Ok(ami.clone());
+            }
+        }
+
+        // Not cached, fetch from AWS
+        let ami = self.fetch_al2023_ami(arch_filter).await?;
+
+        // Store in cache
+        {
+            let mut cache = self.ami_cache.lock().unwrap();
+            cache.insert(arch_filter.to_string(), ami.clone());
+        }
+
+        debug!(ami = %ami, arch = %arch, "Found and cached AL2023 AMI");
+        Ok(ami)
+    }
+
+    /// Fetch the latest AL2023 AMI from AWS (internal, no caching)
+    async fn fetch_al2023_ami(&self, arch_filter: &str) -> Result<String> {
         let response = self
             .client
             .describe_images()
@@ -76,8 +105,6 @@ impl Ec2Client {
             .first()
             .and_then(|img| img.image_id())
             .context("No AL2023 AMI found")?;
-
-        debug!(ami = %ami, arch = %arch, "Found AL2023 AMI");
 
         Ok(ami.to_string())
     }

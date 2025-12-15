@@ -10,12 +10,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::aws::{Ec2Client, GrpcStatusPoller};
+use crate::aws::Ec2Client;
 use crate::state::{self, ResourceType};
 use crate::tui::TuiMessage;
 use super::types::{InstanceState, InstanceStatus};
 use super::user_data::detect_bootstrap_failure;
-use super::GRPC_PORT;
 
 /// Poll EC2 console output for bootstrap failure detection
 /// This monitors instances during the bootstrap phase before gRPC is available
@@ -108,23 +107,28 @@ pub async fn poll_bootstrap_status(
     }
 }
 
-/// Watch for completed instances and terminate them immediately
+/// Request to terminate an instance
+#[derive(Debug, Clone)]
+pub struct TerminationRequest {
+    pub instance_type: String,
+    pub instance_id: String,
+    pub public_ip: Option<String>,
+}
+
+/// Execute termination requests as they come in from the TUI
 ///
-/// This task polls gRPC status and terminates instances as soon as they report complete,
-/// rather than waiting for all instances to finish before cleanup.
-pub async fn watch_and_terminate_completed(
-    instances: HashMap<String, InstanceState>,
+/// This replaces the old polling-based watcher. The TUI now detects Complete status
+/// via its own gRPC poll and sends termination requests through the channel.
+/// This eliminates redundant polling and ensures faster termination.
+pub async fn termination_executor(
+    mut rx: mpsc::Receiver<TerminationRequest>,
     region: String,
-    _run_id: String,
-    tls_config: nix_bench_common::TlsConfig,
     tx: mpsc::Sender<TuiMessage>,
 ) {
-    use nix_bench_common::StatusCode;
-
     let ec2 = match Ec2Client::new(&region).await {
         Ok(c) => c,
         Err(e) => {
-            error!(error = ?e, "Failed to create EC2 client for termination watcher");
+            error!(error = ?e, "Failed to create EC2 client for termination executor");
             return;
         }
     };
@@ -132,122 +136,69 @@ pub async fn watch_and_terminate_completed(
     let db = match state::open_db().await {
         Ok(d) => d,
         Err(e) => {
-            error!(error = ?e, "Failed to get database for termination watcher");
+            error!(error = ?e, "Failed to get database for termination executor");
             return;
         }
     };
 
-    // Build list of instances with IPs for polling
-    let instances_with_ips: Vec<(String, String)> = instances
-        .iter()
-        .filter_map(|(instance_type, state)| {
-            state
-                .public_ip
-                .as_ref()
-                .map(|ip| (instance_type.clone(), ip.clone()))
-        })
-        .collect();
+    while let Some(request) = rx.recv().await {
+        info!(
+            instance_type = %request.instance_type,
+            instance_id = %request.instance_id,
+            "Received termination request"
+        );
 
-    if instances_with_ips.is_empty() {
-        debug!("No instances with IPs for termination watcher");
-        return;
-    }
+        match ec2.terminate_instance(&request.instance_id).await {
+            Ok(()) => {
+                info!(
+                    instance_id = %request.instance_id,
+                    instance_type = %request.instance_type,
+                    "Instance terminated"
+                );
+                let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, &request.instance_id).await;
 
-    // Track which instances have been terminated
-    let mut terminated: HashSet<String> = HashSet::new();
-
-    // Poll interval for status checks
-    const POLL_INTERVAL: Duration = Duration::from_secs(2);
-
-    loop {
-        // Check if all instances are done
-        if terminated.len() >= instances.len() {
-            debug!("All instances terminated, exiting termination watcher");
-            break;
-        }
-
-        // Poll status from all instances with mTLS
-        let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT, tls_config.clone());
-
-        let status_map = poller.poll_status().await;
-
-        for (instance_type, status) in &status_map {
-            // Skip already terminated instances
-            if terminated.contains(instance_type) {
-                continue;
+                // Notify TUI that instance was terminated
+                let _ = tx
+                    .send(TuiMessage::InstanceUpdate {
+                        instance_type: request.instance_type.clone(),
+                        instance_id: request.instance_id.clone(),
+                        status: InstanceStatus::Terminated,
+                        public_ip: request.public_ip.clone(),
+                        run_progress: None,
+                        durations: None,
+                    })
+                    .await;
             }
+            Err(e) => {
+                let error_str = format!("{:?}", e);
+                if error_str.contains("InvalidInstanceID.NotFound") {
+                    // Already terminated
+                    debug!(
+                        instance_id = %request.instance_id,
+                        "Instance already terminated"
+                    );
+                    let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, &request.instance_id).await;
 
-            // Check if instance is complete
-            if let Some(status_code) = status.status {
-                if status_code == StatusCode::Complete {
-                    info!(instance_type = %instance_type, "Instance complete, terminating immediately");
-
-                    // Get instance ID
-                    if let Some(state) = instances.get(instance_type) {
-                        let instance_id = &state.instance_id;
-
-                        // Send final status update with durations BEFORE terminating
-                        // This ensures the TUI receives the complete status even if gRPC polling
-                        // fails after termination
-                        let _ = tx
-                            .send(TuiMessage::InstanceUpdate {
-                                instance_type: instance_type.clone(),
-                                instance_id: state.instance_id.clone(),
-                                status: InstanceStatus::Complete,
-                                public_ip: state.public_ip.clone(),
-                                run_progress: status.run_progress,
-                                durations: Some(status.durations.clone()),
-                            })
-                            .await;
-
-                        // Terminate the instance
-                        match ec2.terminate_instance(instance_id).await {
-                            Ok(()) => {
-                                info!(instance_id = %instance_id, instance_type = %instance_type, "Instance terminated");
-                                let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
-                                terminated.insert(instance_type.clone());
-
-                                // Notify TUI that instance was terminated
-                                let _ = tx
-                                    .send(TuiMessage::InstanceUpdate {
-                                        instance_type: instance_type.clone(),
-                                        instance_id: state.instance_id.clone(),
-                                        status: InstanceStatus::Terminated,
-                                        public_ip: state.public_ip.clone(),
-                                        run_progress: None,
-                                        durations: None,
-                                    })
-                                    .await;
-                            }
-                            Err(e) => {
-                                let error_str = format!("{:?}", e);
-                                if error_str.contains("InvalidInstanceID.NotFound") {
-                                    // Already terminated
-                                    let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
-                                    terminated.insert(instance_type.clone());
-
-                                    // Notify TUI that instance was terminated
-                                    let _ = tx
-                                        .send(TuiMessage::InstanceUpdate {
-                                            instance_type: instance_type.clone(),
-                                            instance_id: state.instance_id.clone(),
-                                            status: InstanceStatus::Terminated,
-                                            public_ip: state.public_ip.clone(),
-                                            run_progress: None,
-                                            durations: None,
-                                        })
-                                        .await;
-                                } else {
-                                    warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
-                                    // Don't add to terminated set - watcher will retry
-                                }
-                            }
-                        }
-                    }
+                    let _ = tx
+                        .send(TuiMessage::InstanceUpdate {
+                            instance_type: request.instance_type.clone(),
+                            instance_id: request.instance_id.clone(),
+                            status: InstanceStatus::Terminated,
+                            public_ip: request.public_ip.clone(),
+                            run_progress: None,
+                            durations: None,
+                        })
+                        .await;
+                } else {
+                    warn!(
+                        instance_id = %request.instance_id,
+                        error = ?e,
+                        "Failed to terminate instance"
+                    );
                 }
             }
         }
-
-        tokio::time::sleep(POLL_INTERVAL).await;
     }
+
+    debug!("Termination executor channel closed, exiting");
 }

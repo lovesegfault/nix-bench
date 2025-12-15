@@ -69,6 +69,8 @@ pub enum InstanceStatus {
     Complete,
     /// Instance failed
     Failed,
+    /// Instance has been terminated
+    Terminated,
 }
 
 impl InstanceStatus {
@@ -80,6 +82,7 @@ impl InstanceStatus {
             Self::Running => "running",
             Self::Complete => "complete",
             Self::Failed => "failed",
+            Self::Terminated => "terminated",
         }
     }
 }

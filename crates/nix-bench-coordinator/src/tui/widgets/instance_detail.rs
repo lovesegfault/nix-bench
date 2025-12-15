@@ -164,7 +164,7 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
                         t.success_style(),
                         diff_str,
                     )
-                } else if run == instance.run_progress + 1 && run <= total_runs {
+                } else if run == instance.run_progress && run <= total_runs {
                     (
                         "running...".to_string(),
                         "◐",

@@ -29,6 +29,7 @@ pub struct Theme {
     pub status_running: Color,
     pub status_complete: Color,
     pub status_failed: Color,
+    pub status_terminated: Color,
 
     // Log level colors (for colorized tracing)
     pub log_trace: Color,
@@ -80,6 +81,7 @@ impl Theme {
             status_running: Color::Rgb(137, 180, 250),   // Blue
             status_complete: Color::Rgb(166, 227, 161),  // Green
             status_failed: Color::Rgb(243, 139, 168),    // Red
+            status_terminated: Color::Rgb(108, 112, 134), // Overlay0 (dim gray)
 
             // Log levels
             log_trace: Color::Rgb(108, 112, 134),  // Overlay0 (dim)
@@ -112,6 +114,7 @@ impl Theme {
             InstanceStatus::Running => self.status_running,
             InstanceStatus::Complete => self.status_complete,
             InstanceStatus::Failed => self.status_failed,
+            InstanceStatus::Terminated => self.status_terminated,
         }
     }
 

@@ -51,6 +51,8 @@ pub enum TuiMessage {
         instance_id: String,
         status: crate::orchestrator::InstanceStatus,
         public_ip: Option<String>,
+        run_progress: Option<u32>,
+        durations: Option<Vec<f64>>,
     },
     /// Update console output for an instance (full replacement)
     ConsoleOutput {

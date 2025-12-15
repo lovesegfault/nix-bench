@@ -80,6 +80,8 @@ impl InitProgressReporter for ChannelReporter {
             instance_id: update.instance_id,
             status: update.status,
             public_ip: update.public_ip,
+            run_progress: None,
+            durations: None,
         });
     }
 

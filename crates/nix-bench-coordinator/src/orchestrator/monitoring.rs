@@ -55,6 +55,8 @@ pub async fn poll_bootstrap_status(
                             instance_id: state.instance_id.clone(),
                             status: InstanceStatus::Failed,
                             public_ip: state.public_ip.clone(),
+                            run_progress: None,
+                            durations: None,
                         })
                         .await;
                 }
@@ -86,6 +88,8 @@ pub async fn poll_bootstrap_status(
                                 instance_id: state.instance_id.clone(),
                                 status: InstanceStatus::Failed,
                                 public_ip: state.public_ip.clone(),
+                                run_progress: None,
+                                durations: None,
                             })
                             .await;
                         // Send console output so user can see what happened
@@ -113,6 +117,7 @@ pub async fn watch_and_terminate_completed(
     region: String,
     _run_id: String,
     tls_config: nix_bench_common::TlsConfig,
+    tx: mpsc::Sender<TuiMessage>,
 ) {
     use nix_bench_common::StatusCode;
 
@@ -181,12 +186,38 @@ pub async fn watch_and_terminate_completed(
                     if let Some(state) = instances.get(instance_type) {
                         let instance_id = &state.instance_id;
 
+                        // Send final status update with durations BEFORE terminating
+                        // This ensures the TUI receives the complete status even if gRPC polling
+                        // fails after termination
+                        let _ = tx
+                            .send(TuiMessage::InstanceUpdate {
+                                instance_type: instance_type.clone(),
+                                instance_id: state.instance_id.clone(),
+                                status: InstanceStatus::Complete,
+                                public_ip: state.public_ip.clone(),
+                                run_progress: status.run_progress,
+                                durations: Some(status.durations.clone()),
+                            })
+                            .await;
+
                         // Terminate the instance
                         match ec2.terminate_instance(instance_id).await {
                             Ok(()) => {
                                 info!(instance_id = %instance_id, instance_type = %instance_type, "Instance terminated");
                                 let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
                                 terminated.insert(instance_type.clone());
+
+                                // Notify TUI that instance was terminated
+                                let _ = tx
+                                    .send(TuiMessage::InstanceUpdate {
+                                        instance_type: instance_type.clone(),
+                                        instance_id: state.instance_id.clone(),
+                                        status: InstanceStatus::Terminated,
+                                        public_ip: state.public_ip.clone(),
+                                        run_progress: None,
+                                        durations: None,
+                                    })
+                                    .await;
                             }
                             Err(e) => {
                                 let error_str = format!("{:?}", e);
@@ -194,6 +225,18 @@ pub async fn watch_and_terminate_completed(
                                     // Already terminated
                                     let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
                                     terminated.insert(instance_type.clone());
+
+                                    // Notify TUI that instance was terminated
+                                    let _ = tx
+                                        .send(TuiMessage::InstanceUpdate {
+                                            instance_type: instance_type.clone(),
+                                            instance_id: state.instance_id.clone(),
+                                            status: InstanceStatus::Terminated,
+                                            public_ip: state.public_ip.clone(),
+                                            run_progress: None,
+                                            durations: None,
+                                        })
+                                        .await;
                                 } else {
                                     warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
                                     // Don't add to terminated set - watcher will retry

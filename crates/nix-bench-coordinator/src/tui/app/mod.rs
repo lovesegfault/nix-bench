@@ -10,7 +10,7 @@ pub use state::{InstancesState, PanelFocus, RunContext, ScrollState, UiState};
 
 use crate::aws::{GrpcInstanceStatus, GrpcStatusPoller};
 use crate::config::RunConfig;
-use crate::orchestrator::{InstanceState, InstanceStatus, TerminationRequest};
+use crate::orchestrator::{CleanupRequest, InstanceState, InstanceStatus};
 use crate::tui::ui;
 use anyhow::Result;
 use crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
@@ -399,13 +399,13 @@ impl App {
 
     /// Update instance states from gRPC status polling results
     ///
-    /// Returns a list of instances that have newly completed and need termination.
+    /// Returns a list of cleanup requests for instances that have newly completed.
     pub fn update_from_grpc_status(
         &mut self,
         status_map: &HashMap<String, GrpcInstanceStatus>,
-    ) -> Vec<TerminationRequest> {
+    ) -> Vec<CleanupRequest> {
         use nix_bench_common::StatusCode;
-        let mut to_terminate = Vec::new();
+        let mut to_cleanup = Vec::new();
 
         for (instance_type, status) in status_map {
             if let Some(state) = self.instances.data.get_mut(instance_type) {
@@ -426,13 +426,13 @@ impl App {
                 }
                 state.durations = status.durations.clone();
 
-                // Check if instance just became complete and we haven't requested termination yet
+                // Check if instance just became complete and we haven't requested cleanup yet
                 if state.status == InstanceStatus::Complete
                     && !was_complete
-                    && !self.context.termination_requested.contains(instance_type)
+                    && !self.context.cleanup_requested.contains(instance_type)
                 {
-                    self.context.termination_requested.insert(instance_type.clone());
-                    to_terminate.push(TerminationRequest {
+                    self.context.cleanup_requested.insert(instance_type.clone());
+                    to_cleanup.push(CleanupRequest::TerminateInstance {
                         instance_type: instance_type.clone(),
                         instance_id: state.instance_id.clone(),
                         public_ip: state.public_ip.clone(),
@@ -441,7 +441,7 @@ impl App {
             }
         }
         self.context.last_update = Instant::now();
-        to_terminate
+        to_cleanup
     }
 
     /// Get instances that have public IPs (for gRPC polling)
@@ -503,7 +503,7 @@ impl App {
         terminal: &mut Terminal<B>,
         rx: &mut tokio::sync::mpsc::Receiver<crate::tui::TuiMessage>,
         cancel: CancellationToken,
-        terminate_tx: Option<tokio::sync::mpsc::Sender<TerminationRequest>>,
+        cleanup_tx: Option<tokio::sync::mpsc::Sender<CleanupRequest>>,
     ) -> Result<()> {
         use crate::tui::TuiMessage;
 
@@ -628,10 +628,10 @@ impl App {
                 // Receive gRPC status updates from background polling task
                 Some(status_map) = grpc_rx.recv() => {
                     if !status_map.is_empty() {
-                        let to_terminate = self.update_from_grpc_status(&status_map);
-                        // Send termination requests for newly completed instances
-                        if let Some(ref tx) = terminate_tx {
-                            for request in to_terminate {
+                        let to_cleanup = self.update_from_grpc_status(&status_map);
+                        // Send cleanup requests for newly completed instances
+                        if let Some(ref tx) = cleanup_tx {
+                            for request in to_cleanup {
                                 // Use try_send to avoid blocking the TUI
                                 let _ = tx.try_send(request);
                             }

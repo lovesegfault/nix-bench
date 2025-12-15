@@ -16,8 +16,8 @@ pub mod progress;
 pub mod types;
 
 // Re-export core types
+pub use cleanup::{cleanup_executor, cleanup_resources_no_tui, CleanupRequest};
 pub use init::{BenchmarkInitializer, InitContext};
-pub use monitoring::TerminationRequest;
 pub use progress::{ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter};
 pub use types::{InstanceState, InstanceStatus};
 

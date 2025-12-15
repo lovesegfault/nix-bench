@@ -85,24 +85,21 @@ pub async fn cleanup_resources(
             sg_rules.len(),
         );
 
-        // Terminate EC2 instances
+        // Terminate EC2 instances in batch
         info!(count = instance_ids.len(), "Terminating instances...");
         progress.current_step = format!("Terminating {} EC2 instances...", instance_ids.len());
         send_cleanup_progress(&progress_tx, progress.clone()).await;
 
-        for instance_id in &instance_ids {
-            match ec2.terminate_instance(instance_id).await {
-                Ok(()) => {
-                    // terminate_instance returns Ok for both successful termination and not-found
-                    let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
-                }
-                Err(e) => {
-                    warn!(instance_id = %instance_id, error = ?e, "Failed to terminate instance");
-                }
-            }
-            progress.ec2_instances.0 += 1;
-            send_cleanup_progress(&progress_tx, progress.clone()).await;
+        let instance_ids_vec: Vec<String> = instance_ids.iter().cloned().collect();
+        if let Err(e) = ec2.terminate_instances(&instance_ids_vec).await {
+            warn!(error = ?e, "Failed to terminate instances in batch");
         }
+        // Mark all as deleted in DB
+        for instance_id in &instance_ids {
+            let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
+        }
+        progress.ec2_instances.0 = instance_ids.len();
+        send_cleanup_progress(&progress_tx, progress.clone()).await;
 
         // Delete S3 bucket
         info!("Deleting S3 bucket...");
@@ -180,15 +177,13 @@ pub async fn cleanup_resources(
         // Delete security groups (for nix-bench-created security groups)
         // Must wait for instances to fully terminate first
         if !security_groups.is_empty() {
-            // Wait for all instances to terminate before deleting security groups
-            if !instance_ids.is_empty() {
+            // Wait for all instances to terminate before deleting security groups (in parallel)
+            if !instance_ids_vec.is_empty() {
                 info!("Waiting for instances to fully terminate before deleting security groups...");
                 progress.current_step = "Waiting for instances to terminate...".to_string();
                 send_cleanup_progress(&progress_tx, progress.clone()).await;
 
-                for instance_id in &instance_ids {
-                    ec2.wait_for_terminated(instance_id).await?;
-                }
+                ec2.wait_for_all_terminated(&instance_ids_vec).await?;
             }
 
             info!(count = security_groups.len(), "Deleting security groups...");

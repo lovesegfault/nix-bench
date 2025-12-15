@@ -34,6 +34,9 @@ pub trait InitProgressReporter: Send + Sync {
     /// Report an instance state update
     fn report_instance_update(&self, update: InstanceUpdate);
 
+    /// Report console output for an instance (for error messages during init)
+    fn report_console_output(&self, instance_type: &str, output: String);
+
     /// Check if the operation should be cancelled
     fn is_cancelled(&self) -> bool;
 }
@@ -85,6 +88,13 @@ impl InitProgressReporter for ChannelReporter {
         });
     }
 
+    fn report_console_output(&self, instance_type: &str, output: String) {
+        self.send(TuiMessage::ConsoleOutput {
+            instance_type: instance_type.to_string(),
+            output,
+        });
+    }
+
     fn is_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
     }
@@ -127,6 +137,10 @@ impl InitProgressReporter for LogReporter {
             public_ip = ?update.public_ip,
             "Instance update"
         );
+    }
+
+    fn report_console_output(&self, instance_type: &str, output: String) {
+        info!(instance_type = %instance_type, "Console output:\n{}", output);
     }
 
     fn is_cancelled(&self) -> bool {

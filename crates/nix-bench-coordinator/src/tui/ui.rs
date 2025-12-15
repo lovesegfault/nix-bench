@@ -3,7 +3,7 @@
 use crate::orchestrator::InstanceStatus;
 use crate::tui::app::App;
 use crate::tui::theme;
-use crate::tui::widgets::{aggregate_stats, instance_detail, instance_list};
+use crate::tui::widgets::{instance_detail, instance_list};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -31,20 +31,19 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render header with elapsed time
     render_header(frame, chunks[0], app);
 
-    // Main content: instances list, detail, and stats panel
+    // Main content: instances list and detail
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Min(30),        // Instance list
-            Constraint::Percentage(55), // Instance detail
-            Constraint::Min(25),        // Stats panel (vertical)
+            Constraint::Min(40),        // Unified instance list (with stats)
+            Constraint::Percentage(60), // Instance detail
         ])
         .split(chunks[1]);
 
     // Store the instance list area for mouse click handling
     app.ui.instance_list_area = Some(main_chunks[0]);
 
-    // Render instance list and capture scroll offset for mouse click handling
+    // Render instance list (with unified stats) and capture scroll offset for mouse click handling
     app.ui.list_scroll_offset = instance_list::render(frame, main_chunks[0], app);
 
     // Render instance detail (now includes build output logs)
@@ -74,9 +73,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .alignment(Alignment::Center);
         frame.render_widget(paragraph, main_chunks[1]);
     }
-
-    // Render aggregate stats (now vertical panel)
-    aggregate_stats::render(frame, main_chunks[2], app);
 
     // Render tracing logs (auto-scrolls to latest)
     render_tracing_logs(frame, chunks[2]);

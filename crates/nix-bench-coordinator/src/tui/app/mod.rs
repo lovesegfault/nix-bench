@@ -10,7 +10,7 @@ pub use state::{InstancesState, PanelFocus, RunContext, ScrollState, UiState};
 
 use crate::aws::{GrpcInstanceStatus, GrpcStatusPoller};
 use crate::config::RunConfig;
-use crate::orchestrator::{InstanceState, InstanceStatus};
+use crate::orchestrator::{InstanceState, InstanceStatus, TerminationRequest};
 use crate::tui::ui;
 use anyhow::Result;
 use crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
@@ -398,15 +398,26 @@ impl App {
     // ========================================================================
 
     /// Update instance states from gRPC status polling results
-    pub fn update_from_grpc_status(&mut self, status_map: &HashMap<String, GrpcInstanceStatus>) {
+    ///
+    /// Returns a list of instances that have newly completed and need termination.
+    pub fn update_from_grpc_status(
+        &mut self,
+        status_map: &HashMap<String, GrpcInstanceStatus>,
+    ) -> Vec<TerminationRequest> {
         use nix_bench_common::StatusCode;
+        let mut to_terminate = Vec::new();
+
         for (instance_type, status) in status_map {
             if let Some(state) = self.instances.data.get_mut(instance_type) {
+                let was_complete = state.status == InstanceStatus::Complete;
+
                 if let Some(status_code) = status.status {
                     state.status = match status_code {
                         StatusCode::Complete => InstanceStatus::Complete,
                         StatusCode::Failed => InstanceStatus::Failed,
-                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => InstanceStatus::Running,
+                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
+                            InstanceStatus::Running
+                        }
                         StatusCode::Pending => InstanceStatus::Pending,
                     };
                 }
@@ -414,9 +425,23 @@ impl App {
                     state.run_progress = progress;
                 }
                 state.durations = status.durations.clone();
+
+                // Check if instance just became complete and we haven't requested termination yet
+                if state.status == InstanceStatus::Complete
+                    && !was_complete
+                    && !self.context.termination_requested.contains(instance_type)
+                {
+                    self.context.termination_requested.insert(instance_type.clone());
+                    to_terminate.push(TerminationRequest {
+                        instance_type: instance_type.clone(),
+                        instance_id: state.instance_id.clone(),
+                        public_ip: state.public_ip.clone(),
+                    });
+                }
             }
         }
         self.context.last_update = Instant::now();
+        to_terminate
     }
 
     /// Get instances that have public IPs (for gRPC polling)
@@ -469,7 +494,7 @@ impl App {
     ) -> Result<()> {
         let (_tx, mut rx) = tokio::sync::mpsc::channel(1);
         let cancel = CancellationToken::new();
-        self.run_with_channel(terminal, &mut rx, cancel).await
+        self.run_with_channel(terminal, &mut rx, cancel, None).await
     }
 
     /// Main event loop with channel for receiving updates
@@ -478,6 +503,7 @@ impl App {
         terminal: &mut Terminal<B>,
         rx: &mut tokio::sync::mpsc::Receiver<crate::tui::TuiMessage>,
         cancel: CancellationToken,
+        terminate_tx: Option<tokio::sync::mpsc::Sender<TerminationRequest>>,
     ) -> Result<()> {
         use crate::tui::TuiMessage;
 
@@ -602,7 +628,14 @@ impl App {
                 // Receive gRPC status updates from background polling task
                 Some(status_map) = grpc_rx.recv() => {
                     if !status_map.is_empty() {
-                        self.update_from_grpc_status(&status_map);
+                        let to_terminate = self.update_from_grpc_status(&status_map);
+                        // Send termination requests for newly completed instances
+                        if let Some(ref tx) = terminate_tx {
+                            for request in to_terminate {
+                                // Use try_send to avoid blocking the TUI
+                                let _ = tx.try_send(request);
+                            }
+                        }
                     }
                 }
 

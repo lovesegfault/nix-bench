@@ -17,6 +17,7 @@ pub mod types;
 
 // Re-export core types
 pub use init::{BenchmarkInitializer, InitContext};
+pub use monitoring::TerminationRequest;
 pub use progress::{ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter};
 pub use types::{InstanceState, InstanceStatus};
 

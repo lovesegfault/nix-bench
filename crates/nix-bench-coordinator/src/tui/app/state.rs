@@ -2,7 +2,7 @@
 
 use crate::orchestrator::InstanceState;
 use ratatui::prelude::Rect;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use throbber_widgets_tui::ThrobberState;
 use tui_logger::TuiWidgetState;
@@ -121,6 +121,8 @@ pub struct RunContext {
     pub completion_time: Option<Instant>,
     /// TLS configuration for gRPC status polling
     pub tls_config: Option<nix_bench_common::TlsConfig>,
+    /// Instances for which termination has been requested (to avoid duplicates)
+    pub termination_requested: HashSet<String>,
 }
 
 impl std::fmt::Debug for RunContext {
@@ -134,6 +136,7 @@ impl std::fmt::Debug for RunContext {
             .field("last_update", &self.last_update)
             .field("completion_time", &self.completion_time)
             .field("tls_config", &self.tls_config.is_some())
+            .field("termination_requested", &self.termination_requested.len())
             .finish()
     }
 }
@@ -151,6 +154,7 @@ impl RunContext {
             last_update: now,
             completion_time: None,
             tls_config,
+            termination_requested: HashSet::new(),
         }
     }
 }

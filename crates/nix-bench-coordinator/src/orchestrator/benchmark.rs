@@ -19,7 +19,7 @@ use super::init::BenchmarkInitializer;
 use super::progress::{ChannelReporter, LogReporter};
 use super::types::{InstanceState, InstanceStatus};
 use super::cleanup::cleanup_resources;
-use super::monitoring::{poll_bootstrap_status, watch_and_terminate_completed};
+use super::monitoring::{poll_bootstrap_status, termination_executor, TerminationRequest};
 use super::results::{print_results_summary, write_results};
 use super::user_data::detect_bootstrap_failure;
 use super::GRPC_PORT;
@@ -42,6 +42,9 @@ pub async fn run_benchmarks_with_tui(
 
     // Create channel for TUI updates
     let (tx, mut rx) = mpsc::channel::<TuiMessage>(100);
+
+    // Create channel for termination requests (TUI -> termination executor)
+    let (terminate_tx, terminate_rx) = mpsc::channel::<TerminationRequest>(100);
 
     // Setup terminal FIRST
     enable_raw_mode()?;
@@ -77,13 +80,14 @@ pub async fn run_benchmarks_with_tui(
             agent_aarch64,
             tx_clone,
             cancel_for_init,
+            terminate_rx,
         )
         .await
     });
 
     // Run the TUI with channel (gRPC status polling happens inside the TUI)
     let tui_result = app
-        .run_with_channel(&mut terminal, &mut rx, cancel_for_tui)
+        .run_with_channel(&mut terminal, &mut rx, cancel_for_tui, Some(terminate_tx))
         .await;
 
     // If user cancelled, abort init task early instead of waiting for it
@@ -171,6 +175,7 @@ pub async fn run_init_task(
     agent_aarch64: Option<String>,
     tx: mpsc::Sender<TuiMessage>,
     cancel: CancellationToken,
+    terminate_rx: mpsc::Receiver<TerminationRequest>,
 ) -> Result<HashMap<String, InstanceState>> {
     // Create reporter for TUI updates
     let reporter = ChannelReporter::new(tx.clone(), cancel);
@@ -206,9 +211,6 @@ pub async fn run_init_task(
                 .map(|ip| (instance_type.clone(), ip.clone()))
         })
         .collect();
-
-    // Clone TLS config for termination watcher before it's moved
-    let tls_config_for_watcher = coordinator_tls_config.clone();
 
     if !instances_with_ips.is_empty() {
         info!(
@@ -256,19 +258,11 @@ pub async fn run_init_task(
         poll_bootstrap_status(instances_for_logs, tx_logs, region, timeout_secs, start_time).await;
     });
 
-    // Spawn termination watcher to terminate instances immediately when they complete
-    let instances_for_termination = instances.clone();
+    // Spawn termination executor to handle termination requests from TUI
     let region_for_termination = config.region.clone();
-    let run_id_for_termination = run_id.clone();
     let tx_for_termination = tx.clone();
     tokio::spawn(async move {
-        watch_and_terminate_completed(
-            instances_for_termination,
-            region_for_termination,
-            run_id_for_termination,
-            tls_config_for_watcher,
-            tx_for_termination,
-        ).await;
+        termination_executor(terminate_rx, region_for_termination, tx_for_termination).await;
     });
 
     Ok(instances)

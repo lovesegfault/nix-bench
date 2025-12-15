@@ -22,7 +22,7 @@ use crate::config::{detect_system, AgentConfig, RunConfig};
 use crate::state::{self, DbPool, ResourceType};
 use crate::tui::{InitPhase, LogBuffer};
 use anyhow::{Context, Result};
-use futures::future::join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use nix_bench_common::jittered_delay_25;
 use nix_bench_common::tls::{
     generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig,
@@ -488,8 +488,8 @@ impl<'a> BenchmarkInitializer<'a> {
 
     /// Wait for all instances to be running in parallel
     ///
-    /// All instances are waited on concurrently using `join_all`, which reduces
-    /// total wait time from O(n * timeout) to O(max(timeout)).
+    /// Instances are waited on concurrently and TUI updates happen as each
+    /// instance becomes ready, rather than waiting for all to complete.
     async fn wait_for_instances<R: InitProgressReporter>(
         &self,
         mut instances: HashMap<String, InstanceState>,
@@ -497,7 +497,7 @@ impl<'a> BenchmarkInitializer<'a> {
         reporter: &R,
     ) -> Result<HashMap<String, InstanceState>> {
         // Create futures for all instances to wait in parallel
-        let futures: Vec<_> = instances
+        let mut futures: FuturesUnordered<_> = instances
             .iter()
             .map(|(instance_type, state)| {
                 let instance_type = instance_type.clone();
@@ -509,11 +509,8 @@ impl<'a> BenchmarkInitializer<'a> {
             })
             .collect();
 
-        // Wait for all instances concurrently
-        let results = join_all(futures).await;
-
-        // Process results and update instance states
-        for (instance_type, instance_id, result) in results {
+        // Process results as each instance becomes ready
+        while let Some((instance_type, instance_id, result)) = futures.next().await {
             if let Some(state) = instances.get_mut(&instance_type) {
                 match result {
                     Ok(dynamic_ip) => {

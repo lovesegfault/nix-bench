@@ -11,27 +11,46 @@ use ratatui::{
 };
 use throbber_widgets_tui::{Throbber, BRAILLE_SIX};
 
-/// Generate a performance bar using Unicode block characters
-/// ratio: 0.0 = fastest, 1.0 = slowest
-fn performance_bar(ratio: f64, width: usize) -> String {
-    if width == 0 {
-        return String::new();
+/// Calculate trend from duration history
+/// Returns: -1 (faster), 0 (stable), 1 (slower)
+fn calculate_trend(durations: &[f64]) -> i8 {
+    if durations.len() < 2 {
+        return 0; // Not enough data
     }
-    let filled = (ratio * width as f64).round() as usize;
-    let empty = width.saturating_sub(filled);
-    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+    // Compare first half average to second half average
+    let mid = durations.len() / 2;
+    let first_half_avg: f64 = durations[..mid].iter().sum::<f64>() / mid as f64;
+    let second_half_avg: f64 =
+        durations[mid..].iter().sum::<f64>() / (durations.len() - mid) as f64;
+
+    let change_pct = (second_half_avg - first_half_avg) / first_half_avg;
+    if change_pct < -0.05 {
+        -1 // Getting faster (5%+ improvement)
+    } else if change_pct > 0.05 {
+        1 // Getting slower (5%+ regression)
+    } else {
+        0 // Stable (within 5%)
+    }
 }
 
-/// Get color for performance bar based on ratio (0.0 = fastest/green, 1.0 = slowest/red)
-fn bar_color_for_ratio(ratio: f64) -> Color {
+/// Format duration with trend arrow
+/// Returns (arrow, arrow_color, time_string)
+fn format_trend_time(durations: &[f64]) -> (&'static str, Color, String) {
     let t = theme::theme();
-    if ratio < 0.33 {
-        t.success // Green - fast
-    } else if ratio < 0.66 {
-        t.warning // Yellow - medium
-    } else {
-        t.error // Red - slow
+    if durations.is_empty() {
+        return (" ", t.fg_dim, "--.--s".to_string());
     }
+
+    let avg = durations.iter().sum::<f64>() / durations.len() as f64;
+    let trend = calculate_trend(durations);
+
+    let (arrow, color) = match trend {
+        -1 => ("↓", t.success), // Faster = green
+        1 => ("↑", t.error),    // Slower = red
+        _ => ("→", t.fg_dim),   // Stable = dim
+    };
+
+    (arrow, color, format!("{:>5.1}s", avg))
 }
 
 /// Render the unified instance list and return the scroll offset for mouse click handling
@@ -58,41 +77,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
         .filter(|s| s.status == InstanceStatus::Failed)
         .count();
 
-    // Calculate duration statistics for bar visualization
-    let instances_with_avg: Vec<(&String, f64)> = app
+    // Trend+time display width: "↓ 999.9s" = 8 chars
+    let time_width = 8;
+
+    // Calculate available width (minus borders, highlight symbol, time display)
+    let available_width = area.width.saturating_sub(5 + time_width as u16 + 2) as usize;
+
+    let items: Vec<ListItem> = app
         .instances
         .order
         .iter()
-        .filter_map(|it| {
-            let state = app.instances.data.get(it)?;
-            let avg = if state.durations.is_empty() {
-                f64::MAX
-            } else {
-                state.durations.iter().sum::<f64>() / state.durations.len() as f64
-            };
-            Some((it, avg))
-        })
-        .collect();
-
-    let valid_avgs: Vec<f64> = instances_with_avg
-        .iter()
-        .filter(|(_, avg)| *avg != f64::MAX)
-        .map(|(_, avg)| *avg)
-        .collect();
-
-    let min_avg = valid_avgs.iter().cloned().fold(f64::MAX, f64::min);
-    let max_avg = valid_avgs.iter().cloned().fold(f64::MIN, f64::max);
-
-    // Bar width
-    let bar_width = 8;
-
-    // Calculate available width (minus borders, highlight symbol, bar)
-    let available_width = area.width.saturating_sub(5 + bar_width as u16 + 2) as usize;
-
-    let items: Vec<ListItem> = instances_with_avg
-        .iter()
-        .filter_map(|(instance_type, avg)| {
-            let state = app.instances.data.get(*instance_type)?;
+        .filter_map(|instance_type| {
+            let state = app.instances.data.get(instance_type)?;
             // Use space for running instances (throbber rendered separately)
             let symbol = if state.status == InstanceStatus::Running {
                 " "
@@ -101,18 +97,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
             };
             let color = status_color(state.status);
 
-            // Compact format: symbol instance_type runs bar
+            // Compact format: symbol instance_type runs trend+time
             let runs_str = format!("{}/{}", state.run_progress, state.total_runs);
             let max_name_len = available_width.saturating_sub(runs_str.len() + 4);
 
-            // Calculate bar ratio
-            let ratio = if *avg == f64::MAX || max_avg <= min_avg {
-                0.0
-            } else {
-                ((avg - min_avg) / (max_avg - min_avg)).clamp(0.0, 1.0)
-            };
-            let bar = performance_bar(ratio, bar_width);
-            let bar_color = bar_color_for_ratio(ratio);
+            // Get trend arrow and time
+            let (arrow, arrow_color, time_str) = format_trend_time(&state.durations);
 
             let line = Line::from(vec![
                 Span::styled(format!("{} ", symbol), Style::default().fg(color)),
@@ -125,7 +115,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
                     t.text(),
                 ),
                 Span::styled(format!("{:>5} ", runs_str), t.dim()),
-                Span::styled(bar, Style::default().fg(bar_color)),
+                Span::styled(format!("{} ", arrow), Style::default().fg(arrow_color)),
+                Span::styled(time_str, t.dim()),
             ]);
 
             Some(ListItem::new(line))
@@ -163,11 +154,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
     let inner_y = area.y + 1; // Account for border
     let visible_count = (area.height.saturating_sub(2)) as usize; // Account for borders
 
-    for (i, (instance_type, _)) in instances_with_avg.iter().enumerate() {
+    for (i, instance_type) in app.instances.order.iter().enumerate() {
         if i < scroll_offset || i >= scroll_offset + visible_count {
             continue; // Not visible
         }
-        let state = match app.instances.data.get(*instance_type) {
+        let state = match app.instances.data.get(instance_type) {
             Some(s) => s,
             None => continue,
         };
@@ -181,7 +172,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
         let throbber_x = inner_x + 2;
         let throbber_area = Rect::new(throbber_x, row_y, 1, 1);
 
-        if let Some(throbber_state) = app.scroll.throbber_states.get_mut(*instance_type) {
+        if let Some(throbber_state) = app.scroll.throbber_states.get_mut(instance_type) {
             let throbber = Throbber::default()
                 .throbber_set(BRAILLE_SIX)
                 .style(Style::default().fg(t.status_running));

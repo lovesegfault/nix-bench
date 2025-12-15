@@ -18,8 +18,8 @@ use crate::tui::{self, InitPhase, TuiMessage};
 use super::init::BenchmarkInitializer;
 use super::progress::{ChannelReporter, LogReporter};
 use super::types::{InstanceState, InstanceStatus};
-use super::cleanup::cleanup_resources;
-use super::monitoring::{poll_bootstrap_status, termination_executor, TerminationRequest};
+use super::cleanup::{cleanup_executor, cleanup_resources_no_tui, CleanupRequest};
+use super::monitoring::poll_bootstrap_status;
 use super::results::{print_results_summary, write_results};
 use super::user_data::detect_bootstrap_failure;
 use super::GRPC_PORT;
@@ -43,8 +43,8 @@ pub async fn run_benchmarks_with_tui(
     // Create channel for TUI updates
     let (tx, mut rx) = mpsc::channel::<TuiMessage>(100);
 
-    // Create channel for termination requests (TUI -> termination executor)
-    let (terminate_tx, terminate_rx) = mpsc::channel::<TerminationRequest>(100);
+    // Create channel for cleanup requests (TUI -> cleanup executor)
+    let (cleanup_tx, cleanup_rx) = mpsc::channel::<CleanupRequest>(100);
 
     // Setup terminal FIRST
     enable_raw_mode()?;
@@ -80,14 +80,14 @@ pub async fn run_benchmarks_with_tui(
             agent_aarch64,
             tx_clone,
             cancel_for_init,
-            terminate_rx,
+            cleanup_rx,
         )
         .await
     });
 
     // Run the TUI with channel (gRPC status polling happens inside the TUI)
     let tui_result = app
-        .run_with_channel(&mut terminal, &mut rx, cancel_for_tui, Some(terminate_tx))
+        .run_with_channel(&mut terminal, &mut rx, cancel_for_tui, Some(cleanup_tx.clone()))
         .await;
 
     // If user cancelled, abort init task early instead of waiting for it
@@ -99,49 +99,59 @@ pub async fn run_benchmarks_with_tui(
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 // JoinError (task was aborted) - this is expected
-                Ok(HashMap::new())
+                // Create a dummy cleanup handle that completes immediately
+                Ok(InitResult {
+                    cleanup_handle: tokio::spawn(async {}),
+                })
             }
             Err(_) => {
                 // Timeout - task didn't respond, continue with empty state
-                Ok(HashMap::new())
+                Ok(InitResult {
+                    cleanup_handle: tokio::spawn(async {}),
+                })
             }
         }
     } else {
         init_handle.await?
     };
 
-    // Update instances from app state
+    // Update instances from app state (TUI may have more recent data)
     for (instance_type, state) in &app.instances.data {
         instances.insert(instance_type.clone(), state.clone());
     }
 
-    // Handle cleanup and results
+    // Log any initialization errors
     if let Err(e) = &init_result {
         error!(error = ?e, "Initialization failed");
     }
 
-    // Do cleanup BEFORE restoring terminal so progress is visible in TUI
-    // Create a new channel for cleanup progress
-    let (cleanup_tx, cleanup_rx) = mpsc::channel::<TuiMessage>(100);
+    // Get the cleanup handle (consuming init_result)
+    let cleanup_handle = match init_result {
+        Ok(result) => result.cleanup_handle,
+        Err(_) => tokio::spawn(async {}), // Dummy handle if init failed
+    };
 
-    let cleanup_config = config.clone();
-    let cleanup_run_id = run_id.clone();
-    let cleanup_bucket = bucket_name.clone();
-    let cleanup_instances = instances.clone();
+    // Send full cleanup request to the cleanup executor
+    // The executor is already running (spawned during init) and will handle this
+    let _ = cleanup_tx.send(CleanupRequest::FullCleanup {
+        region: config.region.clone(),
+        keep: config.keep,
+        run_id: run_id.clone(),
+        bucket_name: bucket_name.clone(),
+        instances: instances.clone(),
+    }).await;
 
-    let cleanup_handle = tokio::spawn(async move {
-        cleanup_resources(
-            &cleanup_config,
-            &cleanup_run_id,
-            &cleanup_bucket,
-            &cleanup_instances,
-            Some(cleanup_tx),
-        )
-        .await
+    // Drop the sender so the cleanup executor knows no more requests are coming
+    drop(cleanup_tx);
+
+    // Wrap the cleanup handle to match expected signature
+    let cleanup_handle_wrapped = tokio::spawn(async move {
+        let _ = cleanup_handle.await;
+        Ok::<(), anyhow::Error>(())
     });
 
     // Run cleanup phase TUI loop (shows progress until cleanup completes)
-    app.run_cleanup_phase(&mut terminal, cleanup_handle, cleanup_rx).await?;
+    app.run_cleanup_phase(&mut terminal, cleanup_handle_wrapped, rx).await?;
 
     // Now restore terminal
     disable_raw_mode()?;
@@ -163,7 +173,12 @@ pub async fn run_benchmarks_with_tui(
     // Write output file if requested
     write_results(&config, &run_id, &instances).await?;
 
-    tui_result.and(init_result.map(|_| ()))
+    tui_result
+}
+
+/// Result from initialization task
+pub struct InitResult {
+    pub cleanup_handle: tokio::task::JoinHandle<()>,
 }
 
 /// Background task that runs initialization and sends updates to TUI
@@ -175,8 +190,8 @@ pub async fn run_init_task(
     agent_aarch64: Option<String>,
     tx: mpsc::Sender<TuiMessage>,
     cancel: CancellationToken,
-    terminate_rx: mpsc::Receiver<TerminationRequest>,
-) -> Result<HashMap<String, InstanceState>> {
+    cleanup_rx: mpsc::Receiver<CleanupRequest>,
+) -> Result<InitResult> {
     // Create reporter for TUI updates
     let reporter = ChannelReporter::new(tx.clone(), cancel);
 
@@ -258,14 +273,14 @@ pub async fn run_init_task(
         poll_bootstrap_status(instances_for_logs, tx_logs, region, timeout_secs, start_time).await;
     });
 
-    // Spawn termination executor to handle termination requests from TUI
-    let region_for_termination = config.region.clone();
-    let tx_for_termination = tx.clone();
-    tokio::spawn(async move {
-        termination_executor(terminate_rx, region_for_termination, tx_for_termination).await;
+    // Spawn cleanup executor to handle cleanup requests from TUI
+    let region_for_cleanup = config.region.clone();
+    let tx_for_cleanup = tx.clone();
+    let cleanup_handle = tokio::spawn(async move {
+        cleanup_executor(cleanup_rx, region_for_cleanup, tx_for_cleanup).await;
     });
 
-    Ok(instances)
+    Ok(InitResult { cleanup_handle })
 }
 
 /// Run benchmarks without TUI (--no-tui mode)
@@ -510,7 +525,7 @@ pub async fn run_benchmarks_no_tui(
     }
 
     // Cleanup and results
-    cleanup_resources(&config, &run_id, &bucket_name, &instances, None).await?;
+    cleanup_resources_no_tui(&config, &run_id, &bucket_name, &instances).await?;
 
     // Print results summary to stdout
     print_results_summary(&instances);

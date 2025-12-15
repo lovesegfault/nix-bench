@@ -145,6 +145,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
         .block(
             Block::default()
                 .title(title)
+                .title_style(t.title_unfocused())
                 .borders(Borders::ALL)
                 .border_style(t.block_unfocused()),
         )

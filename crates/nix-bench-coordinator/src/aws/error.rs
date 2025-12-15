@@ -31,6 +31,10 @@ pub enum AwsError {
     #[error("Resource has dependent objects")]
     DependencyViolation,
 
+    /// Invalid EC2 instance type(s)
+    #[error("Invalid instance type(s): {}", invalid_types.join(", "))]
+    InvalidInstanceType { invalid_types: Vec<String> },
+
     /// Generic AWS SDK error with code and message
     #[error("AWS error: {message}")]
     Sdk {
@@ -190,5 +194,137 @@ pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
     AwsError::Sdk {
         code: None,
         message: error.to_string(),
+    }
+}
+
+/// Structured error details for user-friendly display
+#[derive(Debug)]
+pub struct AwsErrorDetails {
+    /// AWS error code if available (e.g., "InsufficientInstanceCapacity")
+    pub code: Option<String>,
+    /// Human-readable error message
+    pub message: String,
+    /// Optional suggestion for resolving the error
+    pub suggestion: Option<String>,
+}
+
+/// Extract detailed error information from an anyhow::Error.
+///
+/// This parses the error to extract AWS error codes and provides
+/// user-friendly suggestions for common issues.
+pub fn extract_error_details(error: &anyhow::Error) -> AwsErrorDetails {
+    let error_debug = format!("{:?}", error);
+    let error_display = error.to_string();
+
+    // Try to extract the error code from the debug representation
+    let code = extract_error_code(&error_debug);
+
+    // Get suggestion based on the error code
+    let suggestion = code.as_ref().and_then(|c| suggestion_for_code(c));
+
+    AwsErrorDetails {
+        code,
+        message: error_display,
+        suggestion,
+    }
+}
+
+/// Known AWS error codes that indicate capacity issues
+const CAPACITY_CODES: &[&str] = &[
+    "InsufficientInstanceCapacity",
+    "InsufficientHostCapacity",
+    "InsufficientReservedInstanceCapacity",
+    "InsufficientCapacity",
+];
+
+/// Known AWS error codes that indicate limit issues
+const LIMIT_CODES: &[&str] = &[
+    "InstanceLimitExceeded",
+    "VcpuLimitExceeded",
+    "MaxSpotInstanceCountExceeded",
+];
+
+/// Known AWS error codes for unsupported configurations
+const UNSUPPORTED_CODES: &[&str] = &["Unsupported", "UnsupportedOperation"];
+
+/// Extract an AWS error code from a debug string representation
+fn extract_error_code(debug_str: &str) -> Option<String> {
+    // Check for capacity codes
+    for code in CAPACITY_CODES {
+        if debug_str.contains(code) {
+            return Some((*code).to_string());
+        }
+    }
+
+    // Check for limit codes
+    for code in LIMIT_CODES {
+        if debug_str.contains(code) {
+            return Some((*code).to_string());
+        }
+    }
+
+    // Check for unsupported codes
+    for code in UNSUPPORTED_CODES {
+        if debug_str.contains(code) {
+            return Some((*code).to_string());
+        }
+    }
+
+    // Check for not-found codes
+    for code in NOT_FOUND_CODES {
+        if debug_str.contains(code) {
+            return Some((*code).to_string());
+        }
+    }
+
+    // Check for throttling codes
+    for code in THROTTLING_CODES {
+        if debug_str.contains(code) {
+            return Some((*code).to_string());
+        }
+    }
+
+    // Try to extract any code that looks like an AWS error code pattern
+    // Common patterns: "SomeErrorCode" or "Some.ErrorCode"
+    if let Some(start) = debug_str.find("code: Some(\"") {
+        let rest = &debug_str[start + 12..];
+        if let Some(end) = rest.find('"') {
+            return Some(rest[..end].to_string());
+        }
+    }
+
+    None
+}
+
+/// Get a user-friendly suggestion for a known error code
+fn suggestion_for_code(code: &str) -> Option<String> {
+    match code {
+        // Capacity issues
+        "InsufficientInstanceCapacity" | "InsufficientHostCapacity" | "InsufficientCapacity" => {
+            Some("Try a different availability zone or instance type.".to_string())
+        }
+        "InsufficientReservedInstanceCapacity" => {
+            Some("Your reserved instance capacity is exhausted. Try on-demand instances.".to_string())
+        }
+
+        // Limit issues
+        "InstanceLimitExceeded" | "VcpuLimitExceeded" => Some(
+            "Request a service limit increase via AWS Service Quotas console.".to_string(),
+        ),
+        "MaxSpotInstanceCountExceeded" => {
+            Some("Reduce spot instance count or request a limit increase.".to_string())
+        }
+
+        // Unsupported
+        "Unsupported" | "UnsupportedOperation" => {
+            Some("This instance type may not be available in this region/AZ.".to_string())
+        }
+
+        // Throttling
+        "Throttling" | "ThrottlingException" | "RequestLimitExceeded" => {
+            Some("AWS API rate limit hit. The operation will be retried automatically.".to_string())
+        }
+
+        _ => None,
     }
 }

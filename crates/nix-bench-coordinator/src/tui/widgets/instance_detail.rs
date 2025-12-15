@@ -23,6 +23,7 @@ pub fn render(
 
     let block = Block::default()
         .title(format!(" {} ", instance.instance_type))
+        .title_style(t.title_unfocused())
         .borders(Borders::ALL)
         .border_style(t.block_unfocused());
 
@@ -250,6 +251,7 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
     .block(
         Block::default()
             .title(title)
+            .title_style(t.title_unfocused())
             .borders(Borders::TOP)
             .border_style(t.block_unfocused()),
     );
@@ -293,10 +295,10 @@ fn render_logs(
     let t = theme::theme();
     let focused = focus == PanelFocus::BuildOutput;
 
-    let border_style = if focused {
-        t.block_focused()
+    let (border_style, title_style) = if focused {
+        (t.block_focused(), t.block_focused())
     } else {
-        t.block_unfocused()
+        (t.block_unfocused(), t.title_unfocused())
     };
 
     let title = if focused {
@@ -307,6 +309,7 @@ fn render_logs(
 
     let block = Block::default()
         .title(title)
+        .title_style(title_style)
         .borders(Borders::TOP)
         .border_style(border_style);
 

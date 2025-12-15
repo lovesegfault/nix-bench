@@ -274,7 +274,15 @@ async fn run() -> Result<()> {
                 .instances
                 .split(',')
                 .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
                 .collect();
+
+            // Validate instance types before launching TUI
+            {
+                use nix_bench_coordinator::aws::Ec2Client;
+                let ec2 = Ec2Client::new(&run_args.region).await?;
+                ec2.validate_instance_types(&instance_types).await?;
+            }
 
             info!(
                 instances = ?instance_types,

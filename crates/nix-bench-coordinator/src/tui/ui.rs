@@ -12,6 +12,8 @@ use tui_logger::{TuiLoggerSmartWidget, TuiLoggerWidget};
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &mut App) {
+    let t = theme::theme();
+
     // Check if fullscreen logs mode is active
     if app.ui.logs_fullscreen {
         render_fullscreen_logs(frame, app);
@@ -67,7 +69,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         // Clear stale build output area when no instance is selected
         app.ui.build_output_area = None;
-        let block = Block::default().title(" Details ").borders(Borders::ALL);
+        let block = Block::default()
+            .title(" Details ")
+            .title_style(t.title_unfocused())
+            .borders(Borders::ALL)
+            .border_style(t.block_unfocused());
         let paragraph = Paragraph::new("No instance selected")
             .block(block)
             .alignment(Alignment::Center);
@@ -160,6 +166,7 @@ fn render_tracing_logs(frame: &mut Frame, area: Rect) {
         .block(
             Block::default()
                 .title(" Logs ")
+                .title_style(t.title_unfocused())
                 .borders(Borders::ALL)
                 .border_style(t.block_unfocused()),
         )

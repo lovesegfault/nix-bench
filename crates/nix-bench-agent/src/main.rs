@@ -321,12 +321,13 @@ async fn main() -> Result<()> {
             logger.write_line("Cache warmup complete, starting timed runs...");
         }
         Err(e) => {
-            // Warmup failure is not fatal - log and continue
-            warn!(error = %e, "Cache warmup build failed, continuing with timed runs");
-            logger.write_line(&format!(
-                "Warning: warmup build failed: {}. Continuing with timed runs...",
-                e
-            ));
+            error!(error = %e, "Cache warmup build failed");
+            logger.write_line(&format!("Error: warmup build failed: {}", e));
+            {
+                let mut s = status.write().await;
+                s.status = StatusCode::Failed;
+            }
+            return Err(e);
         }
     }
 
@@ -354,6 +355,13 @@ async fn main() -> Result<()> {
         run_results.len()
     ));
     info!("Benchmark complete");
+
+    // Wait for coordinator to poll final status before shutting down gRPC server.
+    // The coordinator polls every 2 seconds, so waiting 60 seconds ensures it has
+    // many chances to see our Complete status with durations. Without this delay,
+    // the coordinator might miss the Complete status and never terminate the instance.
+    info!("Waiting for coordinator to poll final status...");
+    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
 
     // Gracefully shut down gRPC server
     info!("Shutting down gRPC server...");

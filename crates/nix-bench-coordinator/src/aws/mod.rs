@@ -27,7 +27,7 @@ pub use iam::{IamClient, IamOperations};
 pub use s3::{S3Client, S3Operations};
 
 // Error handling
-pub use error::{classify_anyhow_error, classify_aws_error, AwsError};
+pub use error::{classify_anyhow_error, classify_aws_error, extract_error_details, AwsError, AwsErrorDetails};
 
 // Cleanup utilities
 pub use cleanup_util::{delete_resource, partition_resources_for_cleanup, CleanupResult};

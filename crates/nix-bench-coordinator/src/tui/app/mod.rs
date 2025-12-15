@@ -623,6 +623,9 @@ impl App {
     }
 
     /// Run the cleanup phase TUI loop
+    ///
+    /// During cleanup, the TUI remains fully interactive (scrolling, navigation, etc.)
+    /// but quit requests are ignored since cleanup is already in progress.
     pub async fn run_cleanup_phase<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -630,34 +633,66 @@ impl App {
         mut rx: tokio::sync::mpsc::Receiver<super::TuiMessage>,
     ) -> anyhow::Result<()> {
         use super::TuiMessage;
-        use crossterm::event::KeyCode;
+        use crate::tui::input::KeyHandler;
+        use crossterm::event::{MouseButton, MouseEventKind};
         use tokio::time::{interval, Duration};
 
         let mut event_stream = crossterm::event::EventStream::new();
-        let mut render_interval = interval(Duration::from_millis(100));
+        let mut render_interval = interval(Duration::from_millis(33)); // ~30fps for smooth UI
+        let mut tick_interval = interval(Duration::from_millis(100)); // Throbber animation
         let mut cleanup_done = false;
         let mut cleanup_result: Option<anyhow::Result<()>> = None;
+
+        // Dummy cancel token - we won't actually cancel during cleanup
+        let dummy_cancel = tokio_util::sync::CancellationToken::new();
 
         tokio::pin!(cleanup_handle);
 
         loop {
             tokio::select! {
+                // Handle terminal events (keyboard and mouse)
                 maybe_event = event_stream.next() => {
-                    if let Some(Ok(Event::Key(key))) = maybe_event {
-                        if key.kind == KeyEventKind::Press
-                            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                        {
-                            // Already cleaning up - just consume the event
+                    if let Some(Ok(event)) = maybe_event {
+                        match event {
+                            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                                // Handle all keys except quit-related ones trigger quit
+                                // KeyHandler will try to show quit confirm, but we clear it immediately
+                                let _ = KeyHandler::handle(self, key, &dummy_cancel);
+                                // During cleanup, suppress quit confirmation
+                                self.ui.show_quit_confirm = false;
+                            }
+                            Event::Mouse(mouse) => {
+                                match mouse.kind {
+                                    MouseEventKind::Down(MouseButton::Left) => {
+                                        self.handle_mouse_click(mouse.column, mouse.row);
+                                    }
+                                    MouseEventKind::ScrollDown => {
+                                        self.handle_mouse_scroll(mouse.column, mouse.row, true);
+                                    }
+                                    MouseEventKind::ScrollUp => {
+                                        self.handle_mouse_scroll(mouse.column, mouse.row, false);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
 
+                // Receive cleanup progress updates
                 Some(msg) = rx.recv() => {
                     if let TuiMessage::Phase(phase) = msg {
                         self.lifecycle.init_phase = phase;
                     }
                 }
 
+                // Tick for throbber animation
+                _ = tick_interval.tick() => {
+                    self.tick_throbbers();
+                }
+
+                // Render UI
                 _ = render_interval.tick() => {
                     tui_logger::move_events();
                     terminal.draw(|f| ui::render(f, self))?;
@@ -670,6 +705,7 @@ impl App {
                     }
                 }
 
+                // Wait for cleanup to complete
                 result = &mut cleanup_handle, if !cleanup_done => {
                     cleanup_done = true;
                     cleanup_result = Some(result?);

@@ -255,10 +255,22 @@ impl Ec2Client {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
                 _ => {
+                    let state_reason = instance
+                        .state_reason()
+                        .map(|r| {
+                            format!(
+                                "Reason code: {}\nReason: {}",
+                                r.code().unwrap_or("unknown"),
+                                r.message().unwrap_or("no message provided")
+                            )
+                        })
+                        .unwrap_or_else(|| "No state reason provided by AWS".to_string());
+
                     anyhow::bail!(
-                        "Instance {} entered unexpected state: {:?}",
+                        "Instance {} entered unexpected state: {:?}\n{}",
                         instance_id,
-                        state
+                        state,
+                        state_reason
                     );
                 }
             }

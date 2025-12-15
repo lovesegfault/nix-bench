@@ -41,6 +41,7 @@ pub struct Theme {
     // UI elements
     pub border_focused: Color,
     pub border_unfocused: Color,
+    pub title_unfocused: Color, // Readable title for unfocused panes
     pub selection_bg: Color,
     pub highlight: Color,
     pub header_bg: Color,
@@ -93,6 +94,7 @@ impl Theme {
             // UI elements
             border_focused: Color::Rgb(180, 190, 254),  // Lavender
             border_unfocused: Color::Rgb(69, 71, 90),   // Surface1
+            title_unfocused: Color::Rgb(166, 173, 200), // Subtext1 - readable on dark bg
             selection_bg: Color::Rgb(69, 71, 90),       // Surface1
             highlight: Color::Rgb(203, 166, 247),       // Mauve
             header_bg: Color::Rgb(49, 50, 68),          // Surface0
@@ -126,6 +128,11 @@ impl Theme {
     /// Style for unfocused blocks
     pub fn block_unfocused(&self) -> Style {
         Style::default().fg(self.border_unfocused)
+    }
+
+    /// Title style for unfocused blocks (readable, brighter than border)
+    pub fn title_unfocused(&self) -> Style {
+        Style::default().fg(self.title_unfocused)
     }
 
     /// Style for table headers

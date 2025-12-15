@@ -15,7 +15,8 @@ use crate::aws::resource_guard::{
     SecurityGroupGuard, SecurityGroupRuleGuard,
 };
 use crate::aws::{
-    get_coordinator_public_ip, get_current_account_id, AccountId, Ec2Client, IamClient, S3Client,
+    extract_error_details, get_coordinator_public_ip, get_current_account_id, AccountId,
+    Ec2Client, IamClient, S3Client,
 };
 use crate::config::{detect_system, AgentConfig, RunConfig};
 use crate::state::{self, DbPool, ResourceType};
@@ -404,13 +405,25 @@ impl<'a> BenchmarkInitializer<'a> {
                         public_ip: None,
                     });
 
+                    // Extract detailed error information for display
+                    let details = extract_error_details(&e);
+                    let suggestion_line = details
+                        .suggestion
+                        .map(|s| format!("Suggestion: {}\n\n", s))
+                        .unwrap_or_default();
+
                     // Send error to TUI console output
                     let error_msg = format!(
                         "=== Instance Launch Failed ===\n\n\
                          Instance type: {}\n\
+                         Error code: {}\n\
                          Error: {}\n\n\
+                         {}\
                          This instance will not be available for benchmarking.",
-                        instance_type, e
+                        instance_type,
+                        details.code.as_deref().unwrap_or("N/A"),
+                        details.message,
+                        suggestion_line
                     );
                     reporter.report_console_output(instance_type, error_msg);
                 }
@@ -523,14 +536,28 @@ impl<'a> BenchmarkInitializer<'a> {
                             public_ip: None,
                         });
 
+                        // Extract detailed error information for display
+                        // Note: The error message now includes StateReason from AWS
+                        let details = extract_error_details(&e);
+                        let suggestion_line = details
+                            .suggestion
+                            .map(|s| format!("Suggestion: {}\n\n", s))
+                            .unwrap_or_default();
+
                         // Send error to TUI console output
                         let error_msg = format!(
                             "=== Instance Failed to Start ===\n\n\
                              Instance type: {}\n\
                              Instance ID: {}\n\
+                             Error code: {}\n\
                              Error: {}\n\n\
+                             {}\
                              The instance did not reach 'running' state.",
-                            instance_type, instance_id, e
+                            instance_type,
+                            instance_id,
+                            details.code.as_deref().unwrap_or("N/A"),
+                            details.message,
+                            suggestion_line
                         );
                         reporter.report_console_output(&instance_type, error_msg);
                     }

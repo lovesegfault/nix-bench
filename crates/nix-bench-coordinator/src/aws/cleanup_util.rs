@@ -38,7 +38,7 @@ pub async fn delete_resource(
         ResourceType::S3Bucket => s3.delete_bucket(resource_id).await,
         ResourceType::S3Object => return CleanupResult::Skipped, // Cleaned with bucket
         ResourceType::IamRole => iam.delete_benchmark_role(resource_id).await,
-        ResourceType::IamInstanceProfile => return CleanupResult::Skipped, // Cleaned with role
+        ResourceType::IamInstanceProfile => iam.delete_instance_profile(resource_id).await,
         ResourceType::SecurityGroup => ec2.delete_security_group(resource_id).await,
         ResourceType::SecurityGroupRule => {
             if let Some((sg_id, cidr_ip)) = resource_id.split_once(':') {

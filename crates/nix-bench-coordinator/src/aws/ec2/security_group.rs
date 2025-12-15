@@ -1,13 +1,15 @@
 //! Security group management
 
 use super::Ec2Client;
-use crate::aws::error::classify_aws_error;
+use crate::aws::error::{classify_anyhow_error, classify_aws_error};
 use anyhow::{Context, Result};
 use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{Filter, IpPermission, IpRange, ResourceType, Tag, TagSpecification};
+use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
 use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
-use tracing::{debug, info};
+use std::time::Duration;
+use tracing::{debug, info, warn};
 
 impl Ec2Client {
     /// Create a security group for nix-bench instances with SSH and gRPC access
@@ -120,29 +122,52 @@ impl Ec2Client {
     /// Delete a security group
     ///
     /// Returns Ok(()) if the security group was deleted or if it doesn't exist (idempotent for cleanup).
+    /// Retries on DependencyViolation errors (e.g., when ENIs are still releasing after instance termination).
     pub async fn delete_security_group(&self, security_group_id: &str) -> Result<()> {
         info!(sg_id = %security_group_id, "Deleting security group");
 
-        match self
-            .client
-            .delete_security_group()
-            .group_id(security_group_id)
-            .send()
-            .await
-        {
-            Ok(_) => {
-                info!(sg_id = %security_group_id, "Security group deleted");
-                Ok(())
-            }
-            Err(sdk_error) => {
-                if classify_aws_error(sdk_error.code(), sdk_error.message()).is_not_found() {
-                    debug!(sg_id = %security_group_id, "Security group already deleted or doesn't exist");
+        let sg_id = security_group_id.to_string();
+        let sg_id_for_log = sg_id.clone();
+
+        (|| async {
+            match self
+                .client
+                .delete_security_group()
+                .group_id(&sg_id)
+                .send()
+                .await
+            {
+                Ok(_) => {
+                    info!(sg_id = %sg_id, "Security group deleted");
                     Ok(())
-                } else {
-                    Err(anyhow::Error::from(sdk_error).context("Failed to delete security group"))
+                }
+                Err(sdk_error) => {
+                    let aws_error = classify_aws_error(sdk_error.code(), sdk_error.message());
+                    if aws_error.is_not_found() {
+                        debug!(sg_id = %sg_id, "Security group already deleted or doesn't exist");
+                        Ok(())
+                    } else {
+                        Err(anyhow::Error::from(sdk_error).context("Failed to delete security group"))
+                    }
                 }
             }
-        }
+        })
+        .retry(
+            ExponentialBuilder::default()
+                .with_min_delay(Duration::from_secs(10))
+                .with_max_delay(Duration::from_secs(60))
+                .with_max_times(5),
+        )
+        .when(|e| classify_anyhow_error(e).is_retryable())
+        .notify(|e, dur| {
+            warn!(
+                sg_id = %sg_id_for_log,
+                delay = ?dur,
+                error = %e,
+                "Security group deletion failed, retrying..."
+            );
+        })
+        .await
     }
 
     /// Add an ingress rule to a security group for gRPC traffic (port 50051)

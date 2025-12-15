@@ -354,4 +354,34 @@ impl Ec2Client {
             Ok(None)
         }
     }
+
+    /// Release an Elastic IP address
+    ///
+    /// Returns Ok(()) if the EIP was released or if it doesn't exist (idempotent for cleanup).
+    pub async fn release_elastic_ip(&self, allocation_id: &str) -> Result<()> {
+        info!(allocation_id = %allocation_id, "Releasing Elastic IP");
+
+        match self
+            .client
+            .release_address()
+            .allocation_id(allocation_id)
+            .send()
+            .await
+        {
+            Ok(_) => {
+                info!(allocation_id = %allocation_id, "Released Elastic IP");
+                Ok(())
+            }
+            Err(e) => {
+                // Handle "not found" gracefully
+                let error_str = format!("{:?}", e);
+                if error_str.contains("InvalidAllocationID.NotFound") {
+                    info!(allocation_id = %allocation_id, "Elastic IP already released");
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("Failed to release Elastic IP: {}", e))
+                }
+            }
+        }
+    }
 }

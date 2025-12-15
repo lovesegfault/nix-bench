@@ -131,6 +131,7 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
             InstanceStatus::Running => "Running",
             InstanceStatus::Complete => "Complete",
             InstanceStatus::Failed => "Failed",
+            InstanceStatus::Terminated => "Terminated",
         };
 
         let runs = format!("{}/{}", state.run_progress, state.total_runs);

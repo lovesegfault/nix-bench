@@ -404,6 +404,7 @@ pub fn status_symbol(status: InstanceStatus) -> &'static str {
         InstanceStatus::Running => "●",
         InstanceStatus::Complete => "✓",
         InstanceStatus::Failed => "✗",
+        InstanceStatus::Terminated => "⊘",
     }
 }
 

@@ -260,12 +260,14 @@ pub async fn run_init_task(
     let instances_for_termination = instances.clone();
     let region_for_termination = config.region.clone();
     let run_id_for_termination = run_id.clone();
+    let tx_for_termination = tx.clone();
     tokio::spawn(async move {
         watch_and_terminate_completed(
             instances_for_termination,
             region_for_termination,
             run_id_for_termination,
             tls_config_for_watcher,
+            tx_for_termination,
         ).await;
     });
 
@@ -489,6 +491,7 @@ pub async fn run_benchmarks_no_tui(
                 InstanceStatus::Running => "  running",
                 InstanceStatus::Complete => "  complete",
                 InstanceStatus::Failed => "  failed",
+                InstanceStatus::Terminated => "  terminated",
             };
             let avg = if !state.durations.is_empty() {
                 format!(

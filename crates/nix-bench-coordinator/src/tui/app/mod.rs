@@ -513,11 +513,17 @@ impl App {
                         TuiMessage::TlsConfig { config } => {
                             self.context.tls_config = Some(config);
                         }
-                        TuiMessage::InstanceUpdate { instance_type, instance_id, status, public_ip } => {
+                        TuiMessage::InstanceUpdate { instance_type, instance_id, status, public_ip, run_progress, durations } => {
                             if let Some(state) = self.instances.data.get_mut(&instance_type) {
                                 state.instance_id = instance_id;
                                 state.status = status;
                                 state.public_ip = public_ip;
+                                if let Some(rp) = run_progress {
+                                    state.run_progress = rp;
+                                }
+                                if let Some(d) = durations {
+                                    state.durations = d;
+                                }
                             }
                         }
                         TuiMessage::ConsoleOutput { instance_type, output } => {

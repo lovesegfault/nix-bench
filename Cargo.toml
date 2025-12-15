@@ -30,6 +30,7 @@ aws-sdk-sts = "1"
 
 # gRPC
 tonic = { version = "0.13", features = ["tls-ring"] }
+tonic-build = "0.13"
 prost = "0.13"
 async-stream = "0.3"
 

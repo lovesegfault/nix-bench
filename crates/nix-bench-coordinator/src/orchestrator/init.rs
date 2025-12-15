@@ -21,6 +21,7 @@ use crate::config::{detect_system, AgentConfig, RunConfig};
 use crate::state::{self, DbPool, ResourceType};
 use crate::tui::{InitPhase, LogBuffer};
 use anyhow::{Context, Result};
+use futures::future::join_all;
 use nix_bench_common::jittered_delay_25;
 use nix_bench_common::tls::{
     generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig,
@@ -402,6 +403,16 @@ impl<'a> BenchmarkInitializer<'a> {
                         status: InstanceStatus::Failed,
                         public_ip: None,
                     });
+
+                    // Send error to TUI console output
+                    let error_msg = format!(
+                        "=== Instance Launch Failed ===\n\n\
+                         Instance type: {}\n\
+                         Error: {}\n\n\
+                         This instance will not be available for benchmarking.",
+                        instance_type, e
+                    );
+                    reporter.report_console_output(instance_type, error_msg);
                 }
             }
         }
@@ -462,21 +473,71 @@ impl<'a> BenchmarkInitializer<'a> {
         Ok(())
     }
 
-    async fn wait_for_instances<R: InitProgressReporter>(&self, mut instances: HashMap<String, InstanceState>, ec2: &Ec2Client, reporter: &R) -> Result<HashMap<String, InstanceState>> {
-        for (instance_type, state) in instances.iter_mut() {
-            match ec2.wait_for_running(&state.instance_id, None).await {
-                Ok(dynamic_ip) => {
-                    state.public_ip = dynamic_ip;
-                    state.status = InstanceStatus::Running;
-                    reporter.report_instance_update(InstanceUpdate { instance_type: instance_type.clone(), instance_id: state.instance_id.clone(), status: InstanceStatus::Running, public_ip: state.public_ip.clone() });
+    /// Wait for all instances to be running in parallel
+    ///
+    /// All instances are waited on concurrently using `join_all`, which reduces
+    /// total wait time from O(n * timeout) to O(max(timeout)).
+    async fn wait_for_instances<R: InitProgressReporter>(
+        &self,
+        mut instances: HashMap<String, InstanceState>,
+        ec2: &Ec2Client,
+        reporter: &R,
+    ) -> Result<HashMap<String, InstanceState>> {
+        // Create futures for all instances to wait in parallel
+        let futures: Vec<_> = instances
+            .iter()
+            .map(|(instance_type, state)| {
+                let instance_type = instance_type.clone();
+                let instance_id = state.instance_id.clone();
+                async move {
+                    let result = ec2.wait_for_running(&instance_id, None).await;
+                    (instance_type, instance_id, result)
                 }
-                Err(e) => {
-                    error!(instance_type = %instance_type, error = ?e, "Instance failed to start");
-                    state.status = InstanceStatus::Failed;
-                    reporter.report_instance_update(InstanceUpdate { instance_type: instance_type.clone(), instance_id: state.instance_id.clone(), status: InstanceStatus::Failed, public_ip: None });
+            })
+            .collect();
+
+        // Wait for all instances concurrently
+        let results = join_all(futures).await;
+
+        // Process results and update instance states
+        for (instance_type, instance_id, result) in results {
+            if let Some(state) = instances.get_mut(&instance_type) {
+                match result {
+                    Ok(dynamic_ip) => {
+                        state.public_ip = dynamic_ip;
+                        state.status = InstanceStatus::Running;
+                        reporter.report_instance_update(InstanceUpdate {
+                            instance_type: instance_type.clone(),
+                            instance_id: instance_id.clone(),
+                            status: InstanceStatus::Running,
+                            public_ip: state.public_ip.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        error!(instance_type = %instance_type, error = ?e, "Instance failed to start");
+                        state.status = InstanceStatus::Failed;
+                        reporter.report_instance_update(InstanceUpdate {
+                            instance_type: instance_type.clone(),
+                            instance_id: instance_id.clone(),
+                            status: InstanceStatus::Failed,
+                            public_ip: None,
+                        });
+
+                        // Send error to TUI console output
+                        let error_msg = format!(
+                            "=== Instance Failed to Start ===\n\n\
+                             Instance type: {}\n\
+                             Instance ID: {}\n\
+                             Error: {}\n\n\
+                             The instance did not reach 'running' state.",
+                            instance_type, instance_id, e
+                        );
+                        reporter.report_console_output(&instance_type, error_msg);
+                    }
                 }
             }
         }
+
         Ok(instances)
     }
 }

@@ -333,6 +333,49 @@ impl Ec2Client {
         }
     }
 
+    /// Terminate multiple instances in a single API call
+    pub async fn terminate_instances(&self, instance_ids: &[String]) -> Result<()> {
+        if instance_ids.is_empty() {
+            return Ok(());
+        }
+
+        info!(count = instance_ids.len(), "Terminating instances in batch");
+
+        self.client
+            .terminate_instances()
+            .set_instance_ids(Some(instance_ids.to_vec()))
+            .send()
+            .await
+            .context("Failed to terminate instances")?;
+
+        Ok(())
+    }
+
+    /// Wait for multiple instances to be fully terminated in parallel
+    pub async fn wait_for_all_terminated(&self, instance_ids: &[String]) -> Result<()> {
+        use futures::future::join_all;
+
+        if instance_ids.is_empty() {
+            return Ok(());
+        }
+
+        let futures: Vec<_> = instance_ids
+            .iter()
+            .map(|id| self.wait_for_terminated(id))
+            .collect();
+
+        let results = join_all(futures).await;
+
+        // Log any errors but don't fail - we tried our best
+        for (id, result) in instance_ids.iter().zip(results) {
+            if let Err(e) = result {
+                warn!(instance_id = %id, error = ?e, "Error waiting for instance termination");
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get console output from an instance
     pub async fn get_console_output(&self, instance_id: &str) -> Result<Option<String>> {
         let response = self

@@ -1,6 +1,7 @@
 //! gRPC status polling
 
 use super::channel::{ChannelOptions, GrpcChannelBuilder};
+use futures::future::join_all;
 use nix_bench_common::{RunResult, StatusCode, TlsConfig};
 use nix_bench_proto::LogStreamClient;
 use std::collections::HashMap;
@@ -47,80 +48,87 @@ impl GrpcStatusPoller {
         }
     }
 
-    /// Poll status from all instances
+    /// Poll status from all instances in parallel
     ///
     /// Returns a map of instance_type to status. Failed connections are logged
-    /// but don't fail the overall poll.
+    /// but don't fail the overall poll. All instances are polled concurrently
+    /// to minimize total latency.
     pub async fn poll_status(&self) -> HashMap<String, GrpcInstanceStatus> {
-        let mut results = HashMap::new();
+        let futures: Vec<_> = self
+            .instances
+            .iter()
+            .map(|(instance_type, public_ip, port)| {
+                let instance_type = instance_type.clone();
+                let public_ip = public_ip.clone();
+                let port = *port;
+                let tls_config = self.tls_config.clone();
 
-        for (instance_type, public_ip, port) in &self.instances {
-            let builder = GrpcChannelBuilder::new(public_ip, *port, &self.tls_config)
-                .with_options(ChannelOptions::for_polling());
+                async move { Self::poll_single_instance(&instance_type, &public_ip, port, &tls_config).await }
+            })
+            .collect();
 
-            let channel = match builder.try_connect().await {
-                Some(ch) => ch,
-                None => {
-                    debug!(
-                        instance_type = %instance_type,
-                        "Failed to connect for status poll"
-                    );
-                    continue;
-                }
-            };
+        join_all(futures).await.into_iter().flatten().collect()
+    }
 
-            let mut client = LogStreamClient::new(channel);
-            match client
-                .get_status(nix_bench_proto::StatusRequest {})
-                .await
-            {
-                Ok(response) => {
-                    let status = response.into_inner();
-                    // Convert proto enum i32 to StatusCode
-                    let status_code = StatusCode::from_i32(status.status_code);
+    /// Poll a single instance for status
+    async fn poll_single_instance(
+        instance_type: &str,
+        public_ip: &str,
+        port: u16,
+        tls_config: &TlsConfig,
+    ) -> Option<(String, GrpcInstanceStatus)> {
+        let builder =
+            GrpcChannelBuilder::new(public_ip, port, tls_config).with_options(ChannelOptions::for_polling());
 
-                    let run_results: Vec<RunResult> = status
-                        .run_results
-                        .iter()
-                        .map(|r| RunResult {
-                            run_number: r.run_number,
-                            duration_secs: r.duration_secs,
-                            success: r.success,
-                        })
-                        .collect();
+        let channel = match builder.try_connect().await {
+            Some(ch) => ch,
+            None => {
+                debug!(
+                    instance_type = %instance_type,
+                    "Failed to connect for status poll"
+                );
+                return None;
+            }
+        };
 
-                    results.insert(
-                        instance_type.clone(),
-                        GrpcInstanceStatus {
-                            status: status_code,
-                            run_progress: Some(status.run_progress),
-                            total_runs: Some(status.total_runs),
-                            durations: status.durations,
-                            dropped_log_count: status.dropped_log_count,
-                            run_results,
-                            attr: if status.attr.is_empty() {
-                                None
-                            } else {
-                                Some(status.attr)
-                            },
-                            system: if status.system.is_empty() {
-                                None
-                            } else {
-                                Some(status.system)
-                            },
-                        },
-                    );
-                }
-                Err(e) => {
-                    debug!(
-                        instance_type = %instance_type,
-                        error = %e,
-                        "GetStatus RPC failed"
-                    );
-                }
+        let mut client = LogStreamClient::new(channel);
+        match client.get_status(nix_bench_proto::StatusRequest {}).await {
+            Ok(response) => {
+                let status = response.into_inner();
+                let status_code = StatusCode::from_i32(status.status_code);
+
+                let run_results: Vec<RunResult> = status
+                    .run_results
+                    .iter()
+                    .map(|r| RunResult {
+                        run_number: r.run_number,
+                        duration_secs: r.duration_secs,
+                        success: r.success,
+                    })
+                    .collect();
+
+                Some((
+                    instance_type.to_string(),
+                    GrpcInstanceStatus {
+                        status: status_code,
+                        run_progress: Some(status.run_progress),
+                        total_runs: Some(status.total_runs),
+                        durations: status.durations,
+                        dropped_log_count: status.dropped_log_count,
+                        run_results,
+                        attr: if status.attr.is_empty() { None } else { Some(status.attr) },
+                        system: if status.system.is_empty() { None } else { Some(status.system) },
+                    },
+                ))
+            }
+            Err(e) => {
+                debug!(
+                    instance_type = %instance_type,
+                    error = %e,
+                    "GetStatus RPC failed"
+                );
+                None
             }
         }
-
-        results
     }
 }

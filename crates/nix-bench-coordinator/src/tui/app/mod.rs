@@ -433,8 +433,11 @@ impl App {
             .collect()
     }
 
-    /// Poll gRPC GetStatus from all instances with IPs
-    async fn poll_grpc_status(&mut self) {
+    /// Spawn background gRPC status polling
+    ///
+    /// This spawns the polling as a background task and sends results via channel,
+    /// ensuring the TUI event loop is never blocked by slow gRPC connections.
+    fn spawn_grpc_poll(&self, tx: tokio::sync::mpsc::Sender<HashMap<String, GrpcInstanceStatus>>) {
         let instances_with_ips = self.get_instances_with_ips();
         if instances_with_ips.is_empty() {
             return;
@@ -445,11 +448,13 @@ impl App {
             Some(tls) => tls.clone(),
             None => return,
         };
-        let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT, tls_config);
-        let status_map = poller.poll_status().await;
-        if !status_map.is_empty() {
-            self.update_from_grpc_status(&status_map);
-        }
+
+        tokio::spawn(async move {
+            let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT, tls_config);
+            let status_map = poller.poll_status().await;
+            // Send results; ignore error if receiver is dropped
+            let _ = tx.send(status_map).await;
+        });
     }
 
     // ========================================================================
@@ -489,6 +494,10 @@ impl App {
         let mut tick_interval = tokio::time::interval(Duration::from_millis(100));
         let mut render_interval = tokio::time::interval(Duration::from_millis(33));
         let mut grpc_poll_interval = tokio::time::interval(Duration::from_millis(500));
+
+        // Channel for receiving gRPC status updates from background polling task
+        let (grpc_tx, mut grpc_rx) =
+            tokio::sync::mpsc::channel::<HashMap<String, GrpcInstanceStatus>>(1);
 
         loop {
             tokio::select! {
@@ -590,10 +599,17 @@ impl App {
                     terminal.draw(|f| ui::render(f, self))?;
                 }
 
-                // Poll gRPC GetStatus from agents
+                // Receive gRPC status updates from background polling task
+                Some(status_map) = grpc_rx.recv() => {
+                    if !status_map.is_empty() {
+                        self.update_from_grpc_status(&status_map);
+                    }
+                }
+
+                // Trigger background gRPC polling (non-blocking spawn)
                 _ = grpc_poll_interval.tick() => {
                     if matches!(self.lifecycle.init_phase, InitPhase::Running) {
-                        self.poll_grpc_status().await;
+                        self.spawn_grpc_poll(grpc_tx.clone());
                     }
                 }
             }

@@ -82,7 +82,14 @@ impl IamClient {
         bucket_name: &str,
         cancel: Option<&CancellationToken>,
     ) -> Result<(String, String)> {
-        let role_name = format!("nix-bench-agent-{}", &run_id[..13]); // Truncate for IAM limits
+        // IAM role names have 64 char limit. "nix-bench-agent-" is 17 chars, leaving 47 for run_id.
+        let max_run_id_len = 47;
+        let truncated_run_id = if run_id.len() > max_run_id_len {
+            &run_id[..max_run_id_len]
+        } else {
+            run_id
+        };
+        let role_name = format!("nix-bench-agent-{}", truncated_run_id);
         let profile_name = role_name.clone();
         let policy_name = "nix-bench-agent-policy";
 

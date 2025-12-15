@@ -33,6 +33,9 @@ impl S3Client {
     }
 
     /// Create a bucket for this run
+    ///
+    /// This is idempotent - if the bucket already exists and is owned by you,
+    /// it succeeds without error.
     pub async fn create_bucket(&self, bucket_name: &str) -> Result<()> {
         info!(bucket = %bucket_name, region = %self.region, "Creating S3 bucket");
 
@@ -43,15 +46,26 @@ impl S3Client {
             .location_constraint(location_constraint)
             .build();
 
-        self.client
+        let result = self
+            .client
             .create_bucket()
             .bucket(bucket_name)
             .create_bucket_configuration(create_config)
             .send()
-            .await
-            .context("Failed to create bucket")?;
+            .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // BucketAlreadyOwnedByYou means we already own it - that's fine
+                if e.code() == Some("BucketAlreadyOwnedByYou") {
+                    debug!(bucket = %bucket_name, "Bucket already exists and is owned by us");
+                    Ok(())
+                } else {
+                    Err(e).context("Failed to create bucket")
+                }
+            }
+        }
     }
 
     /// Apply standard nix-bench tags to a bucket

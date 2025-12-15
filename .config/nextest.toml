@@ -9,14 +9,14 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.default.junit]
 path = "target/nextest/default/junit.xml"
 
-# AWS integration tests: limit to exactly 4 concurrent, longer timeouts
+# AWS integration tests: run serially to avoid rate limiting, longer timeouts
 [[profile.default.overrides]]
 filter = 'binary(~aws) | binary(~agent_e2e)'
 test-group = 'aws-tests'
 slow-timeout = { period = "120s", terminate-after = 5 }
 
 [test-groups.aws-tests]
-max-threads = 4
+max-threads = 1
 
 [profile.ci]
 # CI profile with longer timeouts

@@ -128,6 +128,7 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
         let status = match state.status {
             InstanceStatus::Pending => "Pending",
             InstanceStatus::Launching => "Launching",
+            InstanceStatus::Starting => "Starting",
             InstanceStatus::Running => "Running",
             InstanceStatus::Complete => "Complete",
             InstanceStatus::Failed => "Failed",

@@ -47,6 +47,50 @@ impl InstancesState {
     pub fn selected_key(&self) -> Option<&String> {
         self.order.get(self.selected_index)
     }
+
+    /// Re-sort instances by average duration (fastest first)
+    ///
+    /// Instances with completed runs are sorted by their average duration (ascending).
+    /// Instances without any completed runs are placed at the bottom, sorted alphabetically.
+    /// The currently selected instance remains selected after sorting.
+    pub fn sort_by_average_duration(&mut self) {
+        // Remember which instance was selected
+        let selected_type = self.order.get(self.selected_index).cloned();
+
+        // Pre-compute averages to avoid borrow issues during sort
+        let averages: HashMap<String, Option<f64>> = self
+            .data
+            .iter()
+            .map(|(k, v)| {
+                let avg = if v.durations.is_empty() {
+                    None
+                } else {
+                    Some(v.durations.iter().sum::<f64>() / v.durations.len() as f64)
+                };
+                (k.clone(), avg)
+            })
+            .collect();
+
+        // Sort: instances with durations first (by avg ascending), then those without (alphabetically)
+        self.order.sort_by(|a, b| {
+            let avg_a = averages.get(a).and_then(|v| *v);
+            let avg_b = averages.get(b).and_then(|v| *v);
+
+            match (avg_a, avg_b) {
+                (Some(a_val), Some(b_val)) => {
+                    a_val.partial_cmp(&b_val).unwrap_or(std::cmp::Ordering::Equal)
+                }
+                (Some(_), None) => std::cmp::Ordering::Less, // With durations first
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.cmp(b), // Alphabetical fallback
+            }
+        });
+
+        // Restore selection to the same instance
+        if let Some(selected) = selected_type {
+            self.selected_index = self.order.iter().position(|t| t == &selected).unwrap_or(0);
+        }
+    }
 }
 
 /// UI display state

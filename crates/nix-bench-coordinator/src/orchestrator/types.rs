@@ -61,9 +61,11 @@ pub enum InstanceStatus {
     /// Instance not yet launched
     #[default]
     Pending,
-    /// Instance is launching
+    /// Instance is launching (EC2 launch API called)
     Launching,
-    /// Instance is running benchmarks
+    /// EC2 is running, waiting for agent to respond
+    Starting,
+    /// Instance is running benchmarks (agent responding via gRPC)
     Running,
     /// Benchmarks completed successfully
     Complete,
@@ -79,6 +81,7 @@ impl InstanceStatus {
         match self {
             Self::Pending => "pending",
             Self::Launching => "launching",
+            Self::Starting => "starting",
             Self::Running => "running",
             Self::Complete => "complete",
             Self::Failed => "failed",

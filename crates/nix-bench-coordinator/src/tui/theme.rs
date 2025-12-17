@@ -26,6 +26,7 @@ pub struct Theme {
     // Status-specific (for instance states)
     pub status_pending: Color,
     pub status_launching: Color,
+    pub status_starting: Color,
     pub status_running: Color,
     pub status_complete: Color,
     pub status_failed: Color,
@@ -79,6 +80,7 @@ impl Theme {
             // Status
             status_pending: Color::Rgb(147, 153, 178),   // Subtext0 (gray)
             status_launching: Color::Rgb(249, 226, 175), // Yellow
+            status_starting: Color::Rgb(250, 179, 135),  // Peach (waiting for agent)
             status_running: Color::Rgb(137, 180, 250),   // Blue
             status_complete: Color::Rgb(166, 227, 161),  // Green
             status_failed: Color::Rgb(243, 139, 168),    // Red
@@ -113,6 +115,7 @@ impl Theme {
         match status {
             InstanceStatus::Pending => self.status_pending,
             InstanceStatus::Launching => self.status_launching,
+            InstanceStatus::Starting => self.status_starting,
             InstanceStatus::Running => self.status_running,
             InstanceStatus::Complete => self.status_complete,
             InstanceStatus::Failed => self.status_failed,

@@ -308,11 +308,13 @@ fn render_help_popup(frame: &mut Frame) {
             Span::styled("Pending  ", t.dim()),
             Span::styled("◔ ", t.status_style(InstanceStatus::Launching)),
             Span::styled("Launching  ", t.dim()),
-            Span::styled("● ", t.status_style(InstanceStatus::Running)),
-            Span::styled("Running", t.dim()),
+            Span::styled("◐ ", t.status_style(InstanceStatus::Starting)),
+            Span::styled("Starting", t.dim()),
         ]),
         Line::from(vec![
-            Span::styled("  ✓ ", t.status_style(InstanceStatus::Complete)),
+            Span::styled("  ● ", t.status_style(InstanceStatus::Running)),
+            Span::styled("Running  ", t.dim()),
+            Span::styled("✓ ", t.status_style(InstanceStatus::Complete)),
             Span::styled("Complete ", t.dim()),
             Span::styled("✗ ", t.status_style(InstanceStatus::Failed)),
             Span::styled("Failed", t.dim()),
@@ -404,6 +406,7 @@ pub fn status_symbol(status: InstanceStatus) -> &'static str {
     match status {
         InstanceStatus::Pending => "○",
         InstanceStatus::Launching => "◔",
+        InstanceStatus::Starting => "◐",
         InstanceStatus::Running => "●",
         InstanceStatus::Complete => "✓",
         InstanceStatus::Failed => "✗",
@@ -553,6 +556,7 @@ mod tests {
     fn status_symbol_returns_correct_symbols() {
         assert_eq!(status_symbol(InstanceStatus::Pending), "○");
         assert_eq!(status_symbol(InstanceStatus::Launching), "◔");
+        assert_eq!(status_symbol(InstanceStatus::Starting), "◐");
         assert_eq!(status_symbol(InstanceStatus::Running), "●");
         assert_eq!(status_symbol(InstanceStatus::Complete), "✓");
         assert_eq!(status_symbol(InstanceStatus::Failed), "✗");
@@ -564,6 +568,7 @@ mod tests {
         let t = theme::theme();
         assert_eq!(status_color(InstanceStatus::Pending), t.status_pending);
         assert_eq!(status_color(InstanceStatus::Launching), t.status_launching);
+        assert_eq!(status_color(InstanceStatus::Starting), t.status_starting);
         assert_eq!(status_color(InstanceStatus::Running), t.status_running);
         assert_eq!(status_color(InstanceStatus::Complete), t.status_complete);
         assert_eq!(status_color(InstanceStatus::Failed), t.status_failed);

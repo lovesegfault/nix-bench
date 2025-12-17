@@ -515,11 +515,11 @@ impl<'a> BenchmarkInitializer<'a> {
                 match result {
                     Ok(dynamic_ip) => {
                         state.public_ip = dynamic_ip;
-                        state.status = InstanceStatus::Running;
+                        state.status = InstanceStatus::Starting;
                         reporter.report_instance_update(InstanceUpdate {
                             instance_type: instance_type.clone(),
                             instance_id: instance_id.clone(),
-                            status: InstanceStatus::Running,
+                            status: InstanceStatus::Starting,
                             public_ip: state.public_ip.clone(),
                         });
                     }

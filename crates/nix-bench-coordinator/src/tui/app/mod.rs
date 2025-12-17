@@ -219,10 +219,31 @@ impl App {
     }
 
     pub fn all_complete(&self) -> bool {
-        self.instances
-            .data
-            .values()
-            .all(|s| s.status == InstanceStatus::Complete || s.status == InstanceStatus::Failed)
+        self.instances.data.values().all(|s| {
+            matches!(
+                s.status,
+                InstanceStatus::Complete | InstanceStatus::Failed | InstanceStatus::Terminated
+            )
+        })
+    }
+
+    /// Check if all results have been captured for completed instances.
+    ///
+    /// This verifies that for each Complete instance, we've received all the
+    /// expected duration results (durations.len() >= run_progress). This guards
+    /// against the race where we see Complete status before the final duration
+    /// is polled.
+    pub fn all_results_captured(&self) -> bool {
+        self.instances.data.values().all(|s| {
+            match s.status {
+                // Complete instances must have all their durations
+                InstanceStatus::Complete => s.durations.len() as u32 >= s.run_progress,
+                // Failed/Terminated instances may not have all results, that's OK
+                InstanceStatus::Failed | InstanceStatus::Terminated => true,
+                // Still running, not captured yet
+                _ => false,
+            }
+        })
     }
 
     // ========================================================================
@@ -411,15 +432,18 @@ impl App {
             if let Some(state) = self.instances.data.get_mut(instance_type) {
                 let was_complete = state.status == InstanceStatus::Complete;
 
+                // Skip status updates for terminated instances (terminal state)
                 if let Some(status_code) = status.status {
-                    state.status = match status_code {
-                        StatusCode::Complete => InstanceStatus::Complete,
-                        StatusCode::Failed => InstanceStatus::Failed,
-                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
-                            InstanceStatus::Running
-                        }
-                        StatusCode::Pending => InstanceStatus::Pending,
-                    };
+                    if state.status != InstanceStatus::Terminated {
+                        state.status = match status_code {
+                            StatusCode::Complete => InstanceStatus::Complete,
+                            StatusCode::Failed => InstanceStatus::Failed,
+                            StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
+                                InstanceStatus::Running
+                            }
+                            StatusCode::Pending => InstanceStatus::Pending,
+                        };
+                    }
                 }
                 if let Some(progress) = status.run_progress {
                     state.run_progress = progress;
@@ -441,6 +465,8 @@ impl App {
             }
         }
         self.context.last_update = Instant::now();
+        // Re-sort instances by average duration (fastest first)
+        self.instances.sort_by_average_duration();
         to_cleanup
     }
 
@@ -551,7 +577,10 @@ impl App {
                         TuiMessage::InstanceUpdate { instance_type, instance_id, status, public_ip, run_progress, durations } => {
                             if let Some(state) = self.instances.data.get_mut(&instance_type) {
                                 state.instance_id = instance_id;
-                                state.status = status;
+                                // Only allow transition to Terminated once terminated (terminal state)
+                                if state.status != InstanceStatus::Terminated || status == InstanceStatus::Terminated {
+                                    state.status = status;
+                                }
                                 state.public_ip = public_ip;
                                 if let Some(rp) = run_progress {
                                     state.run_progress = rp;
@@ -560,6 +589,8 @@ impl App {
                                     state.durations = d;
                                 }
                             }
+                            // Re-sort instances by average duration (fastest first)
+                            self.instances.sort_by_average_duration();
                         }
                         TuiMessage::ConsoleOutput { instance_type, output } => {
                             if let Some(state) = self.instances.data.get_mut(&instance_type) {
@@ -605,7 +636,13 @@ impl App {
                 _ = tick_interval.tick() => {
                     self.tick_throbbers();
 
-                    if matches!(self.lifecycle.init_phase, InitPhase::Running) && self.all_complete() {
+                    // Only transition to Completed when all instances are done AND
+                    // we've captured all their results. This prevents exiting before
+                    // the final duration is polled.
+                    if matches!(self.lifecycle.init_phase, InitPhase::Running)
+                        && self.all_complete()
+                        && self.all_results_captured()
+                    {
                         self.lifecycle.init_phase = InitPhase::Completed;
                         if self.context.completion_time.is_none() {
                             self.context.completion_time = Some(Instant::now());
@@ -823,5 +860,60 @@ mod tests {
 
         assert!(app.scroll.throbber_states.contains_key("m5.large"));
         assert!(!app.scroll.throbber_states.contains_key("nonexistent"));
+    }
+
+    #[test]
+    fn test_all_results_captured_complete_with_all_durations() {
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+
+        if let Some(state) = app.instances.data.get_mut("m5.large") {
+            state.status = InstanceStatus::Complete;
+            state.run_progress = 5;
+            state.durations = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        }
+
+        assert!(app.all_results_captured());
+    }
+
+    #[test]
+    fn test_all_results_captured_complete_missing_duration() {
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+
+        if let Some(state) = app.instances.data.get_mut("m5.large") {
+            state.status = InstanceStatus::Complete;
+            state.run_progress = 5;
+            // Only 4 durations captured, but run_progress says 5 completed
+            state.durations = vec![1.0, 2.0, 3.0, 4.0];
+        }
+
+        assert!(!app.all_results_captured());
+    }
+
+    #[test]
+    fn test_all_results_captured_failed_instance() {
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+
+        if let Some(state) = app.instances.data.get_mut("m5.large") {
+            state.status = InstanceStatus::Failed;
+            state.run_progress = 3;
+            // Failed instances don't need all durations
+            state.durations = vec![1.0, 2.0];
+        }
+
+        assert!(app.all_results_captured());
+    }
+
+    #[test]
+    fn test_all_results_captured_running_instance() {
+        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+
+        if let Some(state) = app.instances.data.get_mut("m5.large") {
+            state.status = InstanceStatus::Running;
+            state.run_progress = 3;
+            state.durations = vec![1.0, 2.0, 3.0];
+        }
+
+        // Running instances are not "captured"
+        assert!(!app.all_results_captured());
     }
 }

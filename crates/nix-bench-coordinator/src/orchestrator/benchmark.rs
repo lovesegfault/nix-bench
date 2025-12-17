@@ -497,6 +497,7 @@ pub async fn run_benchmarks_no_tui(
             let status_str = match state.status {
                 InstanceStatus::Pending => "  pending",
                 InstanceStatus::Launching => "  launching",
+                InstanceStatus::Starting => "  starting",
                 InstanceStatus::Running => "  running",
                 InstanceStatus::Complete => "  complete",
                 InstanceStatus::Failed => "  failed",

@@ -129,7 +129,7 @@ async fn run_benchmarks_with_retry(
                 // Run garbage collection between runs if enabled
                 // Skip on last run since we're about to finish anyway
                 if config.gc_between_runs && successful_runs.len() < config.runs as usize {
-                    if let Err(e) = gc::run_fod_preserving_gc(logger, Some(600)).await {
+                    if let Err(e) = gc::run_gc(logger, Some(600)).await {
                         // GC failure is not fatal - log and continue
                         warn!(error = %e, "Garbage collection failed, continuing");
                         logger.write_line(&format!("Warning: GC failed: {}. Continuing...", e));
@@ -318,7 +318,17 @@ async fn main() -> Result<()> {
     {
         Ok(()) => {
             info!("Cache warmup complete");
-            logger.write_line("Cache warmup complete, starting timed runs...");
+            logger.write_line("Cache warmup complete");
+
+            // Run GC after warmup to start benchmarks from clean state
+            if config.gc_between_runs {
+                if let Err(e) = gc::run_gc(&logger, Some(600)).await {
+                    warn!(error = %e, "Garbage collection failed, continuing");
+                    logger.write_line(&format!("Warning: GC failed: {}. Continuing...", e));
+                }
+            }
+
+            logger.write_line("Starting timed runs...");
         }
         Err(e) => {
             error!(error = %e, "Cache warmup build failed");

@@ -1,11 +1,10 @@
 //! TUI application state and main loop
 
 mod lifecycle;
-mod log_buffer;
 mod state;
 
 pub use lifecycle::{CleanupProgress, InitPhase, LifecycleState};
-pub use log_buffer::LogBuffer;
+pub use crate::log_buffer::LogBuffer;
 pub use state::{InstancesState, PanelFocus, RunContext, ScrollState, UiState};
 
 use crate::aws::{GrpcInstanceStatus, GrpcStatusPoller};

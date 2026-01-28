@@ -3,7 +3,7 @@
 //! Contains `InstanceState` and `InstanceStatus` types used to track
 //! the state of benchmark instances during a run.
 
-use crate::tui::LogBuffer;
+use crate::log_buffer::LogBuffer;
 use nix_bench_common::{Architecture, RunResult};
 
 /// Instance state during a benchmark run

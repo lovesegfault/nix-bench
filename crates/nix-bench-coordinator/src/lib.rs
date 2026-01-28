@@ -5,6 +5,7 @@
 
 pub mod aws;
 pub mod config;
+pub mod log_buffer;
 pub mod orchestrator;
 pub mod tui;
 pub mod wait;

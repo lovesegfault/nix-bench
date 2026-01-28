@@ -19,7 +19,8 @@ use crate::aws::{
     get_current_account_id,
 };
 use crate::config::{AgentConfig, RunConfig, detect_system};
-use crate::tui::{InitPhase, LogBuffer};
+use crate::log_buffer::LogBuffer;
+use crate::tui::InitPhase;
 use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use nix_bench_common::jittered_delay_25;

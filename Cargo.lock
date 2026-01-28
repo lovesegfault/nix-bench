@@ -2276,7 +2276,6 @@ name = "nix-bench-common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "pem",
  "rand 0.9.2",
  "rcgen",

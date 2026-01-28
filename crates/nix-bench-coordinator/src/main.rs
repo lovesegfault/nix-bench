@@ -120,25 +120,33 @@ impl From<RunArgs> for config::RunConfig {
     fn from(args: RunArgs) -> Self {
         let instance_types = args.parse_instance_types();
         Self {
-            instance_types,
-            attr: args.attr,
-            runs: args.runs,
-            region: args.region,
-            aws_profile: args.aws_profile,
-            output: args.output,
-            keep: args.keep,
-            timeout: args.timeout,
-            no_tui: args.no_tui,
-            agent_x86_64: args.agent_x86_64,
-            agent_aarch64: args.agent_aarch64,
-            subnet_id: args.subnet_id,
-            security_group_id: args.security_group_id,
-            instance_profile: args.instance_profile,
-            dry_run: args.dry_run,
-            flake_ref: args.flake_ref,
-            build_timeout: args.build_timeout,
-            max_failures: args.max_failures,
-            gc_between_runs: args.gc_between_runs,
+            benchmark: config::BenchmarkConfig {
+                attr: args.attr,
+                runs: args.runs,
+                flake_ref: args.flake_ref,
+                build_timeout: args.build_timeout,
+                max_failures: args.max_failures,
+                gc_between_runs: args.gc_between_runs,
+            },
+            aws: config::AwsConfig {
+                region: args.region,
+                aws_profile: args.aws_profile,
+                subnet_id: args.subnet_id,
+                security_group_id: args.security_group_id,
+                instance_profile: args.instance_profile,
+            },
+            instances: config::InstanceConfig {
+                instance_types,
+                agent_x86_64: args.agent_x86_64,
+                agent_aarch64: args.agent_aarch64,
+            },
+            flags: config::RuntimeFlags {
+                keep: args.keep,
+                timeout: args.timeout,
+                no_tui: args.no_tui,
+                dry_run: args.dry_run,
+                output: args.output,
+            },
         }
     }
 }

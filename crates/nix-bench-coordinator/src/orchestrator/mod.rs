@@ -35,16 +35,18 @@ pub(crate) const GRPC_PORT: u16 = DEFAULT_GRPC_PORT;
 pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) -> Result<()> {
     // Determine which architectures we need
     let needs_x86_64 = config
+        .instances
         .instance_types
         .iter()
         .any(|t| detect_system(t) == Architecture::X86_64);
     let needs_aarch64 = config
+        .instances
         .instance_types
         .iter()
         .any(|t| detect_system(t) == Architecture::Aarch64);
 
     // Try to auto-detect agent binaries if not provided
-    let agent_x86_64 = config.agent_x86_64.clone().or_else(|| {
+    let agent_x86_64 = config.instances.agent_x86_64.clone().or_else(|| {
         let found = user_data::find_agent_binary("x86_64");
         if let Some(ref path) = found {
             info!(path = %path, "Auto-detected x86_64 agent");
@@ -52,7 +54,7 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
         found
     });
 
-    let agent_aarch64 = config.agent_aarch64.clone().or_else(|| {
+    let agent_aarch64 = config.instances.agent_aarch64.clone().or_else(|| {
         let found = user_data::find_agent_binary("aarch64");
         if let Some(ref path) = found {
             info!(path = %path, "Auto-detected aarch64 agent");
@@ -61,7 +63,7 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
     });
 
     // Validate agent binaries are provided (unless dry-run)
-    if !config.dry_run {
+    if !config.flags.dry_run {
         if needs_x86_64 && agent_x86_64.is_none() {
             anyhow::bail!(
                 "x86_64 instance types specified but agent not found.\n\
@@ -78,15 +80,15 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
     }
 
     // Dry-run mode: validate and print what would happen
-    if config.dry_run {
+    if config.flags.dry_run {
         println!("\n=== DRY RUN ===\n");
         println!("This would launch the following benchmark:\n");
-        println!("  Region:         {}", config.region);
-        println!("  Attribute:      {}", config.attr);
-        println!("  Runs/instance:  {}", config.runs);
+        println!("  Region:         {}", config.aws.region);
+        println!("  Attribute:      {}", config.benchmark.attr);
+        println!("  Runs/instance:  {}", config.benchmark.runs);
         println!();
         println!("  Instance types:");
-        for instance_type in &config.instance_types {
+        for instance_type in &config.instances.instance_types {
             let system = detect_system(instance_type);
             println!("    - {} ({})", instance_type, system);
         }
@@ -108,19 +110,22 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
         }
         println!();
         println!("  Options:");
-        println!("    - Keep instances:   {}", config.keep);
-        println!("    - TUI mode:         {}", !config.no_tui);
-        println!("    - GC between runs:  {}", config.gc_between_runs);
-        if let Some(output) = &config.output {
+        println!("    - Keep instances:   {}", config.flags.keep);
+        println!("    - TUI mode:         {}", !config.flags.no_tui);
+        println!(
+            "    - GC between runs:  {}",
+            config.benchmark.gc_between_runs
+        );
+        if let Some(output) = &config.flags.output {
             println!("    - Output file:    {}", output);
         }
-        if let Some(subnet) = &config.subnet_id {
+        if let Some(subnet) = &config.aws.subnet_id {
             println!("    - Subnet ID:      {}", subnet);
         }
-        if let Some(sg) = &config.security_group_id {
+        if let Some(sg) = &config.aws.security_group_id {
             println!("    - Security group: {}", sg);
         }
-        if let Some(profile) = &config.instance_profile {
+        if let Some(profile) = &config.aws.instance_profile {
             println!("    - IAM profile:    {}", profile);
         }
         println!();
@@ -133,7 +138,7 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
     let bucket_name = format!("nix-bench-{}", run_id);
 
     // For TUI mode, start TUI immediately and run init in background
-    if !config.no_tui {
+    if !config.flags.no_tui {
         benchmark::run_benchmarks_with_tui(
             config,
             run_id,

@@ -19,7 +19,7 @@ pub async fn write_results(
     run_id: &str,
     instances: &HashMap<String, InstanceState>,
 ) -> Result<()> {
-    if let Some(output_path) = &config.output {
+    if let Some(output_path) = &config.flags.output {
         let written_at = chrono::Utc::now();
 
         let all_complete = instances
@@ -53,10 +53,10 @@ pub async fn write_results(
 
         let output = serde_json::json!({
             "run_id": run_id,
-            "region": config.region,
-            "attr": config.attr,
-            "runs_per_instance": config.runs,
-            "instance_types": config.instance_types,
+            "region": config.aws.region,
+            "attr": config.benchmark.attr,
+            "runs_per_instance": config.benchmark.runs,
+            "instance_types": config.instances.instance_types,
             "written_at": written_at.to_rfc3339(),
             "success": all_complete,
             "results": results,

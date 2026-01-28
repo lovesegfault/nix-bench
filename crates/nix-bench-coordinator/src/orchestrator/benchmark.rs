@@ -126,8 +126,8 @@ impl<'a> BenchmarkRunner<'a> {
         tx: mpsc::Sender<TuiMessage>,
     ) {
         let instances_for_logs = instances.clone();
-        let region = self.config.region.clone();
-        let timeout_secs = self.config.timeout;
+        let region = self.config.aws.region.clone();
+        let timeout_secs = self.config.flags.timeout;
         let start_time = Instant::now();
         tokio::spawn(async move {
             poll_bootstrap_status(instances_for_logs, tx, region, timeout_secs, start_time).await;
@@ -194,7 +194,11 @@ pub async fn run_benchmarks_with_tui(
     let mut instances: HashMap<String, InstanceState> = HashMap::new();
 
     // Create app state in loading mode (TLS config is sent via channel later)
-    let mut app = tui::App::new_loading(&config.instance_types, config.runs, None);
+    let mut app = tui::App::new_loading(
+        &config.instances.instance_types,
+        config.benchmark.runs,
+        None,
+    );
 
     // Create cancellation token shared between TUI and init task
     let cancel_token = CancellationToken::new();
@@ -269,8 +273,8 @@ pub async fn run_benchmarks_with_tui(
     // Send full cleanup request to the cleanup executor
     let _ = cleanup_tx
         .send(CleanupRequest::FullCleanup {
-            region: config.region.clone(),
-            keep: config.keep,
+            region: config.aws.region.clone(),
+            keep: config.flags.keep,
             run_id: run_id.clone(),
             bucket_name: bucket_name.clone(),
             instances: instances.clone(),
@@ -367,7 +371,7 @@ pub async fn run_init_task(
     runner.start_bootstrap_monitoring(&instances, tx.clone());
 
     // Spawn cleanup executor to handle cleanup requests from TUI
-    let region_for_cleanup = config.region.clone();
+    let region_for_cleanup = config.aws.region.clone();
     let tx_for_cleanup = tx.clone();
     let cleanup_handle = tokio::spawn(async move {
         cleanup_executor(cleanup_rx, region_for_cleanup, tx_for_cleanup).await;
@@ -420,10 +424,13 @@ pub async fn run_benchmarks_no_tui(
     // Print header
     println!("\n=== nix-bench-ec2 ===");
     println!("Run ID: {}", run_id);
-    println!("Instances: {}", config.instance_types.join(", "));
-    println!("Benchmark: {} ({} runs each)", config.attr, config.runs);
-    if config.timeout > 0 {
-        println!("Timeout: {}s", config.timeout);
+    println!("Instances: {}", config.instances.instance_types.join(", "));
+    println!(
+        "Benchmark: {} ({} runs each)",
+        config.benchmark.attr, config.benchmark.runs
+    );
+    if config.flags.timeout > 0 {
+        println!("Timeout: {}s", config.flags.timeout);
     }
     if has_streaming {
         println!("Log streaming: gRPC (real-time)");
@@ -436,13 +443,13 @@ pub async fn run_benchmarks_no_tui(
     loop {
         // Check for timeout
         let elapsed_secs = start_instant.elapsed().as_secs();
-        if config.timeout > 0 && elapsed_secs > config.timeout {
+        if config.flags.timeout > 0 && elapsed_secs > config.flags.timeout {
             warn!(
                 elapsed_secs = elapsed_secs,
-                timeout = config.timeout,
+                timeout = config.flags.timeout,
                 "Run timeout exceeded"
             );
-            println!("\n  TIMEOUT: Run exceeded {}s limit", config.timeout);
+            println!("\n  TIMEOUT: Run exceeded {}s limit", config.flags.timeout);
             for (instance_type, state) in instances.iter_mut() {
                 if state.status != InstanceStatus::Complete
                     && state.status != InstanceStatus::Failed

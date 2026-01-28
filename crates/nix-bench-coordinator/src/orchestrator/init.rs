@@ -118,8 +118,11 @@ impl<'a> BenchmarkInitializer<'a> {
         info!(run_id = %self.run_id, bucket = %self.bucket_name, "Starting benchmark run");
 
         // Phase 1: AWS setup
-        let aws =
-            AwsContext::with_profile(&self.config.region, self.config.aws_profile.as_deref()).await;
+        let aws = AwsContext::with_profile(
+            &self.config.aws.region,
+            self.config.aws.aws_profile.as_deref(),
+        )
+        .await;
         let account_id = get_current_account_id(aws.sdk_config()).await?;
         info!(account_id = %account_id, "AWS account validated");
         reporter.report_account_info(account_id.as_str());
@@ -131,7 +134,7 @@ impl<'a> BenchmarkInitializer<'a> {
         let (registry, executor) = create_cleanup_system();
         let executor_handle = tokio::spawn(executor.run());
         let builder =
-            ResourceGuardBuilder::new(registry.clone(), &self.run_id, &self.config.region);
+            ResourceGuardBuilder::new(registry.clone(), &self.run_id, &self.config.aws.region);
 
         // Track all guards so they aren't dropped until we're done
         let mut guards = ResourceGuards::default();
@@ -144,8 +147,8 @@ impl<'a> BenchmarkInitializer<'a> {
         debug!(bucket = %self.bucket_name, "S3 bucket created");
 
         // Phase 3: Create IAM role/profile if needed
-        let (instance_profile_name, iam_role_name) = if self.config.instance_profile.is_some() {
-            (self.config.instance_profile.clone(), None)
+        let (instance_profile_name, iam_role_name) = if self.config.aws.instance_profile.is_some() {
+            (self.config.aws.instance_profile.clone(), None)
         } else {
             reporter.report_phase(InitPhase::CreatingIamRole);
             let iam = IamClient::from_context(&aws);
@@ -218,7 +221,7 @@ impl<'a> BenchmarkInitializer<'a> {
             run_id: self.run_id.clone(),
             bucket_name: self.bucket_name.clone(),
             account_id,
-            region: self.config.region.clone(),
+            region: self.config.aws.region.clone(),
             ec2,
             s3,
             instance_profile_name,
@@ -240,7 +243,7 @@ impl<'a> BenchmarkInitializer<'a> {
         let coordinator_ip = get_coordinator_public_ip().await.ok();
         let mut sg_rule_ids = Vec::new();
 
-        let security_group_id = if let Some(ref sg_id) = self.config.security_group_id {
+        let security_group_id = if let Some(ref sg_id) = self.config.aws.security_group_id {
             // User-provided security group - just add the rule
             if let Some(ref ip) = coordinator_ip {
                 let cidr = format!("{}/32", ip);
@@ -286,7 +289,7 @@ impl<'a> BenchmarkInitializer<'a> {
         reporter: &R,
     ) -> Result<HashMap<String, InstanceState>> {
         let mut instances = HashMap::new();
-        for (i, instance_type) in self.config.instance_types.iter().enumerate() {
+        for (i, instance_type) in self.config.instances.instance_types.iter().enumerate() {
             // Stagger launches after the first instance to avoid thundering herd
             if i > 0 {
                 let delay = jittered_delay_25(Duration::from_millis(LAUNCH_STAGGER_MS));
@@ -301,7 +304,7 @@ impl<'a> BenchmarkInitializer<'a> {
             );
             let mut launch_config =
                 LaunchInstanceConfig::new(&self.run_id, instance_type, system.as_str(), &user_data);
-            if let Some(subnet) = &self.config.subnet_id {
+            if let Some(subnet) = &self.config.aws.subnet_id {
                 launch_config = launch_config.with_subnet(subnet);
             }
             if let Some(sg) = security_group_id {
@@ -332,7 +335,7 @@ impl<'a> BenchmarkInitializer<'a> {
                             status: InstanceStatus::Launching,
                             run_progress: 0,
                             run_results: Vec::new(),
-                            total_runs: self.config.runs,
+                            total_runs: self.config.benchmark.runs,
                             public_ip: None,
                             console_output: LogBuffer::default(),
                             cached_durations: Vec::new(),
@@ -434,7 +437,7 @@ impl<'a> BenchmarkInitializer<'a> {
         s3: &S3Client,
         agent_certs: &HashMap<String, (String, String, String)>,
     ) -> Result<()> {
-        for instance_type in &self.config.instance_types {
+        for instance_type in &self.config.instances.instance_types {
             let system = detect_system(instance_type);
             let (ca_cert_pem, agent_cert_pem, agent_key_pem) = agent_certs
                 .get(instance_type)
@@ -444,15 +447,15 @@ impl<'a> BenchmarkInitializer<'a> {
             let agent_config = AgentConfig {
                 run_id: self.run_id.clone(),
                 bucket: self.bucket_name.clone(),
-                region: self.config.region.clone(),
-                attr: self.config.attr.clone(),
-                runs: self.config.runs,
+                region: self.config.aws.region.clone(),
+                attr: self.config.benchmark.attr.clone(),
+                runs: self.config.benchmark.runs,
                 instance_type: instance_type.clone(),
                 system,
-                flake_ref: self.config.flake_ref.clone(),
-                build_timeout: self.config.build_timeout,
-                max_failures: self.config.max_failures,
-                gc_between_runs: self.config.gc_between_runs,
+                flake_ref: self.config.benchmark.flake_ref.clone(),
+                build_timeout: self.config.benchmark.build_timeout,
+                max_failures: self.config.benchmark.max_failures,
+                gc_between_runs: self.config.benchmark.gc_between_runs,
                 ca_cert_pem,
                 agent_cert_pem,
                 agent_key_pem,

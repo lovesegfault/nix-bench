@@ -286,8 +286,8 @@ pub async fn cleanup_resources_no_tui(
     let (tx, _rx) = mpsc::channel::<TuiMessage>(1);
 
     do_full_cleanup(
-        &config.region,
-        config.keep,
+        &config.aws.region,
+        config.flags.keep,
         bucket_name,
         instances,
         security_group_id,

@@ -49,7 +49,7 @@ impl Default for AgentStatus {
 }
 
 /// Maximum number of messages to buffer for late subscribers
-const LOG_BUFFER_SIZE: usize = 100;
+const LOG_BUFFER_SIZE: usize = 1000;
 
 /// Broadcasts log entries to all connected gRPC clients
 pub struct LogBroadcaster {

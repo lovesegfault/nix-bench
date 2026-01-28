@@ -16,7 +16,11 @@ use crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+/// Ensures the Ctrl+C signal handler is only spawned once per process.
+static CTRLC_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 use throbber_widgets_tui::ThrobberState;
 use tokio_util::sync::CancellationToken;
 use tui_scrollview::ScrollViewState;
@@ -551,14 +555,15 @@ impl App {
     ) -> Result<()> {
         use crate::tui::TuiMessage;
 
-        let cancel_clone = cancel.clone();
-
-        // Set up Ctrl+C handler
-        tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                cancel_clone.cancel();
-            }
-        });
+        // Set up Ctrl+C handler (only once per process)
+        if !CTRLC_HANDLER_INSTALLED.swap(true, Ordering::SeqCst) {
+            let cancel_clone = cancel.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    cancel_clone.cancel();
+                }
+            });
+        }
 
         let mut event_stream = crossterm::event::EventStream::new();
         let mut tick_interval = tokio::time::interval(Duration::from_millis(100));

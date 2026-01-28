@@ -13,19 +13,25 @@ pub use streaming::{LogOutput, LogStreamingOptions, start_log_streaming_unified}
 use anyhow::Result;
 use std::time::Duration;
 
-/// Fast TCP connect check - use in tests for faster execution
+/// Fast TCP connect check with exponential backoff - use in tests for faster execution
 ///
 /// This performs a simple TCP connection attempt to verify the server is listening.
 /// It's much faster than a full gRPC health check since it doesn't require
 /// TLS handshake or RPC setup.
+///
+/// Uses exponential backoff from 100ms to 5s to avoid hammering the port.
 pub async fn wait_for_tcp_ready(addr: &str, timeout: Duration) -> Result<()> {
     let start = std::time::Instant::now();
-    let poll_interval = Duration::from_millis(10);
+    let mut delay = Duration::from_millis(100);
+    let max_delay = Duration::from_secs(5);
 
     while start.elapsed() < timeout {
         match tokio::net::TcpStream::connect(addr).await {
             Ok(_) => return Ok(()),
-            Err(_) => tokio::time::sleep(poll_interval).await,
+            Err(_) => {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(max_delay);
+            }
         }
     }
 

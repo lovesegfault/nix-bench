@@ -6,10 +6,12 @@ use crate::aws::error::classify_aws_error;
 use anyhow::{Context, Result};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::{Client, primitives::ByteStream};
+use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
 use std::future::Future;
 use std::path::Path;
-use tracing::{debug, info};
+use std::time::Duration;
+use tracing::{debug, info, warn};
 
 /// S3 client for managing benchmark artifacts
 pub struct S3Client {
@@ -35,37 +37,50 @@ impl S3Client {
     /// Create a bucket for this run
     ///
     /// This is idempotent - if the bucket already exists and is owned by you,
-    /// it succeeds without error.
+    /// it succeeds without error. Retries on transient failures.
     pub async fn create_bucket(&self, bucket_name: &str) -> Result<()> {
         info!(bucket = %bucket_name, region = %self.region, "Creating S3 bucket");
 
-        let location_constraint =
-            aws_sdk_s3::types::BucketLocationConstraint::from(self.region.as_str());
+        let bucket_name_owned = bucket_name.to_string();
 
-        let create_config = aws_sdk_s3::types::CreateBucketConfiguration::builder()
-            .location_constraint(location_constraint)
-            .build();
+        (|| async {
+            let location_constraint =
+                aws_sdk_s3::types::BucketLocationConstraint::from(self.region.as_str());
 
-        let result = self
-            .client
-            .create_bucket()
-            .bucket(bucket_name)
-            .create_bucket_configuration(create_config)
-            .send()
-            .await;
+            let create_config = aws_sdk_s3::types::CreateBucketConfiguration::builder()
+                .location_constraint(location_constraint)
+                .build();
 
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                // BucketAlreadyOwnedByYou means we already own it - that's fine
-                if e.code() == Some("BucketAlreadyOwnedByYou") {
-                    debug!(bucket = %bucket_name, "Bucket already exists and is owned by us");
-                    Ok(())
-                } else {
-                    Err(e).context("Failed to create bucket")
+            let result = self
+                .client
+                .create_bucket()
+                .bucket(&bucket_name_owned)
+                .create_bucket_configuration(create_config)
+                .send()
+                .await;
+
+            match result {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    if e.code() == Some("BucketAlreadyOwnedByYou") {
+                        debug!(bucket = %bucket_name_owned, "Bucket already exists and is owned by us");
+                        Ok(())
+                    } else {
+                        Err(e).context("Failed to create bucket")
+                    }
                 }
             }
-        }
+        })
+        .retry(
+            ExponentialBuilder::default()
+                .with_min_delay(Duration::from_secs(1))
+                .with_max_delay(Duration::from_secs(15))
+                .with_max_times(3),
+        )
+        .notify(|e, dur| {
+            warn!(bucket = %bucket_name, delay = ?dur, error = %e, "S3 create_bucket failed, retrying");
+        })
+        .await
     }
 
     /// Apply standard nix-bench tags to a bucket

@@ -50,6 +50,10 @@
           let
             nixBench = self.lib.mkNixBench { inherit pkgs; };
 
+            # Read version from workspace Cargo.toml (single source of truth)
+            cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+            inherit (cargoToml.workspace.package) version;
+
             # Rust toolchain builder function (for cross-compilation support)
             mkRustToolchain =
               p:
@@ -78,7 +82,7 @@
               inherit src;
               strictDeps = true;
               pname = "nix-bench-workspace";
-              version = "0.1.0";
+              inherit version;
               buildInputs = with pkgs; [
                 openssl
               ];
@@ -138,7 +142,7 @@
                     inherit src;
                     strictDeps = true;
                     pname = "nix-bench-agent-aarch64";
-                    version = "0.1.0";
+                    inherit version;
                     CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
                     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "${crossPkgs.stdenv.cc.targetPrefix}cc";
                     # Build static binary
@@ -241,6 +245,7 @@
               projectRootFile = "flake.nix";
               flakeCheck = false; # Covered by git-hooks check
               programs.nixfmt.enable = true;
+              programs.rustfmt.enable = true;
             };
 
             # Pre-commit hooks

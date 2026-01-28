@@ -47,9 +47,8 @@ pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
         return Err(ConfigError::EmptyInstanceType);
     }
 
-    if config.system != "x86_64-linux" && config.system != "aarch64-linux" {
-        return Err(ConfigError::InvalidSystem(config.system.clone()));
-    }
+    // system field is now an Architecture enum, validated at deserialization time
+    let _ = config.system; // no runtime check needed
 
     if config.flake_ref.is_empty() {
         return Err(ConfigError::EmptyFlakeRef);
@@ -166,7 +165,7 @@ mod tests {
         assert_eq!(config.flake_ref, "github:myorg/my-bench");
         assert_eq!(config.build_timeout, 3600);
         assert_eq!(config.max_failures, 5);
-        assert_eq!(config.system, "aarch64-linux");
+        assert_eq!(config.system, nix_bench_common::Architecture::Aarch64);
     }
 
     #[test]

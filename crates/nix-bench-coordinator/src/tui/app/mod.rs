@@ -64,7 +64,7 @@ impl App {
                 InstanceState {
                     instance_id: String::new(),
                     instance_type: instance_type.clone(),
-                    system: crate::config::detect_system(instance_type).to_string(),
+                    system: crate::config::detect_system(instance_type),
                     status: InstanceStatus::Pending,
                     run_progress: 0,
                     total_runs,

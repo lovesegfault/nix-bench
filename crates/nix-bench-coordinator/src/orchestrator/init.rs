@@ -299,7 +299,7 @@ impl<'a> BenchmarkInitializer<'a> {
                 instance_type,
             );
             let mut launch_config =
-                LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
+                LaunchInstanceConfig::new(&self.run_id, instance_type, system.as_str(), &user_data);
             if let Some(subnet) = &self.config.subnet_id {
                 launch_config = launch_config.with_subnet(subnet);
             }
@@ -327,7 +327,7 @@ impl<'a> BenchmarkInitializer<'a> {
                         InstanceState {
                             instance_id: launched.instance_id,
                             instance_type: instance_type.clone(),
-                            system: system.to_string(),
+                            system,
                             status: InstanceStatus::Launching,
                             run_progress: 0,
                             run_results: Vec::new(),
@@ -446,7 +446,7 @@ impl<'a> BenchmarkInitializer<'a> {
                 attr: self.config.attr.clone(),
                 runs: self.config.runs,
                 instance_type: instance_type.clone(),
-                system: system.to_string(),
+                system,
                 flake_ref: self.config.flake_ref.clone(),
                 build_timeout: self.config.build_timeout,
                 max_failures: self.config.max_failures,

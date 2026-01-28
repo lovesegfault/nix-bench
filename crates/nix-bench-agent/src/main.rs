@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
         total_runs: 0,
         run_results: Vec::new(),
         attr: String::new(),
-        system: String::new(),
+        system: nix_bench_common::Architecture::X86_64,
     }));
     let shutdown_token = CancellationToken::new();
 

@@ -21,10 +21,11 @@ pub use init::{BenchmarkInitializer, InitContext};
 pub use progress::{ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter};
 pub use types::{InstanceState, InstanceStatus};
 
-use crate::config::{detect_system, RunConfig};
+use crate::config::RunConfig;
 use crate::tui::LogCapture;
 use anyhow::Result;
 use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
+use nix_bench_common::{detect_system, Architecture};
 use tracing::info;
 use uuid::Uuid;
 
@@ -37,11 +38,11 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
     let needs_x86_64 = config
         .instance_types
         .iter()
-        .any(|t| detect_system(t) == "x86_64-linux");
+        .any(|t| detect_system(t) == Architecture::X86_64);
     let needs_aarch64 = config
         .instance_types
         .iter()
-        .any(|t| detect_system(t) == "aarch64-linux");
+        .any(|t| detect_system(t) == Architecture::Aarch64);
 
     // Try to auto-detect agent binaries if not provided
     let agent_x86_64 = config.agent_x86_64.clone().or_else(|| {

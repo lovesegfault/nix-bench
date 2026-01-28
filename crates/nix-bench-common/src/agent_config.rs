@@ -3,6 +3,7 @@
 //! The coordinator serializes this configuration to JSON and uploads it to S3.
 //! The agent downloads and deserializes it to configure the benchmark run.
 
+use crate::Architecture;
 use crate::defaults::{default_build_timeout, default_flake_ref, default_max_failures};
 use serde::{Deserialize, Serialize};
 
@@ -36,8 +37,8 @@ pub struct AgentConfig {
     /// EC2 instance type (for metrics dimensions)
     pub instance_type: String,
 
-    /// System architecture (e.g., "x86_64-linux")
-    pub system: String,
+    /// System architecture
+    pub system: Architecture,
 
     /// Flake reference base (e.g., "github:lovesegfault/nix-bench")
     #[serde(default = "default_flake_ref")]

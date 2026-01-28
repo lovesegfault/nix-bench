@@ -1,7 +1,7 @@
 //! gRPC server for real-time log streaming
 
 use anyhow::Result;
-use nix_bench_common::{RunResult, TlsConfig};
+use nix_bench_common::{Architecture, RunResult, TlsConfig};
 use nix_bench_proto::{
     AckCompleteRequest, AckCompleteResponse, LogEntry, LogStream, LogStreamServer,
     RunResult as ProtoRunResult, StatusCode as ProtoStatusCode, StatusRequest, StatusResponse,
@@ -32,7 +32,7 @@ pub struct AgentStatus {
     /// Nix attribute being built
     pub attr: String,
     /// System architecture
-    pub system: String,
+    pub system: Architecture,
 }
 
 impl Default for AgentStatus {
@@ -43,7 +43,7 @@ impl Default for AgentStatus {
             total_runs: 0,
             run_results: Vec::new(),
             attr: String::new(),
-            system: String::new(),
+            system: Architecture::X86_64,
         }
     }
 }
@@ -267,7 +267,7 @@ impl LogStream for LogStreamService {
             dropped_log_count: self.dropped_messages.load(Ordering::Relaxed),
             run_results,
             attr: status.attr.clone(),
-            system: status.system.clone(),
+            system: status.system.to_string(),
             protocol_version: 1,
         }))
     }
@@ -405,7 +405,7 @@ mod tests {
             total_runs: 10,
             run_results: Vec::new(),
             attr: "shallow.hello".to_string(),
-            system: "x86_64-linux".to_string(),
+            system: Architecture::X86_64,
         }));
 
         let shutdown_token = CancellationToken::new();

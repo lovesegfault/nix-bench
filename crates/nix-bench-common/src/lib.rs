@@ -26,6 +26,70 @@ pub use stats::DurationStats;
 pub use status::StatusCode;
 pub use tls::{CertKeyPair, TlsConfig};
 
+use serde::{Deserialize, Serialize};
+
+/// System architecture for EC2 instances.
+///
+/// Only two architectures are supported: x86_64 and aarch64 (Graviton).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Architecture {
+    #[serde(rename = "x86_64-linux")]
+    X86_64,
+    #[serde(rename = "aarch64-linux")]
+    Aarch64,
+}
+
+impl Architecture {
+    /// Detect architecture from EC2 instance type.
+    ///
+    /// Graviton instances have a 'g' after the generation number (e.g., c7g, m7gd).
+    /// Returns `Aarch64` for Graviton, `X86_64` for all others.
+    ///
+    /// Instance type validity is not checked here; the coordinator validates
+    /// instance types via the EC2 API (`ec2.validate_instance_types()`).
+    pub fn from_instance_type(instance_type: &str) -> Self {
+        let prefix = instance_type.split('.').next().unwrap_or("");
+
+        // Detect Graviton: digit followed by 'g' in the prefix
+        let chars: Vec<char> = prefix.chars().collect();
+        for i in 0..chars.len().saturating_sub(1) {
+            if chars[i].is_ascii_digit() && chars[i + 1] == 'g' {
+                return Architecture::Aarch64;
+            }
+        }
+        Architecture::X86_64
+    }
+
+    /// Get the string representation (e.g., "x86_64-linux").
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Architecture::X86_64 => "x86_64-linux",
+            Architecture::Aarch64 => "aarch64-linux",
+        }
+    }
+
+    /// Get the AMI architecture filter string (e.g., "x86_64", "arm64").
+    pub fn ami_arch(&self) -> &'static str {
+        match self {
+            Architecture::X86_64 => "x86_64",
+            Architecture::Aarch64 => "arm64",
+        }
+    }
+}
+
+impl std::fmt::Display for Architecture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Detect system architecture from EC2 instance type.
+///
+/// This is a convenience wrapper around [`Architecture::from_instance_type`].
+pub fn detect_system(instance_type: &str) -> Architecture {
+    Architecture::from_instance_type(instance_type)
+}
+
 /// Get the current timestamp in milliseconds since UNIX epoch.
 ///
 /// Returns 0 if system time is before the epoch (should never happen in practice).
@@ -56,26 +120,6 @@ pub fn jittered_delay_25(base: std::time::Duration) -> std::time::Duration {
     jittered_delay(base, 0.25)
 }
 
-/// Detect system architecture from EC2 instance type.
-///
-/// Graviton instances have a 'g' after the generation number (e.g., c7g, m7gd).
-/// Returns "aarch64-linux" for Graviton, "x86_64-linux" for all others.
-///
-/// Instance type validity is not checked here; the coordinator validates
-/// instance types via the EC2 API (`ec2.validate_instance_types()`).
-pub fn detect_system(instance_type: &str) -> &'static str {
-    let prefix = instance_type.split('.').next().unwrap_or("");
-
-    // Detect Graviton: digit followed by 'g' in the prefix
-    let chars: Vec<char> = prefix.chars().collect();
-    for i in 0..chars.len().saturating_sub(1) {
-        if chars[i].is_ascii_digit() && chars[i + 1] == 'g' {
-            return "aarch64-linux";
-        }
-    }
-    "x86_64-linux"
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,13 +127,46 @@ mod tests {
     #[test]
     fn test_detect_system() {
         // x86_64 instances
-        assert_eq!(detect_system("c7i.metal"), "x86_64-linux");
-        assert_eq!(detect_system("m8a.48xlarge"), "x86_64-linux");
-        assert_eq!(detect_system("c5.xlarge"), "x86_64-linux");
+        assert_eq!(detect_system("c7i.metal"), Architecture::X86_64);
+        assert_eq!(detect_system("m8a.48xlarge"), Architecture::X86_64);
+        assert_eq!(detect_system("c5.xlarge"), Architecture::X86_64);
 
         // Graviton (aarch64) instances
-        assert_eq!(detect_system("c7g.metal"), "aarch64-linux");
-        assert_eq!(detect_system("m7gd.16xlarge"), "aarch64-linux");
-        assert_eq!(detect_system("c6gd.metal"), "aarch64-linux");
+        assert_eq!(detect_system("c7g.metal"), Architecture::Aarch64);
+        assert_eq!(detect_system("m7gd.16xlarge"), Architecture::Aarch64);
+        assert_eq!(detect_system("c6gd.metal"), Architecture::Aarch64);
+    }
+
+    #[test]
+    fn test_architecture_as_str() {
+        assert_eq!(Architecture::X86_64.as_str(), "x86_64-linux");
+        assert_eq!(Architecture::Aarch64.as_str(), "aarch64-linux");
+    }
+
+    #[test]
+    fn test_architecture_display() {
+        assert_eq!(format!("{}", Architecture::X86_64), "x86_64-linux");
+        assert_eq!(format!("{}", Architecture::Aarch64), "aarch64-linux");
+    }
+
+    #[test]
+    fn test_architecture_serde_roundtrip() {
+        let x86 = Architecture::X86_64;
+        let json = serde_json::to_string(&x86).unwrap();
+        assert_eq!(json, "\"x86_64-linux\"");
+        let back: Architecture = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, x86);
+
+        let arm = Architecture::Aarch64;
+        let json = serde_json::to_string(&arm).unwrap();
+        assert_eq!(json, "\"aarch64-linux\"");
+        let back: Architecture = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, arm);
+    }
+
+    #[test]
+    fn test_architecture_ami_arch() {
+        assert_eq!(Architecture::X86_64.ami_arch(), "x86_64");
+        assert_eq!(Architecture::Aarch64.ami_arch(), "arm64");
     }
 }

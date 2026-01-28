@@ -1,7 +1,7 @@
 //! Configuration types for the coordinator
 
 // Re-export from common for use by orchestration code
-pub use nix_bench_common::{detect_system, AgentConfig};
+pub use nix_bench_common::{detect_system, AgentConfig, Architecture};
 
 /// Configuration for a benchmark run
 #[derive(Debug, Clone)]

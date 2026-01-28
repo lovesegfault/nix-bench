@@ -90,7 +90,7 @@ fn render_info(frame: &mut Frame, area: Rect, instance: &InstanceState) {
             ),
             Span::styled("   ", t.text()),
             Span::styled("System: ", t.bold()),
-            Span::styled(&instance.system, t.text()),
+            Span::styled(instance.system.as_str(), t.text()),
         ]),
         Line::from(vec![
             Span::styled("  Instance ID: ", t.bold()),

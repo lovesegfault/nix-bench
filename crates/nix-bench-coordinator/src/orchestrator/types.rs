@@ -4,7 +4,7 @@
 //! the state of benchmark instances during a run.
 
 use crate::tui::LogBuffer;
-use nix_bench_common::RunResult;
+use nix_bench_common::{Architecture, RunResult};
 
 /// Instance state during a benchmark run
 #[derive(Debug, Clone)]
@@ -13,8 +13,8 @@ pub struct InstanceState {
     pub instance_id: String,
     /// Instance type (e.g., "c6i.xlarge")
     pub instance_type: String,
-    /// System architecture (e.g., "x86_64-linux")
-    pub system: String,
+    /// System architecture
+    pub system: Architecture,
     /// Current status
     pub status: InstanceStatus,
     /// Number of completed runs
@@ -31,11 +31,11 @@ pub struct InstanceState {
 
 impl InstanceState {
     /// Create a new instance state with pending status
-    pub fn new(instance_type: &str, system: &str, total_runs: u32) -> Self {
+    pub fn new(instance_type: &str, system: Architecture, total_runs: u32) -> Self {
         Self {
             instance_id: String::new(),
             instance_type: instance_type.to_string(),
-            system: system.to_string(),
+            system,
             status: InstanceStatus::Pending,
             run_progress: 0,
             total_runs,

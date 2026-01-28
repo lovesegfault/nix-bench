@@ -23,6 +23,7 @@ impl App {
         for (instance_type, status) in status_map {
             if let Some(state) = self.instances.data.get_mut(instance_type) {
                 let was_complete = state.status == InstanceStatus::Complete;
+                let was_failed = state.status == InstanceStatus::Failed;
 
                 // Skip status updates for terminated instances (terminal state)
                 if let Some(status_code) = status.status {
@@ -43,9 +44,21 @@ impl App {
                 state.run_results = status.run_results.clone();
                 state.refresh_cache();
 
-                // Check if instance just became complete and we haven't requested cleanup yet
-                if state.status == InstanceStatus::Complete
-                    && !was_complete
+                // Append error message to console output when agent reports failure
+                if state.status == InstanceStatus::Failed && !was_failed {
+                    if let Some(ref msg) = status.error_message {
+                        state
+                            .console_output
+                            .push_line(format!("=== Agent Error: {} ===", msg));
+                    }
+                }
+
+                // Terminate instances that just reached a terminal state (Complete or Failed)
+                let is_terminal = state.status == InstanceStatus::Complete
+                    || state.status == InstanceStatus::Failed;
+                let was_terminal = was_complete || was_failed;
+                if is_terminal
+                    && !was_terminal
                     && !self.context.cleanup_requested.contains(instance_type)
                 {
                     self.context.cleanup_requested.insert(instance_type.clone());

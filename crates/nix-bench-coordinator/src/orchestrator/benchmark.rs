@@ -485,12 +485,18 @@ pub async fn run_benchmarks_no_tui(
         let mut completed_runs = 0u32;
 
         for (instance_type, state) in instances.iter_mut() {
-            if state.status == InstanceStatus::Failed {
+            // Skip instances already in a terminal state that have been acked
+            if (state.status == InstanceStatus::Failed || state.status == InstanceStatus::Complete)
+                && acked_instances.contains(instance_type)
+            {
                 total_runs += state.total_runs;
+                completed_runs += state.run_progress;
                 continue;
             }
 
             if let Some(grpc_status) = status_map.get(instance_type) {
+                let was_failed = state.status == InstanceStatus::Failed;
+
                 if let Some(status_code) = grpc_status.status {
                     state.status = match status_code {
                         StatusCode::Complete => InstanceStatus::Complete,
@@ -505,6 +511,13 @@ pub async fn run_benchmarks_no_tui(
                     state.run_progress = progress;
                 }
                 state.run_results = grpc_status.run_results.clone();
+
+                // Print error message when agent reports failure
+                if state.status == InstanceStatus::Failed && !was_failed {
+                    if let Some(ref msg) = grpc_status.error_message {
+                        println!("\n  {} FAILED: {}", instance_type, msg);
+                    }
+                }
 
                 // Send ack when instance first transitions to Complete/Failed
                 if (state.status == InstanceStatus::Complete

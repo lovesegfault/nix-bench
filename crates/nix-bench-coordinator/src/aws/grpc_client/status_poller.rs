@@ -24,6 +24,8 @@ pub struct GrpcInstanceStatus {
     pub attr: Option<String>,
     /// System architecture
     pub system: Option<String>,
+    /// Error message when status is Failed
+    pub error_message: Option<String>,
 }
 
 /// Polls status from multiple gRPC agents with mTLS
@@ -124,6 +126,11 @@ impl GrpcStatusPoller {
                             None
                         } else {
                             Some(status.system)
+                        },
+                        error_message: if status.error_message.is_empty() {
+                            None
+                        } else {
+                            Some(status.error_message)
                         },
                     },
                 ))

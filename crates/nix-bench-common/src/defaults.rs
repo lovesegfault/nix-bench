@@ -14,6 +14,30 @@ pub const DEFAULT_MAX_FAILURES: u32 = 3;
 /// Default gRPC port for agent server
 pub const DEFAULT_GRPC_PORT: u16 = 50051;
 
+/// Default broadcast channel capacity for gRPC log streaming
+pub const DEFAULT_BROADCAST_CAPACITY: usize = 1024;
+
+/// Default log buffer size (lines) for agent-side message buffering
+pub const DEFAULT_LOG_BUFFER_SIZE: usize = 1000;
+
+/// Default timeout for waiting for coordinator acknowledgment (seconds)
+pub const DEFAULT_ACK_TIMEOUT_SECS: u64 = 120;
+
+/// Default timeout for waiting for TLS config from S3 (seconds)
+pub const DEFAULT_TLS_CONFIG_TIMEOUT_SECS: u64 = 300;
+
+/// Default timeout for waiting for instance to be running (seconds)
+pub const DEFAULT_INSTANCE_WAIT_TIMEOUT_SECS: u64 = 600;
+
+/// Default timeout for waiting for instance termination (seconds)
+pub const DEFAULT_TERMINATION_WAIT_TIMEOUT_SECS: u64 = 300;
+
+/// Default bootstrap command timeout (seconds)
+pub const DEFAULT_BOOTSTRAP_TIMEOUT_SECS: u64 = 600;
+
+/// Default GC timeout (seconds)
+pub const DEFAULT_GC_TIMEOUT_SECS: u64 = 600;
+
 // Serde default functions for struct field defaults
 
 /// Returns the default flake reference

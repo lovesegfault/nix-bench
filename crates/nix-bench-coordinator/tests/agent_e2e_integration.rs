@@ -206,8 +206,9 @@ async fn test_full_benchmark_with_agent() {
         for (instance_type, _arch, system) in &available_instances {
             let user_data = generate_user_data(&bucket_name, &run_id, instance_type);
 
+            let system_arch = nix_bench_common::Architecture::from_instance_type(instance_type);
             let launch_config =
-                LaunchInstanceConfig::new(&run_id, *instance_type, *system, &user_data)
+                LaunchInstanceConfig::new(&run_id, *instance_type, system_arch, &user_data)
                     .with_security_group(&sg_id)
                     .with_iam_profile(&rn);
 
@@ -425,9 +426,14 @@ async fn test_infrastructure_setup_only() {
 
     println!("[4/4] Launching instance...");
     let user_data = "#!/bin/bash\necho 'Test instance'\nsleep 300";
-    let launch_config = LaunchInstanceConfig::new(&run_id, "c7a.medium", "x86_64-linux", user_data)
-        .with_security_group(&sg_id)
-        .with_iam_profile(&role_name);
+    let launch_config = LaunchInstanceConfig::new(
+        &run_id,
+        "c7a.medium",
+        nix_bench_common::Architecture::X86_64,
+        user_data,
+    )
+    .with_security_group(&sg_id)
+    .with_iam_profile(&role_name);
 
     let instance = ec2
         .launch_instance(launch_config)

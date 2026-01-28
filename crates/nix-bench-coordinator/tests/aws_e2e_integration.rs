@@ -111,10 +111,14 @@ while true; do echo "OK" | nc -l 50051; done &
 echo "Listener started on port 50051"
 "#;
 
-    let launch_config =
-        LaunchInstanceConfig::new(&run_id, TEST_INSTANCE_TYPE, "x86_64-linux", user_data)
-            .with_security_group(&sg_id)
-            .with_iam_profile(&role_name);
+    let launch_config = LaunchInstanceConfig::new(
+        &run_id,
+        TEST_INSTANCE_TYPE,
+        nix_bench_common::Architecture::X86_64,
+        user_data,
+    )
+    .with_security_group(&sg_id)
+    .with_iam_profile(&role_name);
     let instance = ec2
         .launch_instance(launch_config)
         .await

@@ -123,8 +123,12 @@ async fn test_launch_and_terminate_instance() {
     let user_data = "#!/bin/bash\necho 'Integration test instance'\n";
 
     // Launch instance
-    let launch_config =
-        LaunchInstanceConfig::new(&run_id, TEST_INSTANCE_TYPE, "x86_64-linux", user_data);
+    let launch_config = LaunchInstanceConfig::new(
+        &run_id,
+        TEST_INSTANCE_TYPE,
+        nix_bench_common::Architecture::X86_64,
+        user_data,
+    );
     let instance = client
         .launch_instance(launch_config)
         .await
@@ -136,7 +140,7 @@ async fn test_launch_and_terminate_instance() {
         instance.instance_id
     );
     assert_eq!(instance.instance_type, TEST_INSTANCE_TYPE);
-    assert_eq!(instance.system, "x86_64-linux");
+    assert_eq!(instance.system, nix_bench_common::Architecture::X86_64);
     tracker.track_instance(instance.instance_id.clone());
 
     // Wait for running (with timeout)

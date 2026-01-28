@@ -25,7 +25,7 @@ pub(super) struct LaunchParams<'a> {
     instance_type_enum: InstanceType,
     run_id: &'a str,
     instance_type: &'a str,
-    system: &'a str,
+    system: nix_bench_common::Architecture,
     user_data_b64: &'a str,
     subnet_id: Option<&'a str>,
     security_group_id: Option<&'a str>,
@@ -39,7 +39,7 @@ impl Ec2Client {
     /// - IAM eventual consistency (profile not yet visible to EC2)
     /// - AWS rate limiting (throttling)
     pub async fn launch_instance(&self, config: LaunchInstanceConfig) -> Result<LaunchedInstance> {
-        let ami_id = self.get_al2023_ami(&config.system).await?;
+        let ami_id = self.get_al2023_ami(config.system.as_str()).await?;
 
         let instance_type_enum: InstanceType = config
             .instance_type
@@ -67,7 +67,7 @@ impl Ec2Client {
                 instance_type_enum: instance_type_enum.clone(),
                 run_id: &config.run_id,
                 instance_type: &config.instance_type,
-                system: &config.system,
+                system: config.system,
                 user_data_b64: &user_data_b64,
                 subnet_id: config.subnet_id.as_deref(),
                 security_group_id: config.security_group_id.as_deref(),
@@ -196,7 +196,7 @@ impl Ec2Client {
         Ok(LaunchedInstance {
             instance_id,
             instance_type: params.instance_type.to_string(),
-            system: params.system.to_string(),
+            system: params.system,
             public_ip: None,
         })
     }
@@ -236,8 +236,11 @@ impl Ec2Client {
         }
     }
 
-    /// Inner wait loop without timeout
+    /// Inner wait loop without timeout, using exponential backoff (2-15s)
     async fn wait_for_running_inner(&self, instance_id: &str) -> Result<Option<String>> {
+        let mut delay = Duration::from_secs(2);
+        let max_delay = Duration::from_secs(15);
+
         loop {
             let response = self
                 .client
@@ -265,8 +268,9 @@ impl Ec2Client {
                     return Ok(public_ip);
                 }
                 InstanceStateName::Pending => {
-                    debug!(instance_id = %instance_id, "Instance still pending");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    debug!(instance_id = %instance_id, delay_secs = delay.as_secs(), "Instance still pending");
+                    tokio::time::sleep(nix_bench_common::jittered_delay_25(delay)).await;
+                    delay = (delay * 2).min(max_delay);
                 }
                 _ => {
                     let state_reason = instance
@@ -305,13 +309,16 @@ impl Ec2Client {
         Ok(())
     }
 
-    /// Wait for an instance to be fully terminated
+    /// Wait for an instance to be fully terminated, using exponential backoff (2-15s)
     pub async fn wait_for_terminated(&self, instance_id: &str) -> Result<()> {
-        const MAX_WAIT_SECS: u64 = 300;
+        use nix_bench_common::defaults::DEFAULT_TERMINATION_WAIT_TIMEOUT_SECS;
+
         let start = std::time::Instant::now();
+        let mut delay = Duration::from_secs(2);
+        let max_delay = Duration::from_secs(15);
 
         loop {
-            if start.elapsed().as_secs() > MAX_WAIT_SECS {
+            if start.elapsed().as_secs() > DEFAULT_TERMINATION_WAIT_TIMEOUT_SECS {
                 warn!(instance_id = %instance_id, "Timeout waiting for instance to terminate");
                 return Ok(());
             }
@@ -355,7 +362,8 @@ impl Ec2Client {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(nix_bench_common::jittered_delay_25(delay)).await;
+            delay = (delay * 2).min(max_delay);
         }
     }
 

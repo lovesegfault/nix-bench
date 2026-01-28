@@ -29,7 +29,7 @@ use nix_bench_common::tls::{
 };
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 /// Delay between instance launches to avoid thundering herd (100ms with jitter)
 const LAUNCH_STAGGER_MS: u64 = 100;
@@ -112,6 +112,7 @@ impl<'a> BenchmarkInitializer<'a> {
         }
     }
 
+    #[instrument(skip_all, fields(run_id = %self.run_id, bucket = %self.bucket_name))]
     pub async fn initialize<R: InitProgressReporter>(&self, reporter: &R) -> Result<InitContext> {
         reporter.report_phase(InitPhase::Starting);
         reporter.report_run_info(&self.run_id, &self.bucket_name);
@@ -303,7 +304,7 @@ impl<'a> BenchmarkInitializer<'a> {
                 instance_type,
             );
             let mut launch_config =
-                LaunchInstanceConfig::new(&self.run_id, instance_type, system.as_str(), &user_data);
+                LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
             if let Some(subnet) = &self.config.aws.subnet_id {
                 launch_config = launch_config.with_subnet(subnet);
             }

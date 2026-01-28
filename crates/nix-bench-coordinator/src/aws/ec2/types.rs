@@ -1,11 +1,13 @@
 //! EC2 types and configuration
 
+use nix_bench_common::Architecture;
+
 /// Launched instance info
 #[derive(Debug, Clone)]
 pub struct LaunchedInstance {
     pub instance_id: String,
     pub instance_type: String,
-    pub system: String,
+    pub system: Architecture,
     pub public_ip: Option<String>,
 }
 
@@ -16,8 +18,8 @@ pub struct LaunchInstanceConfig {
     pub run_id: String,
     /// EC2 instance type (e.g., "c7i.xlarge")
     pub instance_type: String,
-    /// System architecture ("x86_64-linux" or "aarch64-linux")
-    pub system: String,
+    /// System architecture
+    pub system: Architecture,
     /// User data script (will be base64 encoded)
     pub user_data: String,
     /// Optional VPC subnet ID
@@ -33,13 +35,13 @@ impl LaunchInstanceConfig {
     pub fn new(
         run_id: impl Into<String>,
         instance_type: impl Into<String>,
-        system: impl Into<String>,
+        system: Architecture,
         user_data: impl Into<String>,
     ) -> Self {
         Self {
             run_id: run_id.into(),
             instance_type: instance_type.into(),
-            system: system.into(),
+            system,
             user_data: user_data.into(),
             subnet_id: None,
             security_group_id: None,

@@ -8,7 +8,8 @@ use nix_bench_common::RunResult;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{info, instrument, warn};
 
 /// Run nix build with streaming output to gRPC clients
 ///
@@ -53,16 +54,26 @@ pub async fn run_nix_build(
 /// Run benchmarks with smart retry logic.
 ///
 /// On failure, schedules a replacement run. Gives up after max_failures total failures.
+/// Checks the `shutdown_token` between runs so cancellation requests are honoured promptly.
+#[instrument(skip_all, fields(attr = %config.attr, runs = config.runs))]
 pub async fn run_benchmarks_with_retry(
     config: &config::Config,
     logger: &GrpcLogger,
     status: &Arc<RwLock<AgentStatus>>,
+    shutdown_token: &CancellationToken,
 ) -> Result<Vec<RunResult>> {
     let mut successful_runs: Vec<RunResult> = Vec::new();
     let mut failure_count: u32 = 0;
     let mut current_run: u32 = 1;
 
     while successful_runs.len() < config.runs as usize {
+        // Check for cancellation between runs
+        if shutdown_token.is_cancelled() {
+            warn!("Benchmark cancelled by coordinator");
+            logger.write_line("Benchmark cancelled by coordinator");
+            break;
+        }
+
         // Check if we've exceeded max failures
         if failure_count >= config.max_failures {
             anyhow::bail!(

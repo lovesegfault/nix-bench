@@ -5,12 +5,13 @@
 //!
 //! # Module Visibility
 //!
-//! All modules are public to support integration testing from the coordinator crate.
-//! For production use, only the binary entry point (`main.rs`) is relevant.
+//! Only the public gRPC interface and error types are exposed. Internal modules
+//! are `pub(crate)` to encourage testing through the gRPC interface rather than
+//! reaching into implementation details.
 
 pub mod benchmark;
 pub mod bootstrap;
-pub mod command;
+pub(crate) mod command;
 pub mod config;
 pub mod error;
 pub mod gc;

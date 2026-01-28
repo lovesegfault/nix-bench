@@ -147,19 +147,34 @@ pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError
 
 /// Classify an error from an anyhow::Error by extracting the AWS error code.
 ///
-/// Walks the error's debug representation to find AWS error codes and
-/// classifies them using the same logic as `classify_aws_error`.
-/// Uses the full debug string as the message for classification, since
-/// anyhow's `.to_string()` only returns the outermost context, not the
-/// inner SDK error details needed for pattern matching.
+/// First attempts to downcast through the error chain to find an AWS SDK error
+/// that implements `ProvideErrorMetadata`, extracting `.code()` and `.message()`
+/// directly. Falls back to string matching on the Debug representation if no
+/// typed error is found.
 pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
-    let debug_str = format!("{:?}", error);
+    // Walk the error chain looking for typed AWS SDK errors
+    for cause in error.chain() {
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::run_instances::RunInstancesError>>() {
+            let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
+            return classify_aws_error(meta.code(), meta.message());
+        }
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::describe_instances::DescribeInstancesError>>() {
+            let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
+            return classify_aws_error(meta.code(), meta.message());
+        }
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::terminate_instances::TerminateInstancesError>>() {
+            let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
+            return classify_aws_error(meta.code(), meta.message());
+        }
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::delete_bucket::DeleteBucketError>>() {
+            let meta = aws_sdk_s3::error::ProvideErrorMetadata::meta(sdk_err);
+            return classify_aws_error(meta.code(), meta.message());
+        }
+    }
 
-    // Try to extract an AWS error code from the debug representation
+    // Fallback: extract error code from debug string representation
+    let debug_str = format!("{:?}", error);
     if let Some(code) = extract_error_code(&debug_str) {
-        // Pass the full debug string as message so classify_aws_error can
-        // match on inner error details (e.g., "iamInstanceProfile" in the
-        // SDK error message, not just the anyhow context)
         return classify_aws_error(Some(&code), Some(&debug_str));
     }
 

@@ -251,6 +251,7 @@ async fn test_bootstrap_streaming_integration() {
         run_results: Vec::new(),
         attr: String::new(),
         system: nix_bench_common::Architecture::X86_64,
+        ..Default::default()
     };
 
     let fixture = GrpcTestFixture::with_status(initial_status).await;
@@ -360,6 +361,7 @@ async fn test_bootstrap_status_transitions() {
         run_results: Vec::new(),
         attr: String::new(),
         system: nix_bench_common::Architecture::X86_64,
+        ..Default::default()
     };
 
     let fixture = GrpcTestFixture::with_status(initial_status).await;

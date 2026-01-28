@@ -64,11 +64,7 @@ async fn main() -> Result<()> {
     let broadcaster = Arc::new(grpc::LogBroadcaster::new(DEFAULT_BROADCAST_CAPACITY));
     let status = Arc::new(RwLock::new(grpc::AgentStatus {
         status: StatusCode::Bootstrap,
-        run_progress: 0,
-        total_runs: 0,
-        run_results: Vec::new(),
-        attr: String::new(),
-        system: nix_bench_common::Architecture::X86_64,
+        ..Default::default()
     }));
     let shutdown_token = CancellationToken::new();
 

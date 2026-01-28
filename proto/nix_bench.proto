@@ -60,4 +60,6 @@ message StatusResponse {
   string system = 8;
   // Protocol version for compatibility detection
   uint32 protocol_version = 9;
+  // Error message when status is Failed (empty otherwise)
+  string error_message = 10;
 }

@@ -33,6 +33,8 @@ pub struct AgentStatus {
     pub attr: String,
     /// System architecture
     pub system: Architecture,
+    /// Error message (populated when status is Failed)
+    pub error_message: String,
 }
 
 impl Default for AgentStatus {
@@ -44,6 +46,7 @@ impl Default for AgentStatus {
             run_results: Vec::new(),
             attr: String::new(),
             system: Architecture::X86_64,
+            error_message: String::new(),
         }
     }
 }
@@ -269,6 +272,7 @@ impl LogStream for LogStreamService {
             attr: status.attr.clone(),
             system: status.system.to_string(),
             protocol_version: 1,
+            error_message: status.error_message.clone(),
         }))
     }
 
@@ -406,6 +410,7 @@ mod tests {
             run_results: Vec::new(),
             attr: "shallow.hello".to_string(),
             system: Architecture::X86_64,
+            error_message: String::new(),
         }));
 
         let shutdown_token = CancellationToken::new();

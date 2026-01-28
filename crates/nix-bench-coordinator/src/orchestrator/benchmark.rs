@@ -11,18 +11,18 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::aws::{GrpcStatusPoller, LogStreamingOptions, start_log_streaming_unified};
-use crate::config::RunConfig;
-use nix_bench_common::StatusCode;
-use crate::tui::{self, InitPhase, TuiMessage};
-use super::init::BenchmarkInitializer;
-use super::progress::{ChannelReporter, LogReporter};
-use super::types::{InstanceState, InstanceStatus};
 use super::cleanup::{cleanup_executor, cleanup_resources_no_tui, CleanupRequest};
+use super::init::BenchmarkInitializer;
 use super::monitoring::poll_bootstrap_status;
+use super::progress::{ChannelReporter, LogReporter};
 use super::results::{print_results_summary, write_results};
+use super::types::{InstanceState, InstanceStatus};
 use super::user_data::detect_bootstrap_failure;
 use super::GRPC_PORT;
+use crate::aws::{start_log_streaming_unified, GrpcStatusPoller, LogStreamingOptions};
+use crate::config::RunConfig;
+use crate::tui::{self, InitPhase, TuiMessage};
+use nix_bench_common::StatusCode;
 
 /// Run benchmarks with TUI - starts TUI immediately, runs init in background
 pub async fn run_benchmarks_with_tui(
@@ -87,7 +87,12 @@ pub async fn run_benchmarks_with_tui(
 
     // Run the TUI with channel (gRPC status polling happens inside the TUI)
     let tui_result = app
-        .run_with_channel(&mut terminal, &mut rx, cancel_for_tui, Some(cleanup_tx.clone()))
+        .run_with_channel(
+            &mut terminal,
+            &mut rx,
+            cancel_for_tui,
+            Some(cleanup_tx.clone()),
+        )
         .await;
 
     // If user cancelled, abort init task early instead of waiting for it
@@ -133,13 +138,15 @@ pub async fn run_benchmarks_with_tui(
 
     // Send full cleanup request to the cleanup executor
     // The executor is already running (spawned during init) and will handle this
-    let _ = cleanup_tx.send(CleanupRequest::FullCleanup {
-        region: config.region.clone(),
-        keep: config.keep,
-        run_id: run_id.clone(),
-        bucket_name: bucket_name.clone(),
-        instances: instances.clone(),
-    }).await;
+    let _ = cleanup_tx
+        .send(CleanupRequest::FullCleanup {
+            region: config.region.clone(),
+            keep: config.keep,
+            run_id: run_id.clone(),
+            bucket_name: bucket_name.clone(),
+            instances: instances.clone(),
+        })
+        .await;
 
     // Drop the sender so the cleanup executor knows no more requests are coming
     drop(cleanup_tx);
@@ -151,7 +158,8 @@ pub async fn run_benchmarks_with_tui(
     });
 
     // Run cleanup phase TUI loop (shows progress until cleanup completes)
-    app.run_cleanup_phase(&mut terminal, cleanup_handle_wrapped, rx).await?;
+    app.run_cleanup_phase(&mut terminal, cleanup_handle_wrapped, rx)
+        .await?;
 
     // Now restore terminal
     disable_raw_mode()?;
@@ -211,7 +219,11 @@ pub async fn run_init_task(
     let coordinator_tls_config = ctx.coordinator_tls_config;
 
     // Send TLS config to TUI for status polling
-    let _ = tx.send(TuiMessage::TlsConfig { config: coordinator_tls_config.clone() }).await;
+    let _ = tx
+        .send(TuiMessage::TlsConfig {
+            config: coordinator_tls_config.clone(),
+        })
+        .await;
 
     // Switch to running phase
     let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
@@ -234,8 +246,13 @@ pub async fn run_init_task(
         );
 
         // Use unified log streaming with options
-        let options = LogStreamingOptions::new(&instances_with_ips, &run_id, GRPC_PORT, coordinator_tls_config)
-            .with_channel(tx.clone());
+        let options = LogStreamingOptions::new(
+            &instances_with_ips,
+            &run_id,
+            GRPC_PORT,
+            coordinator_tls_config,
+        )
+        .with_channel(tx.clone());
         let grpc_handles = start_log_streaming_unified(options);
 
         // Spawn a monitor task to log any gRPC streaming errors/panics
@@ -270,7 +287,14 @@ pub async fn run_init_task(
     let timeout_secs = config.timeout;
     let start_time = Instant::now();
     tokio::spawn(async move {
-        poll_bootstrap_status(instances_for_logs, tx_logs, region, timeout_secs, start_time).await;
+        poll_bootstrap_status(
+            instances_for_logs,
+            tx_logs,
+            region,
+            timeout_secs,
+            start_time,
+        )
+        .await;
     });
 
     // Spawn cleanup executor to handle cleanup requests from TUI
@@ -329,7 +353,12 @@ pub async fn run_benchmarks_no_tui(
         );
 
         // Use unified log streaming with stdout output
-        let options = LogStreamingOptions::new(&instances_with_ips, &run_id, GRPC_PORT, coordinator_tls_config.clone());
+        let options = LogStreamingOptions::new(
+            &instances_with_ips,
+            &run_id,
+            GRPC_PORT,
+            coordinator_tls_config.clone(),
+        );
         let handles = start_log_streaming_unified(options);
 
         // Spawn a monitor task to log any gRPC streaming errors/panics
@@ -411,7 +440,11 @@ pub async fn run_benchmarks_no_tui(
             .collect();
 
         let status_map = if !instances_with_ips.is_empty() {
-            let poller = GrpcStatusPoller::new(&instances_with_ips, GRPC_PORT, coordinator_tls_config.clone());
+            let poller = GrpcStatusPoller::new(
+                &instances_with_ips,
+                GRPC_PORT,
+                coordinator_tls_config.clone(),
+            );
             poller.poll_status().await
         } else {
             std::collections::HashMap::new()
@@ -433,7 +466,9 @@ pub async fn run_benchmarks_no_tui(
                     state.status = match status_code {
                         StatusCode::Complete => InstanceStatus::Complete,
                         StatusCode::Failed => InstanceStatus::Failed,
-                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => InstanceStatus::Running,
+                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
+                            InstanceStatus::Running
+                        }
                         StatusCode::Pending => InstanceStatus::Pending,
                     };
                 }

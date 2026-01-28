@@ -78,7 +78,11 @@ async fn test_stream_to_channel_receives_logs() {
         .expect("Should receive first message")
         .expect("Channel should not be closed");
 
-    if let TuiMessage::ConsoleOutputAppend { instance_type, line } = msg1 {
+    if let TuiMessage::ConsoleOutputAppend {
+        instance_type,
+        line,
+    } = msg1
+    {
         assert_eq!(instance_type, TEST_INSTANCE_TYPE);
         assert!(line.contains("Building package"));
     } else {
@@ -90,7 +94,11 @@ async fn test_stream_to_channel_receives_logs() {
         .expect("Should receive second message")
         .expect("Channel should not be closed");
 
-    if let TuiMessage::ConsoleOutputAppend { instance_type, line } = msg2 {
+    if let TuiMessage::ConsoleOutputAppend {
+        instance_type,
+        line,
+    } = msg2
+    {
         assert_eq!(instance_type, TEST_INSTANCE_TYPE);
         assert!(line.contains("Build complete"));
     } else {

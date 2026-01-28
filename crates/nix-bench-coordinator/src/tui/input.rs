@@ -44,11 +44,7 @@ impl KeyHandler {
     }
 
     /// Handle input in quit confirmation dialog
-    fn handle_quit_confirm(
-        app: &mut App,
-        key: KeyEvent,
-        cancel: &CancellationToken,
-    ) -> KeyResult {
+    fn handle_quit_confirm(app: &mut App, key: KeyEvent, cancel: &CancellationToken) -> KeyResult {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                 app.ui.show_quit_confirm = false;
@@ -73,22 +69,32 @@ impl KeyHandler {
             }
             KeyCode::Esc => {
                 // Esc exits page mode in TuiLoggerSmartWidget, or exits fullscreen
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::EscapeKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::EscapeKey);
             }
             KeyCode::Char('l') => {
                 app.ui.logs_fullscreen = false;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::UpKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::UpKey);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::DownKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::DownKey);
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::LeftKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::LeftKey);
             }
             KeyCode::Right => {
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::RightKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::RightKey);
             }
             KeyCode::PageUp => {
                 app.scroll
@@ -102,23 +108,33 @@ impl KeyHandler {
             }
             KeyCode::Char(' ') => {
                 // Space toggles page mode / hides filtered targets
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::SpaceKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::SpaceKey);
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 // Increase log level for selected target
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::PlusKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::PlusKey);
             }
             KeyCode::Char('-') => {
                 // Decrease log level for selected target
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::MinusKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::MinusKey);
             }
             KeyCode::Char('f') => {
                 // Focus on selected target
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::FocusKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::FocusKey);
             }
             KeyCode::Tab => {
                 // Hide/show target selector panel
-                app.scroll.tracing_log_state.transition(TuiWidgetEvent::HideKey);
+                app.scroll
+                    .tracing_log_state
+                    .transition(TuiWidgetEvent::HideKey);
             }
             _ => return KeyResult::Unhandled,
         }
@@ -179,8 +195,7 @@ impl KeyHandler {
             },
             KeyCode::End => match app.ui.focus {
                 PanelFocus::InstanceList => {
-                    app.instances.selected_index =
-                        app.instances.order.len().saturating_sub(1);
+                    app.instances.selected_index = app.instances.order.len().saturating_sub(1);
                 }
                 PanelFocus::BuildOutput => app.scroll_to_bottom(),
             },

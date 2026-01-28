@@ -129,8 +129,8 @@ pub type SecurityGroupRuleGuard = ResourceGuard<()>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::registry::CleanupMessage;
+    use super::*;
     use tokio::sync::mpsc;
 
     fn create_test_meta() -> ResourceMeta {
@@ -152,12 +152,7 @@ mod tests {
         assert!(registry.is_empty());
 
         // Create guard
-        let _guard = ResourceGuard::new(
-            "i-12345".to_string(),
-            resource_id,
-            meta,
-            registry.clone(),
-        );
+        let _guard = ResourceGuard::new("i-12345".to_string(), resource_id, meta, registry.clone());
 
         // After creating guard, registry has 1 resource
         assert_eq!(registry.len(), 1);
@@ -186,12 +181,10 @@ mod tests {
         // Should have received a cleanup message
         let msg = rx.try_recv().expect("Should have cleanup message");
         match msg {
-            CleanupMessage::ResourceDropped { resource, .. } => {
-                match resource {
-                    ResourceId::S3Bucket(name) => assert_eq!(name, "test-bucket"),
-                    _ => panic!("Wrong resource type"),
-                }
-            }
+            CleanupMessage::ResourceDropped { resource, .. } => match resource {
+                ResourceId::S3Bucket(name) => assert_eq!(name, "test-bucket"),
+                _ => panic!("Wrong resource type"),
+            },
             CleanupMessage::Shutdown => panic!("Wrong message type"),
         }
     }
@@ -202,12 +195,7 @@ mod tests {
         let resource_id = ResourceId::Ec2Instance("i-commit".to_string());
         let meta = create_test_meta();
 
-        let guard = ResourceGuard::new(
-            "i-commit".to_string(),
-            resource_id,
-            meta,
-            registry.clone(),
-        );
+        let guard = ResourceGuard::new("i-commit".to_string(), resource_id, meta, registry.clone());
 
         // Registry should have the resource
         assert_eq!(registry.len(), 1);
@@ -220,7 +208,10 @@ mod tests {
         assert!(registry.is_empty());
 
         // No cleanup message should have been sent
-        assert!(rx.try_recv().is_err(), "No cleanup message should be sent after commit");
+        assert!(
+            rx.try_recv().is_err(),
+            "No cleanup message should be sent after commit"
+        );
     }
 
     #[test]
@@ -229,12 +220,8 @@ mod tests {
         let resource_id = ResourceId::SecurityGroup("sg-detach".to_string());
         let meta = create_test_meta();
 
-        let guard = ResourceGuard::new(
-            "sg-detach".to_string(),
-            resource_id,
-            meta,
-            registry.clone(),
-        );
+        let guard =
+            ResourceGuard::new("sg-detach".to_string(), resource_id, meta, registry.clone());
 
         // Detach returns the value without triggering cleanup
         let value = guard.detach();
@@ -253,12 +240,7 @@ mod tests {
         let resource_id = ResourceId::Ec2Instance("i-inner".to_string());
         let meta = create_test_meta();
 
-        let guard = ResourceGuard::new(
-            "i-inner".to_string(),
-            resource_id,
-            meta,
-            registry,
-        );
+        let guard = ResourceGuard::new("i-inner".to_string(), resource_id, meta, registry);
 
         assert_eq!(guard.inner(), "i-inner");
 
@@ -272,12 +254,7 @@ mod tests {
         let resource_id = ResourceId::S3Bucket("bucket-deref".to_string());
         let meta = create_test_meta();
 
-        let guard = ResourceGuard::new(
-            "bucket-deref".to_string(),
-            resource_id,
-            meta,
-            registry,
-        );
+        let guard = ResourceGuard::new("bucket-deref".to_string(), resource_id, meta, registry);
 
         // Can use Deref to access the value
         let len: usize = guard.len();
@@ -310,12 +287,7 @@ mod tests {
         let resource_id = ResourceId::S3Bucket("meta-test".to_string());
         let meta = create_test_meta();
 
-        let guard = ResourceGuard::new(
-            "meta-test".to_string(),
-            resource_id,
-            meta,
-            registry,
-        );
+        let guard = ResourceGuard::new("meta-test".to_string(), resource_id, meta, registry);
 
         assert_eq!(guard.meta().run_id, "test-run");
         assert_eq!(guard.meta().region, "us-east-2");
@@ -370,10 +342,7 @@ mod tests {
                 CleanupMessage::ResourceDropped { resource: r1, .. },
                 CleanupMessage::ResourceDropped { resource: r2, .. },
             ) => {
-                let ids: Vec<String> = [r1, r2]
-                    .iter()
-                    .map(|r| r.raw_id())
-                    .collect();
+                let ids: Vec<String> = [r1, r2].iter().map(|r| r.raw_id()).collect();
                 assert!(ids.contains(&"bucket-1".to_string()));
                 assert!(ids.contains(&"bucket-3".to_string()));
             }

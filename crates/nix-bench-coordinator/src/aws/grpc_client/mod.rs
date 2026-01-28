@@ -107,8 +107,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(100);
 
         let tls = test_tls_config();
-        let options =
-            LogStreamingOptions::new(&instances, "test-run", 50051, tls).with_channel(tx);
+        let options = LogStreamingOptions::new(&instances, "test-run", 50051, tls).with_channel(tx);
         let handles = start_log_streaming_unified(options);
 
         assert_eq!(handles.len(), 3);

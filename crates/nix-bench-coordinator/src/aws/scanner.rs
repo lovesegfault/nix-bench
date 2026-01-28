@@ -7,7 +7,9 @@ use crate::aws::context::AwsContext;
 use anyhow::Result;
 use aws_sdk_ec2::types::Filter;
 use chrono::{DateTime, Duration, Utc};
-use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use nix_bench_common::tags::{
+    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
+};
 pub use nix_bench_common::ResourceKind;
 use std::collections::HashMap;
 use tracing::debug;
@@ -94,10 +96,7 @@ impl ResourceScanner {
     }
 
     /// Scan EC2 instances by tag filter
-    pub async fn scan_ec2_instances(
-        &self,
-        config: &ScanConfig,
-    ) -> Result<Vec<DiscoveredResource>> {
+    pub async fn scan_ec2_instances(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
         let client = self.ctx.ec2_client();
 
         let mut filters = vec![
@@ -285,7 +284,10 @@ impl ResourceScanner {
                 rid.clone()
             } else {
                 // Extract run_id from bucket name: "nix-bench-{run_id}" -> "{run_id}"
-                bucket_name.strip_prefix("nix-bench-").unwrap_or("unknown").to_string()
+                bucket_name
+                    .strip_prefix("nix-bench-")
+                    .unwrap_or("unknown")
+                    .to_string()
             };
 
             let status = if is_untagged_orphan {
@@ -354,8 +356,7 @@ impl ResourceScanner {
                 // For untagged roles with the prefix, include them as orphans
                 let created_at = if is_untagged {
                     let dt = role.create_date();
-                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
-                        .unwrap_or_else(Utc::now)
+                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()).unwrap_or_else(Utc::now)
                 } else {
                     parse_created_at(&tags)
                 };
@@ -374,7 +375,10 @@ impl ResourceScanner {
                 let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
                     rid.clone()
                 } else {
-                    role_name.strip_prefix("nix-bench-agent-").unwrap_or("unknown").to_string()
+                    role_name
+                        .strip_prefix("nix-bench-agent-")
+                        .unwrap_or("unknown")
+                        .to_string()
                 };
 
                 let status = if is_untagged {
@@ -458,8 +462,7 @@ impl ResourceScanner {
 
                 let created_at = if is_untagged {
                     let dt = profile.create_date();
-                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
-                        .unwrap_or_else(Utc::now)
+                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()).unwrap_or_else(Utc::now)
                 } else {
                     parse_created_at(&tags)
                 };

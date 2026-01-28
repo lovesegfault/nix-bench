@@ -136,9 +136,8 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
         0 // All rows fit, or current run is in first visible chunk
     } else {
         // Scroll to keep current run visible (near bottom of visible area)
-        (current_run.saturating_sub(visible_rows.saturating_sub(1))).min(
-            (total_runs as usize).saturating_sub(visible_rows),
-        )
+        (current_run.saturating_sub(visible_rows.saturating_sub(1)))
+            .min((total_runs as usize).saturating_sub(visible_rows))
     };
 
     let needs_scrollbar = total_runs as usize > visible_rows;
@@ -173,19 +172,9 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
                         "-".to_string(),
                     )
                 } else if run <= instance.run_progress {
-                    (
-                        "-".to_string(),
-                        "✓",
-                        t.success_style(),
-                        "-".to_string(),
-                    )
+                    ("-".to_string(), "✓", t.success_style(), "-".to_string())
                 } else {
-                    (
-                        "-".to_string(),
-                        "○",
-                        t.dim(),
-                        "-".to_string(),
-                    )
+                    ("-".to_string(), "○", t.dim(), "-".to_string())
                 };
 
             let diff_style = if diff_str.starts_with('+') {

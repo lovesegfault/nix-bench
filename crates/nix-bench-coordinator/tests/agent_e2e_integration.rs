@@ -20,7 +20,9 @@
 mod aws_test_helpers;
 
 use aws_test_helpers::*;
-use nix_bench_common::tls::{generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig};
+use nix_bench_common::tls::{
+    generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig,
+};
 use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
 use nix_bench_coordinator::aws::grpc_client::wait_for_tcp_ready;
 use nix_bench_coordinator::aws::{get_coordinator_public_ip, Ec2Client, IamClient, S3Client};
@@ -55,7 +57,10 @@ fn agent_binary_path(arch: &str) -> Option<String> {
     for path in paths {
         let p = Path::new(path);
         if p.exists() {
-            return p.canonicalize().ok().map(|p| p.to_string_lossy().to_string());
+            return p
+                .canonicalize()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string());
         }
     }
     None
@@ -139,8 +144,12 @@ async fn test_full_benchmark_with_agent() {
     let ec2 = Ec2Client::new(&region)
         .await
         .expect("AWS credentials required - set AWS_PROFILE or AWS_ACCESS_KEY_ID");
-    let s3 = S3Client::new(&region).await.expect("AWS credentials required");
-    let iam = IamClient::new(&region).await.expect("AWS credentials required");
+    let s3 = S3Client::new(&region)
+        .await
+        .expect("AWS credentials required");
+    let iam = IamClient::new(&region)
+        .await
+        .expect("AWS credentials required");
 
     // Track resources for cleanup
     let mut instance_ids: Vec<String> = Vec::new();
@@ -181,7 +190,10 @@ async fn test_full_benchmark_with_agent() {
             .create_security_group(&run_id, &coordinator_cidr, None)
             .await?;
         security_group_id = Some(sg_id.clone());
-        println!("  Security group: {} (allowed from {})", sg_id, coordinator_cidr);
+        println!(
+            "  Security group: {} (allowed from {})",
+            sg_id, coordinator_cidr
+        );
 
         // === Step 5: Launch instances ===
         println!("[5/8] Launching instances...");
@@ -190,9 +202,10 @@ async fn test_full_benchmark_with_agent() {
         for (instance_type, _arch, system) in &available_instances {
             let user_data = generate_user_data(&bucket_name, &run_id, instance_type);
 
-            let launch_config = LaunchInstanceConfig::new(&run_id, *instance_type, *system, &user_data)
-                .with_security_group(&sg_id)
-                .with_iam_profile(&rn);
+            let launch_config =
+                LaunchInstanceConfig::new(&run_id, *instance_type, *system, &user_data)
+                    .with_security_group(&sg_id)
+                    .with_iam_profile(&rn);
 
             let instance = ec2.launch_instance(launch_config).await?;
             println!(
@@ -250,8 +263,13 @@ async fn test_full_benchmark_with_agent() {
             let config_json = serde_json::to_string_pretty(&config)?;
             let key = format!("{}/config-{}.json", run_id, instance_type);
             println!("  Uploading config for {} -> {}", instance_type, key);
-            s3.upload_bytes(&bucket_name, &key, config_json.into_bytes(), "application/json")
-                .await?;
+            s3.upload_bytes(
+                &bucket_name,
+                &key,
+                config_json.into_bytes(),
+                "application/json",
+            )
+            .await?;
         }
 
         // === Step 8: Wait for agents to be reachable ===
@@ -267,7 +285,9 @@ async fn test_full_benchmark_with_agent() {
             match tokio::time::timeout(
                 Duration::from_secs(300),
                 wait_for_tcp_ready(&addr, Duration::from_secs(300)),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(())) => {
                     println!("  {} is reachable!", instance_type);
                 }
@@ -349,13 +369,21 @@ async fn test_infrastructure_setup_only() {
     println!("=== Infrastructure Setup Test ===");
     println!("Run ID: {}", run_id);
 
-    let ec2 = Ec2Client::new(&region).await.expect("AWS credentials required");
-    let s3 = S3Client::new(&region).await.expect("AWS credentials required");
-    let iam = IamClient::new(&region).await.expect("AWS credentials required");
+    let ec2 = Ec2Client::new(&region)
+        .await
+        .expect("AWS credentials required");
+    let s3 = S3Client::new(&region)
+        .await
+        .expect("AWS credentials required");
+    let iam = IamClient::new(&region)
+        .await
+        .expect("AWS credentials required");
 
     // Create resources
     println!("[1/4] Creating S3 bucket...");
-    s3.create_bucket(&bucket_name).await.expect("Should create bucket");
+    s3.create_bucket(&bucket_name)
+        .await
+        .expect("Should create bucket");
 
     println!("[2/4] Creating IAM role...");
     let (role_name, _profile) = iam
@@ -374,10 +402,9 @@ async fn test_infrastructure_setup_only() {
 
     println!("[4/4] Launching instance...");
     let user_data = "#!/bin/bash\necho 'Test instance'\nsleep 300";
-    let launch_config =
-        LaunchInstanceConfig::new(&run_id, "c7a.medium", "x86_64-linux", user_data)
-            .with_security_group(&sg_id)
-            .with_iam_profile(&role_name);
+    let launch_config = LaunchInstanceConfig::new(&run_id, "c7a.medium", "x86_64-linux", user_data)
+        .with_security_group(&sg_id)
+        .with_iam_profile(&role_name);
 
     let instance = ec2
         .launch_instance(launch_config)

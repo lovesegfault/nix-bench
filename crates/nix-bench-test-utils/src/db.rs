@@ -87,11 +87,12 @@ mod tests {
             .unwrap();
 
         // Verify table exists
-        let result: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='test_table'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let result: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='test_table'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(result.0, 1);
     }
 }

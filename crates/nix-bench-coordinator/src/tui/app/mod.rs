@@ -144,8 +144,7 @@ impl App {
 
     /// Calculate completion percentage
     pub fn completion_percentage(&self) -> f64 {
-        let total: u32 =
-            (self.instances.data.len() as u32).saturating_mul(self.context.total_runs);
+        let total: u32 = (self.instances.data.len() as u32).saturating_mul(self.context.total_runs);
         let completed: u32 = self.instances.data.values().map(|s| s.run_progress).sum();
         if total == 0 {
             0.0
@@ -268,7 +267,12 @@ impl App {
 
     /// Scroll build output up by n lines
     pub fn scroll_up(&mut self, lines: u16) {
-        if let Some(key) = self.instances.order.get(self.instances.selected_index).cloned() {
+        if let Some(key) = self
+            .instances
+            .order
+            .get(self.instances.selected_index)
+            .cloned()
+        {
             self.ensure_scroll_state(&key);
             if let Some(state) = self.scroll.log_scroll_states.get_mut(&key) {
                 for _ in 0..lines {
@@ -281,7 +285,12 @@ impl App {
 
     /// Scroll build output down by n lines
     pub fn scroll_down(&mut self, lines: u16) {
-        if let Some(key) = self.instances.order.get(self.instances.selected_index).cloned() {
+        if let Some(key) = self
+            .instances
+            .order
+            .get(self.instances.selected_index)
+            .cloned()
+        {
             self.ensure_scroll_state(&key);
             if let Some(state) = self.scroll.log_scroll_states.get_mut(&key) {
                 for _ in 0..lines {
@@ -294,7 +303,12 @@ impl App {
 
     /// Jump to top of build output
     pub fn scroll_to_top(&mut self) {
-        if let Some(key) = self.instances.order.get(self.instances.selected_index).cloned() {
+        if let Some(key) = self
+            .instances
+            .order
+            .get(self.instances.selected_index)
+            .cloned()
+        {
             self.ensure_scroll_state(&key);
             if let Some(state) = self.scroll.log_scroll_states.get_mut(&key) {
                 state.scroll_to_top();
@@ -305,7 +319,12 @@ impl App {
 
     /// Jump to bottom of build output and enable auto-follow
     pub fn scroll_to_bottom(&mut self) {
-        if let Some(key) = self.instances.order.get(self.instances.selected_index).cloned() {
+        if let Some(key) = self
+            .instances
+            .order
+            .get(self.instances.selected_index)
+            .cloned()
+        {
             self.ensure_scroll_state(&key);
             if let Some(state) = self.scroll.log_scroll_states.get_mut(&key) {
                 state.scroll_to_bottom();

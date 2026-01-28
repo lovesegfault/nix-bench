@@ -113,7 +113,8 @@ async fn test_launch_and_terminate_instance() {
     let user_data = "#!/bin/bash\necho 'Integration test instance'\n";
 
     // Launch instance
-    let launch_config = LaunchInstanceConfig::new(&run_id, TEST_INSTANCE_TYPE, "x86_64-linux", user_data);
+    let launch_config =
+        LaunchInstanceConfig::new(&run_id, TEST_INSTANCE_TYPE, "x86_64-linux", user_data);
     let instance = client
         .launch_instance(launch_config)
         .await
@@ -135,7 +136,11 @@ async fn test_launch_and_terminate_instance() {
 
     // Public IP may or may not be assigned depending on VPC config
     if let Some(ip) = &public_ip {
-        assert!(ip.contains('.'), "Public IP should contain dots, got: {}", ip);
+        assert!(
+            ip.contains('.'),
+            "Public IP should contain dots, got: {}",
+            ip
+        );
     }
 
     // Terminate instance

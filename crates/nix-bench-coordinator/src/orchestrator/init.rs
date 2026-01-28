@@ -15,8 +15,8 @@ use crate::aws::resource_guard::{
     SecurityGroupGuard, SecurityGroupRuleGuard,
 };
 use crate::aws::{
-    extract_error_details, get_coordinator_public_ip, get_current_account_id, AccountId,
-    Ec2Client, IamClient, S3Client,
+    extract_error_details, get_coordinator_public_ip, get_current_account_id, AccountId, Ec2Client,
+    IamClient, S3Client,
 };
 use crate::config::{detect_system, AgentConfig, RunConfig};
 use crate::state::{self, DbPool, ResourceType};
@@ -72,7 +72,10 @@ impl InitContext {
         self.instances
             .iter()
             .filter_map(|(instance_type, state)| {
-                state.public_ip.as_ref().map(|ip| (instance_type.clone(), ip.clone()))
+                state
+                    .public_ip
+                    .as_ref()
+                    .map(|ip| (instance_type.clone(), ip.clone()))
             })
             .collect()
     }
@@ -99,7 +102,13 @@ impl<'a> BenchmarkInitializer<'a> {
         agent_x86_64: Option<String>,
         agent_aarch64: Option<String>,
     ) -> Self {
-        Self { config, run_id, bucket_name, agent_x86_64, agent_aarch64 }
+        Self {
+            config,
+            run_id,
+            bucket_name,
+            agent_x86_64,
+            agent_aarch64,
+        }
     }
 
     pub async fn initialize<R: InitProgressReporter>(&self, reporter: &R) -> Result<InitContext> {
@@ -122,7 +131,8 @@ impl<'a> BenchmarkInitializer<'a> {
         // Create the cleanup system for RAII resource protection
         let (registry, executor) = create_cleanup_system();
         let executor_handle = tokio::spawn(executor.run());
-        let builder = ResourceGuardBuilder::new(registry.clone(), &self.run_id, &self.config.region);
+        let builder =
+            ResourceGuardBuilder::new(registry.clone(), &self.run_id, &self.config.region);
 
         // Track all guards so they aren't dropped until we're done
         let mut guards = ResourceGuards::default();
@@ -183,8 +193,7 @@ impl<'a> BenchmarkInitializer<'a> {
                 &self.config.region,
             )
             .await?;
-            guards.iam_role =
-                Some(builder.iam_role(role_name.clone(), profile_name.clone()));
+            guards.iam_role = Some(builder.iam_role(role_name.clone(), profile_name.clone()));
             debug!(role = %role_name, profile = %profile_name, "IAM role/profile created and recorded");
             (Some(profile_name), Some(role_name))
         };
@@ -345,8 +354,11 @@ impl<'a> BenchmarkInitializer<'a> {
             }
 
             let system = detect_system(instance_type);
-            let user_data =
-                super::user_data::generate_user_data(&self.bucket_name, &self.run_id, instance_type);
+            let user_data = super::user_data::generate_user_data(
+                &self.bucket_name,
+                &self.run_id,
+                instance_type,
+            );
             let mut launch_config =
                 LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
             if let Some(subnet) = &self.config.subnet_id {
@@ -432,7 +444,10 @@ impl<'a> BenchmarkInitializer<'a> {
         Ok(instances)
     }
 
-    fn generate_certificates(&self, public_ips: &HashMap<String, String>) -> Result<(AgentCertificateMap, TlsConfig)> {
+    fn generate_certificates(
+        &self,
+        public_ips: &HashMap<String, String>,
+    ) -> Result<(AgentCertificateMap, TlsConfig)> {
         if public_ips.is_empty() {
             anyhow::bail!("No public IPs available - cannot generate TLS certificates");
         }
@@ -447,41 +462,78 @@ impl<'a> BenchmarkInitializer<'a> {
 
         let mut agent_certs = HashMap::new();
         for (instance_type, public_ip) in public_ips {
-            let cert = generate_agent_cert(&ca.cert_pem, &ca.key_pem, instance_type, Some(public_ip))
-                .with_context(|| format!("Failed to generate TLS certificate for instance type {}", instance_type))?;
-            agent_certs.insert(instance_type.clone(), (ca.cert_pem.clone(), cert.cert_pem, cert.key_pem));
+            let cert =
+                generate_agent_cert(&ca.cert_pem, &ca.key_pem, instance_type, Some(public_ip))
+                    .with_context(|| {
+                        format!(
+                            "Failed to generate TLS certificate for instance type {}",
+                            instance_type
+                        )
+                    })?;
+            agent_certs.insert(
+                instance_type.clone(),
+                (ca.cert_pem.clone(), cert.cert_pem, cert.key_pem),
+            );
         }
         Ok((agent_certs, coordinator_tls))
     }
 
     async fn upload_agents(&self, s3: &S3Client) -> Result<()> {
         if let Some(ref path) = self.agent_x86_64 {
-            s3.upload_file(&self.bucket_name, &format!("{}/agent-x86_64", self.run_id), std::path::Path::new(path)).await?;
+            s3.upload_file(
+                &self.bucket_name,
+                &format!("{}/agent-x86_64", self.run_id),
+                std::path::Path::new(path),
+            )
+            .await?;
         }
         if let Some(ref path) = self.agent_aarch64 {
-            s3.upload_file(&self.bucket_name, &format!("{}/agent-aarch64", self.run_id), std::path::Path::new(path)).await?;
+            s3.upload_file(
+                &self.bucket_name,
+                &format!("{}/agent-aarch64", self.run_id),
+                std::path::Path::new(path),
+            )
+            .await?;
         }
         Ok(())
     }
 
-    async fn upload_configs(&self, s3: &S3Client, agent_certs: &HashMap<String, (String, String, String)>) -> Result<()> {
+    async fn upload_configs(
+        &self,
+        s3: &S3Client,
+        agent_certs: &HashMap<String, (String, String, String)>,
+    ) -> Result<()> {
         for instance_type in &self.config.instance_types {
             let system = detect_system(instance_type);
-            let (ca_cert_pem, agent_cert_pem, agent_key_pem) = agent_certs.get(instance_type)
+            let (ca_cert_pem, agent_cert_pem, agent_key_pem) = agent_certs
+                .get(instance_type)
                 .map(|(ca, cert, key)| (Some(ca.clone()), Some(cert.clone()), Some(key.clone())))
                 .unwrap_or((None, None, None));
 
             let agent_config = AgentConfig {
-                run_id: self.run_id.clone(), bucket: self.bucket_name.clone(),
-                region: self.config.region.clone(), attr: self.config.attr.clone(),
-                runs: self.config.runs, instance_type: instance_type.clone(),
-                system: system.to_string(), flake_ref: self.config.flake_ref.clone(),
-                build_timeout: self.config.build_timeout, max_failures: self.config.max_failures,
+                run_id: self.run_id.clone(),
+                bucket: self.bucket_name.clone(),
+                region: self.config.region.clone(),
+                attr: self.config.attr.clone(),
+                runs: self.config.runs,
+                instance_type: instance_type.clone(),
+                system: system.to_string(),
+                flake_ref: self.config.flake_ref.clone(),
+                build_timeout: self.config.build_timeout,
+                max_failures: self.config.max_failures,
                 gc_between_runs: self.config.gc_between_runs,
-                ca_cert_pem, agent_cert_pem, agent_key_pem,
+                ca_cert_pem,
+                agent_cert_pem,
+                agent_key_pem,
             };
             let config_json = serde_json::to_string_pretty(&agent_config)?;
-            s3.upload_bytes(&self.bucket_name, &format!("{}/config-{}.json", self.run_id, instance_type), config_json.into_bytes(), "application/json").await?;
+            s3.upload_bytes(
+                &self.bucket_name,
+                &format!("{}/config-{}.json", self.run_id, instance_type),
+                config_json.into_bytes(),
+                "application/json",
+            )
+            .await?;
         }
         Ok(())
     }

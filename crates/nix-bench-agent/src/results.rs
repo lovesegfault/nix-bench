@@ -77,11 +77,7 @@ pub async fn download_config_with_tls(
 }
 
 /// Download config from S3 without validation (for polling)
-async fn download_config_raw(
-    bucket: &str,
-    run_id: &str,
-    instance_type: &str,
-) -> Result<Config> {
+async fn download_config_raw(bucket: &str, run_id: &str, instance_type: &str) -> Result<Config> {
     let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .load()
         .await;
@@ -105,12 +101,11 @@ async fn download_config_raw(
         .await
         .context("Failed to read config body from S3")?;
 
-    let json = String::from_utf8(body.into_bytes().to_vec())
-        .context("Config file is not valid UTF-8")?;
+    let json =
+        String::from_utf8(body.into_bytes().to_vec()).context("Config file is not valid UTF-8")?;
 
     // Parse without validation (we'll validate once TLS is present)
-    let config: Config = serde_json::from_str(&json)
-        .context("Failed to parse config JSON")?;
+    let config: Config = serde_json::from_str(&json).context("Failed to parse config JSON")?;
 
     Ok(config)
 }

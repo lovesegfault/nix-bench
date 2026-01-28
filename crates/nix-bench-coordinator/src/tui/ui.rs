@@ -49,7 +49,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     app.ui.list_scroll_offset = instance_list::render(frame, main_chunks[0], app);
 
     // Render instance detail (now includes build output logs)
-    if let Some(instance_key) = app.instances.order.get(app.instances.selected_index).cloned() {
+    if let Some(instance_key) = app
+        .instances
+        .order
+        .get(app.instances.selected_index)
+        .cloned()
+    {
         // Ensure scroll state exists for this instance
         app.ensure_scroll_state(&instance_key);
 
@@ -277,29 +282,65 @@ fn render_help_popup(frame: &mut Frame) {
         Line::from(""),
         Line::from(vec![Span::styled("  Navigation", section_style)]),
         Line::from(""),
-        Line::from(vec![Span::styled("  Tab          Switch focus (list/logs)", t.text())]),
-        Line::from(vec![Span::styled("  ↑ / k        Up (select / scroll)", t.text())]),
-        Line::from(vec![Span::styled("  ↓ / j        Down (select / scroll)", t.text())]),
-        Line::from(vec![Span::styled("  Home         First instance / top", t.text())]),
-        Line::from(vec![Span::styled("  End          Last instance / bottom", t.text())]),
+        Line::from(vec![Span::styled(
+            "  Tab          Switch focus (list/logs)",
+            t.text(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  ↑ / k        Up (select / scroll)",
+            t.text(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  ↓ / j        Down (select / scroll)",
+            t.text(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  Home         First instance / top",
+            t.text(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  End          Last instance / bottom",
+            t.text(),
+        )]),
         Line::from(""),
-        Line::from(vec![Span::styled("  Log Scrolling (when focused)", section_style)]),
+        Line::from(vec![Span::styled(
+            "  Log Scrolling (when focused)",
+            section_style,
+        )]),
         Line::from(""),
         Line::from(vec![Span::styled("  Ctrl+d       Page down", t.text())]),
         Line::from(vec![Span::styled("  Ctrl+u       Page up", t.text())]),
         Line::from(vec![Span::styled("  g            Jump to top", t.text())]),
-        Line::from(vec![Span::styled("  G            Jump to bottom (auto-follow)", t.text())]),
-        Line::from(vec![Span::styled("  l            Toggle fullscreen logs", t.text())]),
+        Line::from(vec![Span::styled(
+            "  G            Jump to bottom (auto-follow)",
+            t.text(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  l            Toggle fullscreen logs",
+            t.text(),
+        )]),
         Line::from(""),
         Line::from(vec![Span::styled("  General", section_style)]),
         Line::from(""),
-        Line::from(vec![Span::styled("  ? / F1       Toggle this help", t.text())]),
-        Line::from(vec![Span::styled("  q / Esc      Quit (cleanup resources)", t.text())]),
+        Line::from(vec![Span::styled(
+            "  ? / F1       Toggle this help",
+            t.text(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  q / Esc      Quit (cleanup resources)",
+            t.text(),
+        )]),
         Line::from(""),
         Line::from(vec![Span::styled("  Mouse", section_style)]),
         Line::from(""),
-        Line::from(vec![Span::styled("  Click        Select / focus panel", t.text())]),
-        Line::from(vec![Span::styled("  Scroll       Navigate (context-aware)", t.text())]),
+        Line::from(vec![Span::styled(
+            "  Click        Select / focus panel",
+            t.text(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  Scroll       Navigate (context-aware)",
+            t.text(),
+        )]),
         Line::from(""),
         Line::from(vec![Span::styled("  Status Icons", section_style)]),
         Line::from(""),
@@ -476,8 +517,12 @@ mod tests {
 
         // Add some unicode to console output
         if let Some(state) = app.instances.data.get_mut("日本語インスタンス") {
-            state.console_output.push_line("Building: こんにちは世界".to_string());
-            state.console_output.push_line("Progress: 🚀🔥✓".to_string());
+            state
+                .console_output
+                .push_line("Building: こんにちは世界".to_string());
+            state
+                .console_output
+                .push_line("Progress: 🚀🔥✓".to_string());
         }
 
         terminal.draw(|f| render(f, &mut app)).unwrap();

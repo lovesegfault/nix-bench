@@ -73,7 +73,10 @@ pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> 
 
     log_message(
         broadcaster,
-        &format!("Found {} NVMe instance store device(s): {:?}", count, devices),
+        &format!(
+            "Found {} NVMe instance store device(s): {:?}",
+            count, devices
+        ),
     );
 
     let target_dev = if count > 1 {
@@ -83,24 +86,31 @@ pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> 
         // Install mdadm if not present
         if !Path::new("/sbin/mdadm").exists() {
             log_message(broadcaster, "Installing mdadm...");
-            run_command_streaming(broadcaster, "yum", &["install", "-y", "mdadm"], &CommandConfig::with_timeout_secs(120))
-                .await?;
+            run_command_streaming(
+                broadcaster,
+                "yum",
+                &["install", "-y", "mdadm"],
+                &CommandConfig::with_timeout_secs(120),
+            )
+            .await?;
         }
 
         // Build mdadm command
         let raid_devices_arg = format!("--raid-devices={}", count);
-        let mut mdadm_args: Vec<&str> = vec![
-            "--create",
-            "/dev/md0",
-            "--level=0",
-            &raid_devices_arg,
-        ];
+        let mut mdadm_args: Vec<&str> =
+            vec!["--create", "/dev/md0", "--level=0", &raid_devices_arg];
         for dev in &devices {
             mdadm_args.push(dev);
         }
         mdadm_args.push("--force");
 
-        run_command_streaming(broadcaster, "mdadm", &mdadm_args, &CommandConfig::with_timeout_secs(60)).await?;
+        run_command_streaming(
+            broadcaster,
+            "mdadm",
+            &mdadm_args,
+            &CommandConfig::with_timeout_secs(60),
+        )
+        .await?;
 
         "/dev/md0".to_string()
     } else {
@@ -111,14 +121,26 @@ pub(crate) async fn setup_nvme(broadcaster: &Arc<LogBroadcaster>) -> Result<()> 
         broadcaster,
         &format!("Formatting {} with ext4...", target_dev),
     );
-    run_command_streaming(broadcaster, "mkfs.ext4", &["-F", &target_dev], &CommandConfig::with_timeout_secs(120)).await?;
+    run_command_streaming(
+        broadcaster,
+        "mkfs.ext4",
+        &["-F", &target_dev],
+        &CommandConfig::with_timeout_secs(120),
+    )
+    .await?;
 
     log_message(broadcaster, "Mounting NVMe storage...");
 
     // Create mount point
     std::fs::create_dir_all("/mnt/nvme").context("Failed to create /mnt/nvme")?;
 
-    run_command_streaming(broadcaster, "mount", &[&target_dev, "/mnt/nvme"], &CommandConfig::with_timeout_secs(30)).await?;
+    run_command_streaming(
+        broadcaster,
+        "mount",
+        &[&target_dev, "/mnt/nvme"],
+        &CommandConfig::with_timeout_secs(30),
+    )
+    .await?;
 
     // Create directories on NVMe
     std::fs::create_dir_all("/mnt/nvme/nix").context("Failed to create /mnt/nvme/nix")?;

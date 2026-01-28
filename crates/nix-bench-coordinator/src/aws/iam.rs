@@ -6,7 +6,9 @@ use anyhow::{Context, Result};
 use aws_sdk_iam::error::ProvideErrorMetadata;
 use aws_sdk_iam::Client;
 use chrono::Utc;
-use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use nix_bench_common::tags::{
+    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
+};
 use std::future::Future;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;

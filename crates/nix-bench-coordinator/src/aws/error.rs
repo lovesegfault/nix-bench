@@ -303,14 +303,14 @@ fn suggestion_for_code(code: &str) -> Option<String> {
         "InsufficientInstanceCapacity" | "InsufficientHostCapacity" | "InsufficientCapacity" => {
             Some("Try a different availability zone or instance type.".to_string())
         }
-        "InsufficientReservedInstanceCapacity" => {
-            Some("Your reserved instance capacity is exhausted. Try on-demand instances.".to_string())
-        }
+        "InsufficientReservedInstanceCapacity" => Some(
+            "Your reserved instance capacity is exhausted. Try on-demand instances.".to_string(),
+        ),
 
         // Limit issues
-        "InstanceLimitExceeded" | "VcpuLimitExceeded" => Some(
-            "Request a service limit increase via AWS Service Quotas console.".to_string(),
-        ),
+        "InstanceLimitExceeded" | "VcpuLimitExceeded" => {
+            Some("Request a service limit increase via AWS Service Quotas console.".to_string())
+        }
         "MaxSpotInstanceCountExceeded" => {
             Some("Reduce spot instance count or request a limit increase.".to_string())
         }

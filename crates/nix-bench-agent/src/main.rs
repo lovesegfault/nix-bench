@@ -5,9 +5,9 @@
 
 use anyhow::Result;
 use clap::Parser;
+use grpc::StatusCode;
 use nix_bench_agent::{benchmark, bootstrap, gc, grpc, logging, results};
 use nix_bench_common::RunResult;
-use grpc::StatusCode;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -234,7 +234,9 @@ async fn main() -> Result<()> {
         &args.run_id,
         &args.instance_type,
         tls_timeout,
-    ).await {
+    )
+    .await
+    {
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "Failed to download config with TLS");

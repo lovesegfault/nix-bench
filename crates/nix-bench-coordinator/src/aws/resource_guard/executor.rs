@@ -175,7 +175,10 @@ impl CleanupExecutor {
             ResourceId::SecurityGroupRule {
                 security_group_id,
                 cidr_ip,
-            } => ec2.remove_grpc_ingress_rule(security_group_id, cidr_ip).await,
+            } => {
+                ec2.remove_grpc_ingress_rule(security_group_id, cidr_ip)
+                    .await
+            }
             ResourceId::SecurityGroup(id) => {
                 // Wait for instances to terminate first
                 for instance_id in terminated_instances.iter() {

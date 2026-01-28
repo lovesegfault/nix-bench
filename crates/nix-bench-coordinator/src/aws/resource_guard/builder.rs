@@ -27,7 +27,11 @@ pub struct ResourceGuardBuilder {
 
 impl ResourceGuardBuilder {
     /// Create a new builder with the given registry and run context
-    pub fn new(registry: ResourceRegistry, run_id: impl Into<String>, region: impl Into<String>) -> Self {
+    pub fn new(
+        registry: ResourceRegistry,
+        run_id: impl Into<String>,
+        region: impl Into<String>,
+    ) -> Self {
         Self {
             registry,
             run_id: run_id.into(),

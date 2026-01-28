@@ -7,7 +7,9 @@ use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{Filter, IpPermission, IpRange, ResourceType, Tag, TagSpecification};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
-use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use nix_bench_common::tags::{
+    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
+};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -63,8 +65,18 @@ impl Ec2Client {
                     .resource_type(ResourceType::SecurityGroup)
                     .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
                     .tags(Tag::builder().key(TAG_RUN_ID).value(run_id).build())
-                    .tags(Tag::builder().key(TAG_CREATED_AT).value(&created_at).build())
-                    .tags(Tag::builder().key(TAG_STATUS).value(tags::status::CREATING).build())
+                    .tags(
+                        Tag::builder()
+                            .key(TAG_CREATED_AT)
+                            .value(&created_at)
+                            .build(),
+                    )
+                    .tags(
+                        Tag::builder()
+                            .key(TAG_STATUS)
+                            .value(tags::status::CREATING)
+                            .build(),
+                    )
                     .tags(Tag::builder().key("Name").value(&sg_name).build())
                     .build(),
             )
@@ -147,7 +159,8 @@ impl Ec2Client {
                         debug!(sg_id = %sg_id, "Security group already deleted or doesn't exist");
                         Ok(())
                     } else {
-                        Err(anyhow::Error::from(sdk_error).context("Failed to delete security group"))
+                        Err(anyhow::Error::from(sdk_error)
+                            .context("Failed to delete security group"))
                     }
                 }
             }
@@ -249,7 +262,8 @@ impl Ec2Client {
                     );
                     Ok(())
                 } else {
-                    Err(anyhow::Error::from(sdk_error).context("Failed to remove gRPC ingress rule"))
+                    Err(anyhow::Error::from(sdk_error)
+                        .context("Failed to remove gRPC ingress rule"))
                 }
             }
         }

@@ -33,7 +33,11 @@ impl DurationStats {
     /// assert_eq!(stats.count, 5);
     /// ```
     pub fn from_durations(durations: &[f64]) -> Self {
-        let valid: Vec<f64> = durations.iter().copied().filter(|x| x.is_finite()).collect();
+        let valid: Vec<f64> = durations
+            .iter()
+            .copied()
+            .filter(|x| x.is_finite())
+            .collect();
 
         if valid.is_empty() {
             return Self::default();

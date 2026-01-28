@@ -111,7 +111,10 @@ impl Ec2Client {
                     debug!(count = instance_types.len(), "All instance types validated");
                     Ok(())
                 } else {
-                    Err(AwsError::InvalidInstanceType { invalid_types: invalid }.into())
+                    Err(AwsError::InvalidInstanceType {
+                        invalid_types: invalid,
+                    }
+                    .into())
                 }
             }
             Err(e) => {
@@ -121,7 +124,10 @@ impl Ec2Client {
                 if err_str.contains("InvalidInstanceType") {
                     // Extract invalid types from the error message
                     let invalid = extract_invalid_types(&err_str);
-                    Err(AwsError::InvalidInstanceType { invalid_types: invalid }.into())
+                    Err(AwsError::InvalidInstanceType {
+                        invalid_types: invalid,
+                    }
+                    .into())
                 } else {
                     Err(anyhow::anyhow!("Failed to validate instance types: {}", e))
                 }

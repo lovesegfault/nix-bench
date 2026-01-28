@@ -56,12 +56,7 @@ impl GrpcTestFixture {
         let broadcaster = Arc::new(LogBroadcaster::new(100));
         let status = Arc::new(RwLock::new(initial_status));
 
-        let port = start_test_server(
-            broadcaster.clone(),
-            status.clone(),
-            certs.agent_tls,
-        )
-        .await;
+        let port = start_test_server(broadcaster.clone(), status.clone(), certs.agent_tls).await;
 
         Self {
             port,

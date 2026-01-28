@@ -83,9 +83,18 @@ pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
 /// Returns an error if any TLS certificate is missing.
 /// This should not happen if `validate_config()` was called first.
 pub fn get_tls_config(config: &Config) -> Result<TlsConfig, ConfigError> {
-    let ca = config.ca_cert_pem.as_ref().ok_or(ConfigError::MissingCaCert)?;
-    let cert = config.agent_cert_pem.as_ref().ok_or(ConfigError::MissingAgentCert)?;
-    let key = config.agent_key_pem.as_ref().ok_or(ConfigError::MissingAgentKey)?;
+    let ca = config
+        .ca_cert_pem
+        .as_ref()
+        .ok_or(ConfigError::MissingCaCert)?;
+    let cert = config
+        .agent_cert_pem
+        .as_ref()
+        .ok_or(ConfigError::MissingAgentCert)?;
+    let key = config
+        .agent_key_pem
+        .as_ref()
+        .ok_or(ConfigError::MissingAgentKey)?;
 
     Ok(TlsConfig {
         ca_cert_pem: ca.clone(),
@@ -254,9 +263,6 @@ mod tests {
 
         let result = load_config(file.path());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("ca_cert_pem"));
+        assert!(result.unwrap_err().to_string().contains("ca_cert_pem"));
     }
 }

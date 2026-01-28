@@ -99,7 +99,10 @@ impl TagBasedCleanup {
             return Ok(report);
         }
 
-        info!(count = resources.len(), "Found potential orphaned resources");
+        info!(
+            count = resources.len(),
+            "Found potential orphaned resources"
+        );
 
         // Group by run_id for organized cleanup
         let by_run: HashMap<String, Vec<&DiscoveredResource>> =
@@ -205,7 +208,11 @@ impl TagBasedCleanup {
                             );
                             report.skipped += 1;
                         } else {
-                            match self.iam.delete_instance_profile(&resource.resource_id).await {
+                            match self
+                                .iam
+                                .delete_instance_profile(&resource.resource_id)
+                                .await
+                            {
                                 Ok(()) => {
                                     info!(profile = %resource.resource_id, "Deleted orphaned instance profile");
                                     report.deleted += 1;
@@ -253,7 +260,9 @@ impl TagBasedCleanup {
                         }
                     }
                     // These variants are tracked but not discovered by the scanner
-                    ResourceKind::S3Object | ResourceKind::SecurityGroupRule | ResourceKind::ElasticIp => {
+                    ResourceKind::S3Object
+                    | ResourceKind::SecurityGroupRule
+                    | ResourceKind::ElasticIp => {
                         debug!(
                             resource_id = %resource.resource_id,
                             resource_type = ?resource.resource_type,

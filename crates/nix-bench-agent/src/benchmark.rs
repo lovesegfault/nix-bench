@@ -29,7 +29,7 @@ pub async fn run_nix_build(
                 &flake_ref,
                 "--impure",
                 "--no-link",
-                "-L",            // Print build logs
+                "-L", // Print build logs
                 "--log-format",
                 "bar-with-logs", // Show progress bar + build output
             ],

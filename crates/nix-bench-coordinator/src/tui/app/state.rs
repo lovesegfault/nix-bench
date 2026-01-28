@@ -77,9 +77,9 @@ impl InstancesState {
             let avg_b = averages.get(b).and_then(|v| *v);
 
             match (avg_a, avg_b) {
-                (Some(a_val), Some(b_val)) => {
-                    a_val.partial_cmp(&b_val).unwrap_or(std::cmp::Ordering::Equal)
-                }
+                (Some(a_val), Some(b_val)) => a_val
+                    .partial_cmp(&b_val)
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 (Some(_), None) => std::cmp::Ordering::Less, // With durations first
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => a.cmp(b), // Alphabetical fallback

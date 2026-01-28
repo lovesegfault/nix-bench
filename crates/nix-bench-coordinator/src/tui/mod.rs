@@ -60,8 +60,5 @@ pub enum TuiMessage {
         output: String,
     },
     /// Append to console output for an instance (incremental, avoids O(n²) copies)
-    ConsoleOutputAppend {
-        instance_type: String,
-        line: String,
-    },
+    ConsoleOutputAppend { instance_type: String, line: String },
 }

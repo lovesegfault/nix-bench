@@ -63,7 +63,9 @@ impl GrpcStatusPoller {
                 let port = *port;
                 let tls_config = self.tls_config.clone();
 
-                async move { Self::poll_single_instance(&instance_type, &public_ip, port, &tls_config).await }
+                async move {
+                    Self::poll_single_instance(&instance_type, &public_ip, port, &tls_config).await
+                }
             })
             .collect();
 
@@ -77,8 +79,8 @@ impl GrpcStatusPoller {
         port: u16,
         tls_config: &TlsConfig,
     ) -> Option<(String, GrpcInstanceStatus)> {
-        let builder =
-            GrpcChannelBuilder::new(public_ip, port, tls_config).with_options(ChannelOptions::for_polling());
+        let builder = GrpcChannelBuilder::new(public_ip, port, tls_config)
+            .with_options(ChannelOptions::for_polling());
 
         let channel = match builder.try_connect().await {
             Some(ch) => ch,
@@ -116,8 +118,16 @@ impl GrpcStatusPoller {
                         durations: status.durations,
                         dropped_log_count: status.dropped_log_count,
                         run_results,
-                        attr: if status.attr.is_empty() { None } else { Some(status.attr) },
-                        system: if status.system.is_empty() { None } else { Some(status.system) },
+                        attr: if status.attr.is_empty() {
+                            None
+                        } else {
+                            Some(status.attr)
+                        },
+                        system: if status.system.is_empty() {
+                            None
+                        } else {
+                            Some(status.system)
+                        },
                     },
                 ))
             }

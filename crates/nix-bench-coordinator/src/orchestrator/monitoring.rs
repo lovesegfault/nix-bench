@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{error, warn};
 
-use crate::aws::Ec2Client;
-use crate::tui::TuiMessage;
 use super::types::{InstanceState, InstanceStatus};
 use super::user_data::detect_bootstrap_failure;
+use crate::aws::Ec2Client;
+use crate::tui::TuiMessage;
 
 /// Poll EC2 console output for bootstrap failure detection
 /// This monitors instances during the bootstrap phase before gRPC is available

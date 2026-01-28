@@ -46,7 +46,10 @@ impl InstanceState {
 
     /// Check if this instance has completed (successfully or with failure)
     pub fn is_terminal(&self) -> bool {
-        matches!(self.status, InstanceStatus::Complete | InstanceStatus::Failed)
+        matches!(
+            self.status,
+            InstanceStatus::Complete | InstanceStatus::Failed
+        )
     }
 
     /// Check if this instance completed successfully

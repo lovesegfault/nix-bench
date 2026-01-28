@@ -91,12 +91,26 @@ mod tests {
             .unwrap();
 
         // Insert two resources
-        insert_resource(&pool, "run-query", &account_id, ResourceKind::S3Bucket, "bucket-a", "us-east-2")
-            .await
-            .unwrap();
-        insert_resource(&pool, "run-query", &account_id, ResourceKind::Ec2Instance, "i-keep", "us-east-2")
-            .await
-            .unwrap();
+        insert_resource(
+            &pool,
+            "run-query",
+            &account_id,
+            ResourceKind::S3Bucket,
+            "bucket-a",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
+        insert_resource(
+            &pool,
+            "run-query",
+            &account_id,
+            ResourceKind::Ec2Instance,
+            "i-keep",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
 
         // Delete one
         mark_resource_deleted(&pool, ResourceKind::S3Bucket, "bucket-a")
@@ -126,12 +140,26 @@ mod tests {
             .await
             .unwrap();
 
-        insert_resource(&pool, "run-types-q", &account_id, ResourceKind::S3Bucket, "bucket", "us-east-2")
-            .await
-            .unwrap();
-        insert_resource(&pool, "run-types-q", &account_id, ResourceKind::IamRole, "role", "us-east-2")
-            .await
-            .unwrap();
+        insert_resource(
+            &pool,
+            "run-types-q",
+            &account_id,
+            ResourceKind::S3Bucket,
+            "bucket",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
+        insert_resource(
+            &pool,
+            "run-types-q",
+            &account_id,
+            ResourceKind::IamRole,
+            "role",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
         insert_resource(
             &pool,
             "run-types-q",
@@ -166,12 +194,26 @@ mod tests {
             .await
             .unwrap();
 
-        insert_resource(&pool, "run-a", &account_id, ResourceKind::S3Bucket, "bucket-a", "us-east-2")
-            .await
-            .unwrap();
-        insert_resource(&pool, "run-b", &account_id, ResourceKind::S3Bucket, "bucket-b", "us-west-2")
-            .await
-            .unwrap();
+        insert_resource(
+            &pool,
+            "run-a",
+            &account_id,
+            ResourceKind::S3Bucket,
+            "bucket-a",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
+        insert_resource(
+            &pool,
+            "run-b",
+            &account_id,
+            ResourceKind::S3Bucket,
+            "bucket-b",
+            "us-west-2",
+        )
+        .await
+        .unwrap();
 
         // All should be returned
         let resources = get_undeleted_resources(&pool).await.unwrap();
@@ -204,9 +246,16 @@ mod tests {
         insert_run(&pool, "run-meta", &account_id, "us-west-1", &[], "test")
             .await
             .unwrap();
-        insert_resource(&pool, "run-meta", &account_id, ResourceKind::Ec2Instance, "i-meta", "us-west-1")
-            .await
-            .unwrap();
+        insert_resource(
+            &pool,
+            "run-meta",
+            &account_id,
+            ResourceKind::Ec2Instance,
+            "i-meta",
+            "us-west-1",
+        )
+        .await
+        .unwrap();
 
         let resources = get_run_resources(&pool, "run-meta").await.unwrap();
         assert_eq!(resources.len(), 1);

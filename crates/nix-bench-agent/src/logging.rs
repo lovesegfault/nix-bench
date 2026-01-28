@@ -22,7 +22,8 @@ impl GrpcLogger {
 
     /// Write a log line to gRPC clients
     pub fn write_line(&self, message: &str) {
-        self.broadcaster.broadcast(timestamp_millis(), message.to_string());
+        self.broadcaster
+            .broadcast(timestamp_millis(), message.to_string());
     }
 
     /// Run a command and stream its output to gRPC clients

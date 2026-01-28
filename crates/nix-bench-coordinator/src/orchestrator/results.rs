@@ -9,8 +9,8 @@ use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, ContentArrangement, Table};
 use tracing::info;
 
-use crate::config::RunConfig;
 use super::types::{InstanceState, InstanceStatus};
+use crate::config::RunConfig;
 
 /// Write results to output file
 pub async fn write_results(

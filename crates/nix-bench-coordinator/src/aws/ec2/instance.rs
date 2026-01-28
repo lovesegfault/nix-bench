@@ -4,12 +4,12 @@ use super::types::{LaunchInstanceConfig, LaunchedInstance};
 use super::Ec2Client;
 use crate::aws::error::{classify_anyhow_error, AwsError};
 use anyhow::{Context, Result};
-use aws_sdk_ec2::types::{
-    InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification,
-};
+use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
-use nix_bench_common::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use nix_bench_common::tags::{
+    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
+};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -117,7 +117,10 @@ impl Ec2Client {
     }
 
     /// Internal method to perform the actual RunInstances call
-    pub(super) async fn do_launch_instance(&self, params: LaunchParams<'_>) -> Result<LaunchedInstance> {
+    pub(super) async fn do_launch_instance(
+        &self,
+        params: LaunchParams<'_>,
+    ) -> Result<LaunchedInstance> {
         let created_at = tags::format_created_at(Utc::now());
         let mut request = self
             .client
@@ -132,12 +135,25 @@ impl Ec2Client {
                     .resource_type(ResourceType::Instance)
                     .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
                     .tags(Tag::builder().key(TAG_RUN_ID).value(params.run_id).build())
-                    .tags(Tag::builder().key(TAG_CREATED_AT).value(&created_at).build())
-                    .tags(Tag::builder().key(TAG_STATUS).value(tags::status::CREATING).build())
+                    .tags(
+                        Tag::builder()
+                            .key(TAG_CREATED_AT)
+                            .value(&created_at)
+                            .build(),
+                    )
+                    .tags(
+                        Tag::builder()
+                            .key(TAG_STATUS)
+                            .value(tags::status::CREATING)
+                            .build(),
+                    )
                     .tags(
                         Tag::builder()
                             .key("Name")
-                            .value(format!("nix-bench-{}-{}", params.run_id, params.instance_type))
+                            .value(format!(
+                                "nix-bench-{}-{}",
+                                params.run_id, params.instance_type
+                            ))
                             .build(),
                     )
                     .tags(

@@ -67,9 +67,9 @@ impl Theme {
             fg_dim: Color::Rgb(147, 153, 178), // Subtext0
 
             // Accents
-            accent_primary: Color::Rgb(137, 180, 250),   // Blue
+            accent_primary: Color::Rgb(137, 180, 250), // Blue
             accent_secondary: Color::Rgb(180, 190, 254), // Lavender
-            accent_tertiary: Color::Rgb(250, 179, 135),  // Peach
+            accent_tertiary: Color::Rgb(250, 179, 135), // Peach
 
             // Semantic
             success: Color::Rgb(166, 227, 161), // Green
@@ -78,29 +78,29 @@ impl Theme {
             info: Color::Rgb(137, 180, 250),    // Blue
 
             // Status
-            status_pending: Color::Rgb(147, 153, 178),   // Subtext0 (gray)
+            status_pending: Color::Rgb(147, 153, 178), // Subtext0 (gray)
             status_launching: Color::Rgb(249, 226, 175), // Yellow
-            status_starting: Color::Rgb(250, 179, 135),  // Peach (waiting for agent)
-            status_running: Color::Rgb(137, 180, 250),   // Blue
-            status_complete: Color::Rgb(166, 227, 161),  // Green
-            status_failed: Color::Rgb(243, 139, 168),    // Red
+            status_starting: Color::Rgb(250, 179, 135), // Peach (waiting for agent)
+            status_running: Color::Rgb(137, 180, 250), // Blue
+            status_complete: Color::Rgb(166, 227, 161), // Green
+            status_failed: Color::Rgb(243, 139, 168),  // Red
             status_terminated: Color::Rgb(108, 112, 134), // Overlay0 (dim gray)
 
             // Log levels
-            log_trace: Color::Rgb(108, 112, 134),  // Overlay0 (dim)
-            log_debug: Color::Rgb(148, 226, 213),  // Teal
-            log_info: Color::Rgb(137, 180, 250),   // Blue
-            log_warn: Color::Rgb(249, 226, 175),   // Yellow
-            log_error: Color::Rgb(243, 139, 168),  // Red
+            log_trace: Color::Rgb(108, 112, 134), // Overlay0 (dim)
+            log_debug: Color::Rgb(148, 226, 213), // Teal
+            log_info: Color::Rgb(137, 180, 250),  // Blue
+            log_warn: Color::Rgb(249, 226, 175),  // Yellow
+            log_error: Color::Rgb(243, 139, 168), // Red
 
             // UI elements
-            border_focused: Color::Rgb(180, 190, 254),  // Lavender
-            border_unfocused: Color::Rgb(69, 71, 90),   // Surface1
+            border_focused: Color::Rgb(180, 190, 254), // Lavender
+            border_unfocused: Color::Rgb(69, 71, 90),  // Surface1
             title_unfocused: Color::Rgb(166, 173, 200), // Subtext1 - readable on dark bg
-            selection_bg: Color::Rgb(69, 71, 90),       // Surface1
-            highlight: Color::Rgb(203, 166, 247),       // Mauve
-            header_bg: Color::Rgb(49, 50, 68),          // Surface0
-            scrollbar_track: Color::Rgb(49, 50, 68),    // Surface0
+            selection_bg: Color::Rgb(69, 71, 90),      // Surface1
+            highlight: Color::Rgb(203, 166, 247),      // Mauve
+            header_bg: Color::Rgb(49, 50, 68),         // Surface0
+            scrollbar_track: Color::Rgb(49, 50, 68),   // Surface0
             scrollbar_thumb: Color::Rgb(137, 180, 250), // Blue
         }
     }
@@ -162,9 +162,7 @@ impl Theme {
 
     /// Style for bold text
     pub fn bold(&self) -> Style {
-        Style::default()
-            .fg(self.fg)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(self.fg).add_modifier(Modifier::BOLD)
     }
 
     /// Style for success text
@@ -204,9 +202,7 @@ impl Theme {
 
     /// Keyboard shortcut badge style
     pub fn key_badge(&self) -> Style {
-        Style::default()
-            .fg(Color::Rgb(30, 30, 46))
-            .bg(self.fg_dim)
+        Style::default().fg(Color::Rgb(30, 30, 46)).bg(self.fg_dim)
     }
 
     /// Scrollbar thumb style

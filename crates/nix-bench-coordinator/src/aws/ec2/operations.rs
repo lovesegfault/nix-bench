@@ -102,19 +102,11 @@ impl Ec2Operations for Ec2Client {
         Ec2Client::delete_security_group(self, security_group_id).await
     }
 
-    async fn add_grpc_ingress_rule(
-        &self,
-        security_group_id: &str,
-        cidr_ip: &str,
-    ) -> Result<()> {
+    async fn add_grpc_ingress_rule(&self, security_group_id: &str, cidr_ip: &str) -> Result<()> {
         Ec2Client::add_grpc_ingress_rule(self, security_group_id, cidr_ip).await
     }
 
-    async fn remove_grpc_ingress_rule(
-        &self,
-        security_group_id: &str,
-        cidr_ip: &str,
-    ) -> Result<()> {
+    async fn remove_grpc_ingress_rule(&self, security_group_id: &str, cidr_ip: &str) -> Result<()> {
         Ec2Client::remove_grpc_ingress_rule(self, security_group_id, cidr_ip).await
     }
 }

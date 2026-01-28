@@ -2,7 +2,9 @@
 //!
 //! Provides crypto provider initialization and TLS certificate generation helpers.
 
-use nix_bench_common::tls::{generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig};
+use nix_bench_common::tls::{
+    generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig,
+};
 use std::sync::Once;
 
 /// Default test run ID for TLS certificates
@@ -72,8 +74,8 @@ pub fn generate_test_certs_for_ip(ip: &str) -> TestTlsCerts {
     let agent_cert = generate_agent_cert(&ca.cert_pem, &ca.key_pem, TEST_INSTANCE_TYPE, Some(ip))
         .expect("Failed to generate agent cert");
 
-    let coord_cert =
-        generate_coordinator_cert(&ca.cert_pem, &ca.key_pem).expect("Failed to generate coordinator cert");
+    let coord_cert = generate_coordinator_cert(&ca.cert_pem, &ca.key_pem)
+        .expect("Failed to generate coordinator cert");
 
     TestTlsCerts {
         agent_tls: TlsConfig {
@@ -107,8 +109,8 @@ pub fn generate_multi_instance_certs(
     init_crypto();
     let ca = generate_ca("test-multi-instance").expect("Failed to generate CA");
 
-    let coord_cert =
-        generate_coordinator_cert(&ca.cert_pem, &ca.key_pem).expect("Failed to generate coordinator cert");
+    let coord_cert = generate_coordinator_cert(&ca.cert_pem, &ca.key_pem)
+        .expect("Failed to generate coordinator cert");
     let coordinator_tls = TlsConfig {
         ca_cert_pem: ca.cert_pem.clone(),
         cert_pem: coord_cert.cert_pem,

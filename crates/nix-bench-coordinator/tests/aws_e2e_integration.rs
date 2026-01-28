@@ -103,9 +103,10 @@ while true; do echo "OK" | nc -l 50051; done &
 echo "Listener started on port 50051"
 "#;
 
-    let launch_config = LaunchInstanceConfig::new(&run_id, TEST_INSTANCE_TYPE, "x86_64-linux", user_data)
-        .with_security_group(&sg_id)
-        .with_iam_profile(&role_name);
+    let launch_config =
+        LaunchInstanceConfig::new(&run_id, TEST_INSTANCE_TYPE, "x86_64-linux", user_data)
+            .with_security_group(&sg_id)
+            .with_iam_profile(&role_name);
     let instance = ec2
         .launch_instance(launch_config)
         .await
@@ -115,7 +116,8 @@ echo "Listener started on port 50051"
 
     // === Step 5: Wait for running and get dynamic public IP ===
     println!("Waiting for instance to be running...");
-    let public_ip = ec2.wait_for_running(&instance.instance_id, Some(INSTANCE_TIMEOUT_SECS))
+    let public_ip = ec2
+        .wait_for_running(&instance.instance_id, Some(INSTANCE_TIMEOUT_SECS))
         .await
         .expect("Instance should reach running state")
         .expect("Instance should have a public IP");
@@ -128,15 +130,13 @@ echo "Listener started on port 50051"
 
     // Try to connect to port 50051
     let addr = format!("{}:50051", public_ip);
-    let connected = tokio::time::timeout(
-        Duration::from_secs(60),
-        try_connect_loop(&addr),
-    )
-    .await;
+    let connected = tokio::time::timeout(Duration::from_secs(60), try_connect_loop(&addr)).await;
 
     match connected {
         Ok(true) => println!("Successfully connected to instance on port 50051"),
-        Ok(false) => println!("Warning: Could not connect to instance (may be expected in some VPC configs)"),
+        Ok(false) => {
+            println!("Warning: Could not connect to instance (may be expected in some VPC configs)")
+        }
         Err(_) => println!("Warning: Connection attempt timed out"),
     }
 

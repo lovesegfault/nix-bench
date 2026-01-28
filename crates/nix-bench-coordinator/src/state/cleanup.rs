@@ -83,10 +83,10 @@ pub async fn cleanup_resources() -> Result<()> {
         let iam = IamClient::new(&region).await?;
 
         // Partition resources into cleanup order
-        let (instances, other, security_groups) = partition_resources_for_cleanup(
-            region_resources.into_iter().cloned().collect(),
-            |r| r.resource_type,
-        );
+        let (instances, other, security_groups) =
+            partition_resources_for_cleanup(region_resources.into_iter().cloned().collect(), |r| {
+                r.resource_type
+            });
 
         // Terminate EC2 instances
         for resource in &instances {

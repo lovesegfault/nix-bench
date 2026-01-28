@@ -136,9 +136,16 @@ mod tests {
         let account_id = test_account_id();
 
         let instances = vec!["c7a.medium".to_string(), "c7g.medium".to_string()];
-        insert_run(&pool, "run-multi", &account_id, "us-west-2", &instances, "firefox")
-            .await
-            .unwrap();
+        insert_run(
+            &pool,
+            "run-multi",
+            &account_id,
+            "us-west-2",
+            &instances,
+            "firefox",
+        )
+        .await
+        .unwrap();
 
         // Verify instances are stored as JSON
         let instances_json: String =
@@ -194,23 +201,52 @@ mod tests {
             .unwrap();
 
         // Insert different resource types
-        insert_resource(&pool, "run-types", &account_id, ResourceKind::S3Bucket, "bucket-1", "us-east-2")
-            .await
-            .unwrap();
-        insert_resource(&pool, "run-types", &account_id, ResourceKind::Ec2Instance, "i-123456", "us-east-2")
-            .await
-            .unwrap();
-        insert_resource(&pool, "run-types", &account_id, ResourceKind::SecurityGroup, "sg-789", "us-east-2")
-            .await
-            .unwrap();
-        insert_resource(&pool, "run-types", &account_id, ResourceKind::IamRole, "role-xyz", "us-east-2")
-            .await
-            .unwrap();
+        insert_resource(
+            &pool,
+            "run-types",
+            &account_id,
+            ResourceKind::S3Bucket,
+            "bucket-1",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
+        insert_resource(
+            &pool,
+            "run-types",
+            &account_id,
+            ResourceKind::Ec2Instance,
+            "i-123456",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
+        insert_resource(
+            &pool,
+            "run-types",
+            &account_id,
+            ResourceKind::SecurityGroup,
+            "sg-789",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
+        insert_resource(
+            &pool,
+            "run-types",
+            &account_id,
+            ResourceKind::IamRole,
+            "role-xyz",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
 
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM resources WHERE run_id = 'run-types'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM resources WHERE run_id = 'run-types'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, 4);
     }
 
@@ -222,17 +258,23 @@ mod tests {
         insert_run(&pool, "run-del", &account_id, "us-east-2", &[], "test")
             .await
             .unwrap();
-        insert_resource(&pool, "run-del", &account_id, ResourceKind::S3Bucket, "del-bucket", "us-east-2")
-            .await
-            .unwrap();
-
-        // Verify not deleted initially
-        let deleted_at: Option<String> = sqlx::query_scalar(
-            "SELECT deleted_at FROM resources WHERE resource_id = 'del-bucket'",
+        insert_resource(
+            &pool,
+            "run-del",
+            &account_id,
+            ResourceKind::S3Bucket,
+            "del-bucket",
+            "us-east-2",
         )
-        .fetch_one(&pool)
         .await
         .unwrap();
+
+        // Verify not deleted initially
+        let deleted_at: Option<String> =
+            sqlx::query_scalar("SELECT deleted_at FROM resources WHERE resource_id = 'del-bucket'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(deleted_at.is_none());
 
         // Mark as deleted
@@ -241,12 +283,11 @@ mod tests {
             .unwrap();
 
         // Verify now deleted
-        let deleted_at: Option<String> = sqlx::query_scalar(
-            "SELECT deleted_at FROM resources WHERE resource_id = 'del-bucket'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let deleted_at: Option<String> =
+            sqlx::query_scalar("SELECT deleted_at FROM resources WHERE resource_id = 'del-bucket'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(deleted_at.is_some());
     }
 
@@ -258,31 +299,36 @@ mod tests {
         insert_run(&pool, "run-idem", &account_id, "us-east-2", &[], "test")
             .await
             .unwrap();
-        insert_resource(&pool, "run-idem", &account_id, ResourceKind::Ec2Instance, "i-idem", "us-east-2")
-            .await
-            .unwrap();
+        insert_resource(
+            &pool,
+            "run-idem",
+            &account_id,
+            ResourceKind::Ec2Instance,
+            "i-idem",
+            "us-east-2",
+        )
+        .await
+        .unwrap();
 
         // Mark as deleted twice - should not error
         mark_resource_deleted(&pool, ResourceKind::Ec2Instance, "i-idem")
             .await
             .unwrap();
-        let first_deleted_at: String = sqlx::query_scalar(
-            "SELECT deleted_at FROM resources WHERE resource_id = 'i-idem'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let first_deleted_at: String =
+            sqlx::query_scalar("SELECT deleted_at FROM resources WHERE resource_id = 'i-idem'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         // Second deletion should not update the timestamp
         mark_resource_deleted(&pool, ResourceKind::Ec2Instance, "i-idem")
             .await
             .unwrap();
-        let second_deleted_at: String = sqlx::query_scalar(
-            "SELECT deleted_at FROM resources WHERE resource_id = 'i-idem'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let second_deleted_at: String =
+            sqlx::query_scalar("SELECT deleted_at FROM resources WHERE resource_id = 'i-idem'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(first_deleted_at, second_deleted_at);
     }
@@ -297,30 +343,33 @@ mod tests {
             .unwrap();
 
         // Initial status is running
-        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE run_id = 'run-status'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM runs WHERE run_id = 'run-status'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status, "running");
 
         // Update to completed
         update_run_status(&pool, "run-status", RunStatus::Completed)
             .await
             .unwrap();
-        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE run_id = 'run-status'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM runs WHERE run_id = 'run-status'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status, "completed");
 
         // Update to failed
         update_run_status(&pool, "run-status", RunStatus::Failed)
             .await
             .unwrap();
-        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE run_id = 'run-status'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM runs WHERE run_id = 'run-status'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(status, "failed");
     }
 }

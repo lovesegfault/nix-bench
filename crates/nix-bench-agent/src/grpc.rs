@@ -2,7 +2,10 @@
 
 use anyhow::Result;
 use nix_bench_common::{RunResult, TlsConfig};
-use nix_bench_proto::{LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult, StatusCode as ProtoStatusCode, StatusRequest, StatusResponse, StreamLogsRequest};
+use nix_bench_proto::{
+    LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult,
+    StatusCode as ProtoStatusCode, StatusRequest, StatusResponse, StreamLogsRequest,
+};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -282,7 +285,13 @@ pub async fn run_grpc_server(
 ) -> Result<()> {
     let addr = format!("0.0.0.0:{}", port).parse()?;
 
-    let service = LogStreamService::new(broadcaster, run_id, instance_type, status, shutdown_token.clone());
+    let service = LogStreamService::new(
+        broadcaster,
+        run_id,
+        instance_type,
+        status,
+        shutdown_token.clone(),
+    );
 
     let tls = tls_config.server_tls_config()?;
     info!(%addr, "Starting gRPC server with mTLS");

@@ -33,8 +33,12 @@ impl ResourceId {
             ResourceId::Ec2Instance(_) => ResourceKind::Ec2Instance.cleanup_priority(),
             ResourceId::S3Bucket(_) => ResourceKind::S3Bucket.cleanup_priority(),
             ResourceId::IamRole(_) => ResourceKind::IamRole.cleanup_priority(),
-            ResourceId::IamInstanceProfile(_) => ResourceKind::IamInstanceProfile.cleanup_priority(),
-            ResourceId::SecurityGroupRule { .. } => ResourceKind::SecurityGroupRule.cleanup_priority(),
+            ResourceId::IamInstanceProfile(_) => {
+                ResourceKind::IamInstanceProfile.cleanup_priority()
+            }
+            ResourceId::SecurityGroupRule { .. } => {
+                ResourceKind::SecurityGroupRule.cleanup_priority()
+            }
             ResourceId::SecurityGroup(_) => ResourceKind::SecurityGroup.cleanup_priority(),
         }
     }

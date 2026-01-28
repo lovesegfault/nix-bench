@@ -124,13 +124,22 @@ impl<'a> BenchmarkRunner<'a> {
         &self,
         instances: &HashMap<String, InstanceState>,
         tx: mpsc::Sender<TuiMessage>,
+        cancel: CancellationToken,
     ) {
         let instances_for_logs = instances.clone();
         let region = self.config.aws.region.clone();
         let timeout_secs = self.config.flags.timeout;
         let start_time = Instant::now();
         tokio::spawn(async move {
-            poll_bootstrap_status(instances_for_logs, tx, region, timeout_secs, start_time).await;
+            poll_bootstrap_status(
+                instances_for_logs,
+                tx,
+                region,
+                timeout_secs,
+                start_time,
+                cancel,
+            )
+            .await;
         });
     }
 
@@ -334,6 +343,7 @@ pub async fn run_init_task(
     cancel: CancellationToken,
     cleanup_rx: mpsc::Receiver<CleanupRequest>,
 ) -> Result<InitResult> {
+    let cancel_for_monitoring = cancel.clone();
     let reporter = ChannelReporter::new(tx.clone(), cancel);
     let runner = BenchmarkRunner::new(
         &config,
@@ -360,6 +370,9 @@ pub async fn run_init_task(
     // Switch to running phase
     let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
 
+    // Clone TLS config for cleanup executor before moving into streaming
+    let tls_for_cleanup = Some(coordinator_tls_config.clone());
+
     // Start gRPC log streaming via shared runner
     runner.start_streaming(
         &instances_with_ips,
@@ -368,13 +381,21 @@ pub async fn run_init_task(
     );
 
     // Start bootstrap failure monitoring via shared runner
-    runner.start_bootstrap_monitoring(&instances, tx.clone());
+    runner.start_bootstrap_monitoring(&instances, tx.clone(), cancel_for_monitoring);
 
     // Spawn cleanup executor to handle cleanup requests from TUI
     let region_for_cleanup = config.aws.region.clone();
+    let run_id_for_cleanup = run_id.clone();
     let tx_for_cleanup = tx.clone();
     let cleanup_handle = tokio::spawn(async move {
-        cleanup_executor(cleanup_rx, region_for_cleanup, tx_for_cleanup).await;
+        cleanup_executor(
+            cleanup_rx,
+            region_for_cleanup,
+            tx_for_cleanup,
+            run_id_for_cleanup,
+            tls_for_cleanup,
+        )
+        .await;
     });
 
     Ok(InitResult { cleanup_handle })

@@ -14,8 +14,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use super::types::{InstanceState, InstanceStatus};
-use crate::aws::{Ec2Client, IamClient, S3Client, classify_anyhow_error};
+use crate::aws::{Ec2Client, IamClient, S3Client, classify_anyhow_error, send_ack_complete};
 use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
+use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
 
 /// Request to cleanup resources
 #[derive(Debug, Clone)]
@@ -55,10 +56,15 @@ async fn send_cleanup_progress(tx: &mpsc::Sender<TuiMessage>, progress: CleanupP
 /// This is the single entry point for all resource cleanup:
 /// - Single instance terminations (sent when benchmarks complete)
 /// - Full cleanup (sent when user quits)
+///
+/// The optional `tls_config` is used to send acknowledgment RPCs to agents
+/// before terminating their instances for a clean shutdown.
 pub async fn cleanup_executor(
     mut rx: mpsc::Receiver<CleanupRequest>,
     region: String,
     tx: mpsc::Sender<TuiMessage>,
+    run_id: String,
+    tls_config: Option<nix_bench_common::TlsConfig>,
 ) {
     let ec2 = match Ec2Client::new(&region).await {
         Ok(c) => c,
@@ -78,8 +84,13 @@ pub async fn cleanup_executor(
                 info!(
                     instance_type = %instance_type,
                     instance_id = %instance_id,
-                    "Terminating completed instance"
+                    "Terminating instance"
                 );
+
+                // Send ack to agent before terminating so it can shut down cleanly
+                if let (Some(ip), Some(tls)) = (&public_ip, &tls_config) {
+                    send_ack_complete(ip, DEFAULT_GRPC_PORT, &run_id, tls).await;
+                }
 
                 match ec2.terminate_instance(&instance_id).await {
                     Ok(()) => {

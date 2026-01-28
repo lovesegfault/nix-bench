@@ -124,10 +124,21 @@ async fn main() -> Result<()> {
     );
 
     // Get TLS config (required - will fail if missing)
-    let tls_config = nix_bench_agent::config::get_tls_config(&config).map_err(|e| {
-        error!(error = %e, "TLS configuration is required but missing");
-        anyhow::anyhow!("TLS configuration is required: {}", e)
-    })?;
+    let tls_config = match nix_bench_agent::config::get_tls_config(&config) {
+        Ok(tls) => tls,
+        Err(e) => {
+            error!(error = %e, "TLS configuration is required but missing");
+            logger.write_line(&format!("FATAL: TLS configuration missing: {}", e));
+            {
+                let mut s = status.write().await;
+                s.status = StatusCode::Failed;
+                s.error_message = format!("TLS configuration missing: {}", e);
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            shutdown_token.cancel();
+            return Err(anyhow::anyhow!("TLS configuration is required: {}", e));
+        }
+    };
 
     // === Start gRPC Server with mTLS ===
     info!("Starting gRPC server with mTLS");

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
 use super::types::{InstanceState, InstanceStatus};
@@ -15,13 +16,16 @@ use crate::aws::Ec2Client;
 use crate::tui::TuiMessage;
 
 /// Poll EC2 console output for bootstrap failure detection
-/// This monitors instances during the bootstrap phase before gRPC is available
+/// This monitors instances during the bootstrap phase before gRPC is available.
+/// Exits when all instances have been checked and failed, timeout is reached,
+/// or the cancellation token is triggered.
 pub async fn poll_bootstrap_status(
     instances: HashMap<String, InstanceState>,
     tx: mpsc::Sender<TuiMessage>,
     region: String,
     timeout_secs: u64,
     start_time: Instant,
+    cancel: CancellationToken,
 ) {
     let ec2 = match Ec2Client::new(&region).await {
         Ok(c) => c,
@@ -101,6 +105,12 @@ pub async fn poll_bootstrap_status(
             }
         }
 
-        tokio::time::sleep(POLL_INTERVAL).await;
+        // Wait with cancellation support
+        tokio::select! {
+            _ = tokio::time::sleep(POLL_INTERVAL) => {}
+            _ = cancel.cancelled() => {
+                break;
+            }
+        }
     }
 }

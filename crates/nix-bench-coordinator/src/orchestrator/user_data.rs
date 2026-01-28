@@ -25,11 +25,35 @@ pub fn detect_bootstrap_failure(console_output: &str) -> Option<String> {
     None
 }
 
-/// Generate user-data script for an instance
+/// Validate that a user-data input is safe for shell interpolation.
+///
+/// Rejects characters that could break double-quoted bash strings
+/// or enable injection (`"`, `\`, `` ` ``, `$`, newlines).
+fn validate_shell_input(value: &str, field_name: &str) -> Result<(), String> {
+    const FORBIDDEN: &[char] = &['"', '\\', '`', '$', '\n', '\r'];
+    if let Some(bad) = value.chars().find(|c| FORBIDDEN.contains(c)) {
+        return Err(format!(
+            "{field_name} contains forbidden character: {bad:?}"
+        ));
+    }
+    if value.is_empty() {
+        return Err(format!("{field_name} cannot be empty"));
+    }
+    Ok(())
+}
+
+/// Generate user-data script for an instance.
 ///
 /// The agent now handles all setup (NVMe, Nix installation) internally.
 /// This script just downloads and starts the agent with CLI args.
+///
+/// # Panics
+/// Panics if any input contains characters unsafe for shell interpolation.
 pub fn generate_user_data(bucket: &str, run_id: &str, instance_type: &str) -> String {
+    // Validate inputs before interpolation into shell script
+    validate_shell_input(bucket, "bucket").expect("invalid bucket name for user data");
+    validate_shell_input(run_id, "run_id").expect("invalid run_id for user data");
+    validate_shell_input(instance_type, "instance_type").expect("invalid instance_type for user data");
     format!(
         r#"#!/bin/bash
 set -euo pipefail
@@ -216,6 +240,30 @@ Agent started successfully
         // Verify it uses ${ARCH} for architecture detection (not hardcoded)
         assert!(script.contains("${ARCH}"));
         assert!(script.contains("ARCH=$(uname -m)"));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid bucket name")]
+    fn test_generate_user_data_rejects_shell_injection() {
+        generate_user_data("bucket\"; rm -rf /; echo \"", "run-123", "c6i.xlarge");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid run_id")]
+    fn test_generate_user_data_rejects_dollar_sign() {
+        generate_user_data("bucket", "$(whoami)", "c6i.xlarge");
+    }
+
+    #[test]
+    fn test_validate_shell_input_accepts_valid_inputs() {
+        assert!(validate_shell_input("nix-bench-abc123", "test").is_ok());
+        assert!(validate_shell_input("c7i.metal", "test").is_ok());
+        assert!(validate_shell_input("01939d1e-7b3f-76ad-a77f-abcdef012345", "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_shell_input_rejects_empty() {
+        assert!(validate_shell_input("", "test").is_err());
     }
 
     #[test]

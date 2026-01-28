@@ -145,16 +145,23 @@ pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError
     }
 }
 
-/// Classify an error from an anyhow::Error.
+/// Classify an error from an anyhow::Error by extracting the AWS error code.
 ///
-/// This is a fallback for when we don't have direct access to the SDK error.
-/// All AWS SDK errors should be classified via `classify_aws_error` first;
-/// this function only provides a generic SDK error passthrough.
+/// Walks the error's debug representation to find AWS error codes and
+/// classifies them using the same logic as `classify_aws_error`.
+/// Uses the full debug string as the message for classification, since
+/// anyhow's `.to_string()` only returns the outermost context, not the
+/// inner SDK error details needed for pattern matching.
 pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
-    tracing::warn!(
-        error = %error,
-        "classify_anyhow_error fallback reached — consider using classify_aws_error instead"
-    );
+    let debug_str = format!("{:?}", error);
+
+    // Try to extract an AWS error code from the debug representation
+    if let Some(code) = extract_error_code(&debug_str) {
+        // Pass the full debug string as message so classify_aws_error can
+        // match on inner error details (e.g., "iamInstanceProfile" in the
+        // SDK error message, not just the anyhow context)
+        return classify_aws_error(Some(&code), Some(&debug_str));
+    }
 
     AwsError::Sdk {
         code: None,
@@ -212,41 +219,34 @@ const LIMIT_CODES: &[&str] = &[
 /// Known AWS error codes for unsupported configurations
 const UNSUPPORTED_CODES: &[&str] = &["Unsupported", "UnsupportedOperation"];
 
+/// All known AWS error code lists for extraction from debug strings
+const ALL_KNOWN_CODE_LISTS: &[&[&str]] = &[
+    NOT_FOUND_CODES,
+    ALREADY_EXISTS_CODES,
+    THROTTLING_CODES,
+    DEPENDENCY_CODES,
+    CAPACITY_CODES,
+    LIMIT_CODES,
+    UNSUPPORTED_CODES,
+];
+
 /// Extract an AWS error code from a debug string representation
 fn extract_error_code(debug_str: &str) -> Option<String> {
-    // Check for capacity codes
-    for code in CAPACITY_CODES {
-        if debug_str.contains(code) {
-            return Some((*code).to_string());
+    // Check all known code lists
+    for code_list in ALL_KNOWN_CODE_LISTS {
+        for code in *code_list {
+            if debug_str.contains(code) {
+                return Some((*code).to_string());
+            }
         }
     }
 
-    // Check for limit codes
-    for code in LIMIT_CODES {
-        if debug_str.contains(code) {
-            return Some((*code).to_string());
-        }
+    // Check for IAM propagation delay patterns
+    if debug_str.contains("InvalidParameterValue") && debug_str.contains("iamInstanceProfile") {
+        return Some("InvalidParameterValue".to_string());
     }
-
-    // Check for unsupported codes
-    for code in UNSUPPORTED_CODES {
-        if debug_str.contains(code) {
-            return Some((*code).to_string());
-        }
-    }
-
-    // Check for not-found codes
-    for code in NOT_FOUND_CODES {
-        if debug_str.contains(code) {
-            return Some((*code).to_string());
-        }
-    }
-
-    // Check for throttling codes
-    for code in THROTTLING_CODES {
-        if debug_str.contains(code) {
-            return Some((*code).to_string());
-        }
+    if debug_str.contains("Invalid IAM Instance Profile") {
+        return Some("InvalidParameterValue".to_string());
     }
 
     // Try to extract any code that looks like an AWS error code pattern

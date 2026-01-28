@@ -46,7 +46,7 @@ impl Ec2Client {
             "x86_64"
         };
 
-        // Check cache first
+        // Check cache first (hold lock briefly)
         {
             let cache = self.ami_cache.lock().unwrap();
             if let Some(ami) = cache.get(arch_filter) {
@@ -55,14 +55,18 @@ impl Ec2Client {
             }
         }
 
-        // Not cached, fetch from AWS
+        // Not cached, fetch from AWS (outside lock)
         let ami = self.fetch_al2023_ami(arch_filter).await?;
 
-        // Store in cache
-        {
+        // Use entry API to avoid TOCTOU race: if another task raced and
+        // already inserted while we were fetching, use the existing value.
+        let ami = {
             let mut cache = self.ami_cache.lock().unwrap();
-            cache.insert(arch_filter.to_string(), ami.clone());
-        }
+            cache
+                .entry(arch_filter.to_string())
+                .or_insert(ami)
+                .clone()
+        };
 
         debug!(ami = %ami, arch = %arch, "Found and cached AL2023 AMI");
         Ok(ami)

@@ -226,6 +226,50 @@ impl GrpcLogClient {
 
     /// Inner streaming logic without wait_for_ready - used for testing
     pub async fn stream_to_channel_inner(&self, tx: mpsc::Sender<TuiMessage>) -> Result<()> {
+        self.stream_logs_with(|log_entry| {
+            let msg = TuiMessage::ConsoleOutputAppend {
+                instance_type: self.instance_type.clone(),
+                line: log_entry.message,
+            };
+            let tx = tx.clone();
+            async move { tx.send(msg).await.is_ok() }
+        })
+        .await
+    }
+
+    /// Spawn the log streaming task in the background
+    pub fn spawn_stream(self, tx: mpsc::Sender<TuiMessage>) -> tokio::task::JoinHandle<Result<()>> {
+        tokio::spawn(async move { self.stream_to_channel(tx).await })
+    }
+
+    /// Stream logs from the agent and print to stdout (for no-TUI mode)
+    pub async fn stream_to_stdout(&self) -> Result<()> {
+        self.wait_for_ready(Duration::from_secs(300), Duration::from_secs(30))
+            .await
+            .context("Agent not ready for streaming")?;
+
+        let instance_type = self.instance_type.clone();
+        self.stream_logs_with(|log_entry| {
+            println!("[{}] {}", instance_type, log_entry.message);
+            async { true }
+        })
+        .await
+    }
+
+    /// Spawn the stdout streaming task in the background
+    pub fn spawn_stream_stdout(self) -> tokio::task::JoinHandle<Result<()>> {
+        tokio::spawn(async move { self.stream_to_stdout().await })
+    }
+
+    /// Shared log streaming implementation.
+    ///
+    /// Connects to the agent, starts the log stream, and calls `on_entry` for
+    /// each received log entry. If `on_entry` returns `false`, streaming stops.
+    async fn stream_logs_with<F, Fut>(&self, on_entry: F) -> Result<()>
+    where
+        F: Fn(nix_bench_proto::LogEntry) -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
         let mut client = self
             .connect_with_retry(30, Duration::from_secs(2))
             .await
@@ -252,15 +296,10 @@ impl GrpcLogClient {
         while let Some(result) = stream.next().await {
             match result {
                 Ok(log_entry) => {
-                    let msg = TuiMessage::ConsoleOutputAppend {
-                        instance_type: self.instance_type.clone(),
-                        line: log_entry.message,
-                    };
-
-                    if tx.send(msg).await.is_err() {
+                    if !on_entry(log_entry).await {
                         debug!(
                             instance_type = %self.instance_type,
-                            "TUI channel closed, stopping log stream"
+                            "Log sink closed, stopping stream"
                         );
                         break;
                     }
@@ -277,67 +316,6 @@ impl GrpcLogClient {
         }
 
         info!(instance_type = %self.instance_type, "Log stream completed");
-
         Ok(())
-    }
-
-    /// Spawn the log streaming task in the background
-    pub fn spawn_stream(self, tx: mpsc::Sender<TuiMessage>) -> tokio::task::JoinHandle<Result<()>> {
-        tokio::spawn(async move { self.stream_to_channel(tx).await })
-    }
-
-    /// Stream logs from the agent and print to stdout (for no-TUI mode)
-    pub async fn stream_to_stdout(&self) -> Result<()> {
-        self.wait_for_ready(Duration::from_secs(300), Duration::from_secs(30))
-            .await
-            .context("Agent not ready for streaming")?;
-
-        let mut client = self
-            .connect_with_retry(30, Duration::from_secs(2))
-            .await
-            .context("Failed to establish gRPC connection")?;
-
-        let request = StreamLogsRequest {
-            instance_type: self.instance_type.clone(),
-            run_id: self.run_id.clone(),
-        };
-
-        info!(
-            instance_type = %self.instance_type,
-            run_id = %self.run_id,
-            "Starting log stream to stdout"
-        );
-
-        let response = client
-            .stream_logs(request)
-            .await
-            .context("Failed to start log stream")?;
-
-        let mut stream = response.into_inner();
-
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(log_entry) => {
-                    println!("[{}] {}", self.instance_type, log_entry.message);
-                }
-                Err(status) => {
-                    error!(
-                        instance_type = %self.instance_type,
-                        status = %status,
-                        "Log stream error"
-                    );
-                    return Err(anyhow::anyhow!("Log stream error: {}", status));
-                }
-            }
-        }
-
-        info!(instance_type = %self.instance_type, "Log stream completed");
-
-        Ok(())
-    }
-
-    /// Spawn the stdout streaming task in the background
-    pub fn spawn_stream_stdout(self) -> tokio::task::JoinHandle<Result<()>> {
-        tokio::spawn(async move { self.stream_to_stdout().await })
     }
 }

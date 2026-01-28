@@ -555,25 +555,34 @@ impl ResourceScanner {
     }
 }
 
-fn extract_ec2_tags(tags: &[aws_sdk_ec2::types::Tag]) -> HashMap<String, String> {
+/// Extract tags from any AWS tag type into a HashMap.
+///
+/// Different AWS SDKs use different tag types (ec2::Tag, s3::Tag, iam::Tag)
+/// but they all have key/value string fields. This generic function handles
+/// them all via closures.
+fn extract_tags<T>(
+    tags: &[T],
+    key: impl Fn(&T) -> Option<&str>,
+    value: impl Fn(&T) -> Option<&str>,
+) -> HashMap<String, String> {
     tags.iter()
-        .filter_map(|t| match (t.key(), t.value()) {
+        .filter_map(|t| match (key(t), value(t)) {
             (Some(k), Some(v)) => Some((k.to_string(), v.to_string())),
             _ => None,
         })
         .collect()
 }
 
+fn extract_ec2_tags(tags: &[aws_sdk_ec2::types::Tag]) -> HashMap<String, String> {
+    extract_tags(tags, |t| t.key(), |t| t.value())
+}
+
 fn extract_s3_tags(tags: &[aws_sdk_s3::types::Tag]) -> HashMap<String, String> {
-    tags.iter()
-        .map(|t| (t.key().to_string(), t.value().to_string()))
-        .collect()
+    extract_tags(tags, |t| Some(t.key()), |t| Some(t.value()))
 }
 
 fn extract_iam_tags(tags: &[aws_sdk_iam::types::Tag]) -> HashMap<String, String> {
-    tags.iter()
-        .map(|t| (t.key().to_string(), t.value().to_string()))
-        .collect()
+    extract_tags(tags, |t| Some(t.key()), |t| Some(t.value()))
 }
 
 fn parse_created_at(tags: &HashMap<String, String>) -> DateTime<Utc> {

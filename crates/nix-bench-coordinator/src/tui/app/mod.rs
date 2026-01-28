@@ -3,8 +3,8 @@
 mod lifecycle;
 mod state;
 
-pub use lifecycle::{CleanupProgress, InitPhase, LifecycleState};
 pub use crate::log_buffer::LogBuffer;
+pub use lifecycle::{CleanupProgress, InitPhase, LifecycleState};
 pub use state::{InstancesState, PanelFocus, RunContext, ScrollState, UiState};
 
 use crate::aws::{GrpcInstanceStatus, GrpcStatusPoller};

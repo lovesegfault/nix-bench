@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use super::types::{InstanceState, InstanceStatus};
-use crate::aws::{Ec2Client, IamClient, S3Client};
+use crate::aws::{classify_anyhow_error, Ec2Client, IamClient, S3Client};
 use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
 
 /// Request to cleanup resources
@@ -96,8 +96,7 @@ pub async fn cleanup_executor(
                             .await;
                     }
                     Err(e) => {
-                        let error_str = format!("{:?}", e);
-                        if error_str.contains("InvalidInstanceID.NotFound") {
+                        if classify_anyhow_error(&e).is_not_found() {
                             debug!(instance_id = %instance_id, "Instance already terminated");
                             let _ = tx
                                 .send(TuiMessage::InstanceUpdate {

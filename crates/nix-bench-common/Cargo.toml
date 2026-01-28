@@ -15,9 +15,6 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-# Time/date handling for tags
-chrono.workspace = true
-
 # TLS certificate generation
 rcgen.workspace = true
 pem.workspace = true

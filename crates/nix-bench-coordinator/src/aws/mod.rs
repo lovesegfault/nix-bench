@@ -17,8 +17,10 @@ pub mod error;
 pub mod grpc_client;
 pub mod iam;
 pub mod resource_guard;
+pub mod resource_kind;
 pub mod s3;
 pub mod scanner;
+pub mod tags;
 
 // Core clients
 pub use account::{get_current_account_id, AccountId};

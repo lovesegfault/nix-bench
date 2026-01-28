@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
-use nix_bench_common::tags::{
+use crate::aws::tags::{
     self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
 };
 use std::time::Duration;

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use chrono::Utc;
-use nix_bench_common::tags::{
+use super::tags::{
     self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
 };
 use std::future::Future;

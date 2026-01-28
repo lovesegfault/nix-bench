@@ -7,10 +7,10 @@ use crate::aws::context::AwsContext;
 use anyhow::Result;
 use aws_sdk_ec2::types::Filter;
 use chrono::{DateTime, Duration, Utc};
-use nix_bench_common::tags::{
+use super::tags::{
     self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
 };
-pub use nix_bench_common::ResourceKind;
+pub use super::resource_kind::ResourceKind;
 use std::collections::HashMap;
 use tracing::debug;
 

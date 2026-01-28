@@ -4,7 +4,7 @@
 //! error handling and ordering.
 
 use crate::aws::{Ec2Client, IamClient, S3Client};
-use nix_bench_common::ResourceKind;
+use super::resource_kind::ResourceKind;
 use tracing::{info, warn};
 
 /// Result of a single resource cleanup operation

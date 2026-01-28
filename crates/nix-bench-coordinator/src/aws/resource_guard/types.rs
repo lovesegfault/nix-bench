@@ -1,7 +1,7 @@
 //! Core types for resource tracking and cleanup
 
 use chrono::{DateTime, Utc};
-use nix_bench_common::resource_kind::ResourceKind;
+use crate::aws::resource_kind::ResourceKind;
 
 /// Identifies an AWS resource uniquely for tracking and cleanup
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

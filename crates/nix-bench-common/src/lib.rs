@@ -10,21 +10,17 @@
 //! - [`run_result`]: Benchmark run result type
 //! - [`stats`]: Duration statistics (min/avg/max)
 //! - [`status`]: Canonical status codes for gRPC communication
-//! - [`tags`]: AWS resource tag constants for discovery and cleanup
 //! - [`tls`]: TLS certificate generation for mTLS
 
 pub mod agent_config;
 pub mod defaults;
-pub mod resource_kind;
 pub mod run_result;
 pub mod stats;
 pub mod status;
-pub mod tags;
 pub mod tls;
 
 // Re-export commonly used types
 pub use agent_config::AgentConfig;
-pub use resource_kind::ResourceKind;
 pub use run_result::RunResult;
 pub use stats::DurationStats;
 pub use status::StatusCode;
@@ -60,48 +56,15 @@ pub fn jittered_delay_25(base: std::time::Duration) -> std::time::Duration {
     jittered_delay(base, 0.25)
 }
 
-/// Known EC2 instance family prefixes (for validation).
-/// Not exhaustive, but covers all common types.
-const KNOWN_PREFIXES: &[&str] = &[
-    // General purpose
-    "a1", "m4", "m5", "m5a", "m5ad", "m5d", "m5dn", "m5n", "m5zn", "m6a", "m6i", "m6id", "m6idn",
-    "m6in", "m7a", "m7i", "m7i-flex", "m8a", "mac1", "mac2",
-    // Graviton general purpose
-    "m6g", "m6gd", "m7g", "m7gd", "m8g", // Compute optimized
-    "c4", "c5", "c5a", "c5ad", "c5d", "c5n", "c6a", "c6i", "c6id", "c6in", "c7a", "c7i",
-    "c7i-flex", "c8a", // Graviton compute
-    "c6g", "c6gd", "c6gn", "c7g", "c7gd", "c7gn", "c8g", // Memory optimized
-    "r4", "r5", "r5a", "r5ad", "r5b", "r5d", "r5dn", "r5n", "r6a", "r6i", "r6id", "r6idn", "r6in",
-    "r7a", "r7i", "r7iz", "r8a", "x1", "x1e", "x2idn", "x2iedn", "x2iezn",
-    // Graviton memory
-    "r6g", "r6gd", "r7g", "r7gd", "r8g", "x2gd", // Storage optimized
-    "d2", "d3", "d3en", "h1", "i3", "i3en", "i4i", "im4gn", "is4gen",
-    // Accelerated compute
-    "p3", "p3dn", "p4d", "p4de", "p5", "g4ad", "g4dn", "g5", "g6", "inf1", "inf2", "dl1", "trn1",
-    "trn1n", // Graviton accelerated
-    "g5g",   // HPC
-    "hpc6a", "hpc6id", "hpc7a", // Graviton HPC
-    "hpc7g", // Burstable
-    "t2", "t3", "t3a", // Graviton burstable
-    "t4g",
-];
-
 /// Detect system architecture from EC2 instance type.
 ///
 /// Graviton instances have a 'g' after the generation number (e.g., c7g, m7gd).
 /// Returns "aarch64-linux" for Graviton, "x86_64-linux" for all others.
 ///
-/// Logs a warning for unrecognized instance type prefixes.
+/// Instance type validity is not checked here; the coordinator validates
+/// instance types via the EC2 API (`ec2.validate_instance_types()`).
 pub fn detect_system(instance_type: &str) -> &'static str {
     let prefix = instance_type.split('.').next().unwrap_or("");
-
-    // Check if the prefix is known
-    if !KNOWN_PREFIXES.contains(&prefix) {
-        eprintln!(
-            "Warning: unrecognized instance type prefix '{}' (from '{}'), defaulting to x86_64-linux",
-            prefix, instance_type
-        );
-    }
 
     // Detect Graviton: digit followed by 'g' in the prefix
     let chars: Vec<char> = prefix.chars().collect();

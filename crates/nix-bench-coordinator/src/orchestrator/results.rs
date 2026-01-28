@@ -45,6 +45,10 @@ pub async fn write_results(
                             "avg_seconds": stats.avg,
                             "min_seconds": stats.min,
                             "max_seconds": stats.max,
+                            "std_dev_seconds": stats.std_dev,
+                            "p50_seconds": stats.p50,
+                            "p95_seconds": stats.p95,
+                            "p99_seconds": stats.p99,
                         }
                     }),
                 )
@@ -87,6 +91,8 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
             Cell::new("Runs"),
             Cell::new("Min (s)"),
             Cell::new("Avg (s)"),
+            Cell::new("P50 (s)"),
+            Cell::new("P95 (s)"),
             Cell::new("Max (s)"),
         ]);
 
@@ -116,12 +122,20 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
 
         let durations = state.durations();
         let stats = DurationStats::from_durations(&durations);
-        let (min, avg, max) = if stats.is_empty() {
-            ("-".to_string(), "-".to_string(), "-".to_string())
+        let (min, avg, p50, p95, max) = if stats.is_empty() {
+            (
+                "-".to_string(),
+                "-".to_string(),
+                "-".to_string(),
+                "-".to_string(),
+                "-".to_string(),
+            )
         } else {
             (
                 format!("{:.1}", stats.min),
                 format!("{:.1}", stats.avg),
+                format!("{:.1}", stats.p50),
+                format!("{:.1}", stats.p95),
                 format!("{:.1}", stats.max),
             )
         };
@@ -132,6 +146,8 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
             Cell::new(&runs),
             Cell::new(&min),
             Cell::new(&avg),
+            Cell::new(&p50),
+            Cell::new(&p95),
             Cell::new(&max),
         ]);
     }

@@ -24,11 +24,12 @@ pub use types::{InstanceState, InstanceStatus};
 use crate::config::{detect_system, RunConfig};
 use crate::tui::LogCapture;
 use anyhow::Result;
+use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
 use tracing::info;
 use uuid::Uuid;
 
-/// Default gRPC port for agent communication
-pub(crate) const GRPC_PORT: u16 = 50051;
+/// gRPC port for agent communication (from common defaults)
+pub(crate) const GRPC_PORT: u16 = DEFAULT_GRPC_PORT;
 
 /// Run benchmarks on the specified instances
 pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) -> Result<()> {

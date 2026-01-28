@@ -22,8 +22,8 @@ use throbber_widgets_tui::ThrobberState;
 use tokio_util::sync::CancellationToken;
 use tui_scrollview::ScrollViewState;
 
-/// Default gRPC port for agent communication
-const GRPC_PORT: u16 = 50051;
+/// gRPC port for agent communication (from common defaults)
+const GRPC_PORT: u16 = nix_bench_common::defaults::DEFAULT_GRPC_PORT;
 
 /// Application state
 ///

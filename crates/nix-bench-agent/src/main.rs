@@ -200,40 +200,65 @@ async fn main() -> Result<()> {
         }
         Err(e) => {
             error!(error = %e, "Cache warmup build failed");
-            logger.write_line(&format!("Error: warmup build failed: {}", e));
+            logger.write_line(&format!("FATAL: warmup build failed: {}", e));
             {
                 let mut s = status.write().await;
                 s.status = StatusCode::Failed;
+                s.error_message = format!("Warmup failed: {}", e);
             }
-            return Err(e);
+            // Fall through to ack-wait + shutdown below instead of returning early
         }
     }
 
-    // === Benchmark Phase ===
-    {
-        let mut s = status.write().await;
-        s.status = StatusCode::Running;
-    }
+    // === Benchmark Phase (only if warmup succeeded) ===
+    let benchmark_error = {
+        let current_status = status.read().await.status;
+        if current_status == StatusCode::Failed {
+            // Warmup already failed — skip benchmarks
+            None
+        } else {
+            {
+                let mut s = status.write().await;
+                s.status = StatusCode::Running;
+            }
 
-    logger.write_line(&format!(
-        "Starting benchmark: {} runs of {} (from {}), timeout {}s, max {} failures",
-        config.runs, config.attr, config.flake_ref, config.build_timeout, config.max_failures
-    ));
+            logger.write_line(&format!(
+                "Starting benchmark: {} runs of {} (from {}), timeout {}s, max {} failures",
+                config.runs,
+                config.attr,
+                config.flake_ref,
+                config.build_timeout,
+                config.max_failures
+            ));
 
-    let run_results =
-        benchmark::run_benchmarks_with_retry(&config, &logger, &status, &shutdown_token).await?;
-
-    // Signal completion (results are now available via gRPC GetStatus)
-    {
-        let mut s = status.write().await;
-        s.status = StatusCode::Complete;
-    }
-
-    logger.write_line(&format!(
-        "Benchmark complete: {} successful runs",
-        run_results.len()
-    ));
-    info!("Benchmark complete");
+            match benchmark::run_benchmarks_with_retry(&config, &logger, &status, &shutdown_token)
+                .await
+            {
+                Ok(run_results) => {
+                    {
+                        let mut s = status.write().await;
+                        s.status = StatusCode::Complete;
+                    }
+                    logger.write_line(&format!(
+                        "Benchmark complete: {} successful runs",
+                        run_results.len()
+                    ));
+                    info!("Benchmark complete");
+                    None
+                }
+                Err(e) => {
+                    error!(error = %e, "Benchmark failed");
+                    logger.write_line(&format!("FATAL: Benchmark failed: {}", e));
+                    {
+                        let mut s = status.write().await;
+                        s.status = StatusCode::Failed;
+                        s.error_message = e.to_string();
+                    }
+                    Some(e)
+                }
+            }
+        }
+    };
 
     // Wait for coordinator to acknowledge completion, with fallback timeout
     info!("Waiting for coordinator acknowledgment...");
@@ -264,5 +289,8 @@ async fn main() -> Result<()> {
         Err(_) => warn!("Timed out waiting for gRPC server shutdown"),
     }
 
-    Ok(())
+    match benchmark_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }

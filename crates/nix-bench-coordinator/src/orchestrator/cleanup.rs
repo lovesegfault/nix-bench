@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use super::types::{InstanceState, InstanceStatus};
-use crate::aws::{classify_anyhow_error, Ec2Client, IamClient, S3Client};
+use crate::aws::{Ec2Client, IamClient, S3Client, classify_anyhow_error};
 use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
 
 /// Request to cleanup resources

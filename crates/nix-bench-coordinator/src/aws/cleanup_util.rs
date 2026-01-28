@@ -3,8 +3,8 @@
 //! Provides common helpers for cleaning up AWS resources with consistent
 //! error handling and ordering.
 
-use crate::aws::{Ec2Client, IamClient, S3Client};
 use super::resource_kind::ResourceKind;
+use crate::aws::{Ec2Client, IamClient, S3Client};
 use tracing::{info, warn};
 
 /// Result of a single resource cleanup operation

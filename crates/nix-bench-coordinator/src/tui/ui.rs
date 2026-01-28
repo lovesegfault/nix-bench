@@ -465,8 +465,8 @@ mod tests {
     use super::*;
     use crate::orchestrator::InstanceStatus;
     use crate::tui::App;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn render_does_not_panic_with_empty_state() {

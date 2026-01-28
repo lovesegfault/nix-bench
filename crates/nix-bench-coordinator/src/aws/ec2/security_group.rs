@@ -2,14 +2,12 @@
 
 use super::Ec2Client;
 use crate::aws::error::{classify_anyhow_error, classify_aws_error};
+use crate::aws::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use anyhow::{Context, Result};
 use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{Filter, IpPermission, IpRange, ResourceType, Tag, TagSpecification};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
-use crate::aws::tags::{
-    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
-};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 

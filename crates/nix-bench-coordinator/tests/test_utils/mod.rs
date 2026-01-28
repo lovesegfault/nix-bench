@@ -7,7 +7,7 @@ use nix_bench_agent::grpc::{AgentStatus, LogBroadcaster, LogStreamService};
 use nix_bench_common::tls::TlsConfig;
 use nix_bench_coordinator::aws::wait_for_tcp_ready;
 use nix_bench_proto::LogStreamServer;
-use nix_bench_test_utils::tls::{generate_test_certs as gen_certs, TestTlsCerts};
+use nix_bench_test_utils::tls::{TestTlsCerts, generate_test_certs as gen_certs};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

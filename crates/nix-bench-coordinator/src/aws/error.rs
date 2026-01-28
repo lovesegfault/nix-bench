@@ -154,15 +154,23 @@ pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError
 pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
     // Walk the error chain looking for typed AWS SDK errors
     for cause in error.chain() {
-        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::run_instances::RunInstancesError>>() {
+        if let Some(sdk_err) =
+            cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
+                aws_sdk_ec2::operation::run_instances::RunInstancesError,
+            >>()
+        {
             let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
             return classify_aws_error(meta.code(), meta.message());
         }
-        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::describe_instances::DescribeInstancesError>>() {
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
+            aws_sdk_ec2::operation::describe_instances::DescribeInstancesError,
+        >>() {
             let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
             return classify_aws_error(meta.code(), meta.message());
         }
-        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::terminate_instances::TerminateInstancesError>>() {
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
+            aws_sdk_ec2::operation::terminate_instances::TerminateInstancesError,
+        >>() {
             let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
             return classify_aws_error(meta.code(), meta.message());
         }
@@ -171,11 +179,15 @@ pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
             return classify_aws_error(meta.code(), meta.message());
         }
         // Security group operations
-        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::create_security_group::CreateSecurityGroupError>>() {
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
+            aws_sdk_ec2::operation::create_security_group::CreateSecurityGroupError,
+        >>() {
             let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
             return classify_aws_error(meta.code(), meta.message());
         }
-        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<aws_sdk_ec2::operation::delete_security_group::DeleteSecurityGroupError>>() {
+        if let Some(sdk_err) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
+            aws_sdk_ec2::operation::delete_security_group::DeleteSecurityGroupError,
+        >>() {
             let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(sdk_err);
             return classify_aws_error(meta.code(), meta.message());
         }
@@ -358,7 +370,10 @@ mod tests {
     fn already_exists_codes() {
         for code in ALREADY_EXISTS_CODES {
             let err = classify_aws_error(Some(code), Some("msg"));
-            assert!(err.is_already_exists(), "Expected AlreadyExists for code: {code}");
+            assert!(
+                err.is_already_exists(),
+                "Expected AlreadyExists for code: {code}"
+            );
         }
     }
 
@@ -390,10 +405,7 @@ mod tests {
 
     #[test]
     fn iam_propagation_alternate_message() {
-        let err = classify_aws_error(
-            Some("SomeCode"),
-            Some("Invalid IAM Instance Profile name"),
-        );
+        let err = classify_aws_error(Some("SomeCode"), Some("Invalid IAM Instance Profile name"));
         assert!(matches!(err, AwsError::IamPropagationDelay));
     }
 
@@ -469,11 +481,13 @@ mod tests {
 
     #[test]
     fn is_not_found_only_for_not_found() {
-        assert!(AwsError::NotFound {
-            resource_type: "test",
-            resource_id: "id".to_string()
-        }
-        .is_not_found());
+        assert!(
+            AwsError::NotFound {
+                resource_type: "test",
+                resource_id: "id".to_string()
+            }
+            .is_not_found()
+        );
         assert!(!AwsError::Throttled.is_not_found());
     }
 
@@ -483,10 +497,12 @@ mod tests {
         assert!(AwsError::Throttled.is_retryable());
         assert!(AwsError::DependencyViolation.is_retryable());
         assert!(!AwsError::AlreadyExists.is_retryable());
-        assert!(!AwsError::NotFound {
-            resource_type: "test",
-            resource_id: "id".to_string()
-        }
-        .is_retryable());
+        assert!(
+            !AwsError::NotFound {
+                resource_type: "test",
+                resource_id: "id".to_string()
+            }
+            .is_retryable()
+        );
     }
 }

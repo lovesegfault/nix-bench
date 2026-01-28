@@ -3,7 +3,7 @@
 //! This module provides logging that streams directly to gRPC clients,
 //! with no CloudWatch dependencies.
 
-use crate::command::{run_command_streaming, CommandConfig};
+use crate::command::{CommandConfig, run_command_streaming};
 use crate::grpc::LogBroadcaster;
 use anyhow::Result;
 use nix_bench_common::timestamp_millis;

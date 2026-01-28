@@ -53,7 +53,8 @@ pub fn generate_user_data(bucket: &str, run_id: &str, instance_type: &str) -> St
     // Validate inputs before interpolation into shell script
     validate_shell_input(bucket, "bucket").expect("invalid bucket name for user data");
     validate_shell_input(run_id, "run_id").expect("invalid run_id for user data");
-    validate_shell_input(instance_type, "instance_type").expect("invalid instance_type for user data");
+    validate_shell_input(instance_type, "instance_type")
+        .expect("invalid instance_type for user data");
     format!(
         r#"#!/bin/bash
 set -euo pipefail
@@ -155,9 +156,11 @@ mod tests {
         let console = "Starting nix-bench-agent...\nnix-bench-agent: command not found\n";
         let result = detect_bootstrap_failure(console);
         assert!(result.is_some());
-        assert!(result
-            .unwrap()
-            .contains("nix-bench-agent: command not found"));
+        assert!(
+            result
+                .unwrap()
+                .contains("nix-bench-agent: command not found")
+        );
     }
 
     #[test]

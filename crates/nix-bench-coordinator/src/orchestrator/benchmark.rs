@@ -12,16 +12,16 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use super::cleanup::{cleanup_executor, cleanup_resources_no_tui, CleanupRequest};
+use super::GRPC_PORT;
+use super::cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
 use super::init::{BenchmarkInitializer, InitContext};
 use super::monitoring::poll_bootstrap_status;
 use super::progress::{ChannelReporter, InitProgressReporter, LogReporter};
 use super::results::{print_results_summary, write_results};
 use super::types::{InstanceState, InstanceStatus};
 use super::user_data::detect_bootstrap_failure;
-use super::GRPC_PORT;
 use crate::aws::{
-    send_ack_complete, start_log_streaming_unified, GrpcStatusPoller, LogStreamingOptions,
+    GrpcStatusPoller, LogStreamingOptions, send_ack_complete, start_log_streaming_unified,
 };
 use crate::config::RunConfig;
 use crate::tui::{self, InitPhase, LogCapture, TuiMessage};
@@ -172,7 +172,7 @@ pub async fn run_benchmarks_with_tui(
     use crossterm::{
         event::{DisableMouseCapture, EnableMouseCapture},
         execute,
-        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     };
     use ratatui::prelude::*;
     use std::io;

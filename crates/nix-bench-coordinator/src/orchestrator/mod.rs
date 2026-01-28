@@ -16,7 +16,7 @@ pub mod progress;
 pub mod types;
 
 // Re-export core types
-pub use cleanup::{cleanup_executor, cleanup_resources_no_tui, CleanupRequest};
+pub use cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
 pub use init::{BenchmarkInitializer, InitContext};
 pub use progress::{ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter};
 pub use types::{InstanceState, InstanceStatus};
@@ -25,7 +25,7 @@ use crate::config::RunConfig;
 use crate::tui::LogCapture;
 use anyhow::Result;
 use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
-use nix_bench_common::{detect_system, Architecture};
+use nix_bench_common::{Architecture, detect_system};
 use tracing::info;
 use uuid::Uuid;
 

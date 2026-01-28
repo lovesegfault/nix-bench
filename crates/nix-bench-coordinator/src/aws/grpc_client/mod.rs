@@ -7,8 +7,8 @@ mod streaming;
 
 pub use channel::{ChannelOptions, GrpcChannelBuilder};
 pub use log_client::GrpcLogClient;
-pub use status_poller::{send_ack_complete, GrpcInstanceStatus, GrpcStatusPoller};
-pub use streaming::{start_log_streaming_unified, LogOutput, LogStreamingOptions};
+pub use status_poller::{GrpcInstanceStatus, GrpcStatusPoller, send_ack_complete};
+pub use streaming::{LogOutput, LogStreamingOptions, start_log_streaming_unified};
 
 use anyhow::Result;
 use std::time::Duration;

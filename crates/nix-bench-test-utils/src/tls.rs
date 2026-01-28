@@ -3,7 +3,7 @@
 //! Provides crypto provider initialization and TLS certificate generation helpers.
 
 use nix_bench_common::tls::{
-    generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig,
+    TlsConfig, generate_agent_cert, generate_ca, generate_coordinator_cert,
 };
 use std::sync::Once;
 

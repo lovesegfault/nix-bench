@@ -9,7 +9,7 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, List, ListItem, ListState},
 };
-use throbber_widgets_tui::{Throbber, BRAILLE_SIX};
+use throbber_widgets_tui::{BRAILLE_SIX, Throbber};
 
 /// Calculate trend from duration history
 /// Returns: -1 (faster), 0 (stable), 1 (slower)

@@ -2,7 +2,7 @@
 //!
 //! Results are now sent via gRPC, not S3.
 
-use crate::config::{validate_config, Config};
+use crate::config::{Config, validate_config};
 use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
 use std::time::{Duration, Instant};

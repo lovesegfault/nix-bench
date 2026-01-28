@@ -728,7 +728,7 @@ impl App {
         use super::TuiMessage;
         use crate::tui::input::KeyHandler;
         use crossterm::event::{MouseButton, MouseEventKind};
-        use tokio::time::{interval, Duration};
+        use tokio::time::{Duration, interval};
 
         let mut event_stream = crossterm::event::EventStream::new();
         let mut render_interval = interval(Duration::from_millis(33)); // ~30fps for smooth UI

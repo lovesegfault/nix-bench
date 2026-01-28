@@ -291,7 +291,7 @@ async fn run() -> Result<()> {
             // Validate instance types before launching TUI
             let instance_types = run_args.parse_instance_types();
             {
-                use nix_bench_coordinator::aws::{context::AwsContext, Ec2Client};
+                use nix_bench_coordinator::aws::{Ec2Client, context::AwsContext};
                 let aws =
                     AwsContext::with_profile(&run_args.region, run_args.aws_profile.as_deref())
                         .await;

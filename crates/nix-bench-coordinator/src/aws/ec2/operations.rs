@@ -1,7 +1,7 @@
 //! EC2 operations trait for testing
 
-use super::types::{LaunchInstanceConfig, LaunchedInstance};
 use super::Ec2Client;
+use super::types::{LaunchInstanceConfig, LaunchedInstance};
 use anyhow::Result;
 use std::future::Future;
 

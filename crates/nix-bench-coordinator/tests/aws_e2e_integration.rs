@@ -18,7 +18,7 @@ mod aws_test_helpers;
 
 use aws_test_helpers::*;
 use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
-use nix_bench_coordinator::aws::{get_coordinator_public_ip, Ec2Client, IamClient, S3Client};
+use nix_bench_coordinator::aws::{Ec2Client, IamClient, S3Client, get_coordinator_public_ip};
 use std::time::Duration;
 
 /// Instance type to use for integration tests

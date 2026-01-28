@@ -66,7 +66,7 @@ mod registry;
 mod types;
 
 pub use builder::ResourceGuardBuilder;
-pub use executor::{create_cleanup_system, CleanupExecutor};
+pub use executor::{CleanupExecutor, create_cleanup_system};
 pub use guard::{
     Ec2InstanceGuard, IamRoleGuard, ResourceGuard, S3BucketGuard, SecurityGroupGuard,
     SecurityGroupRuleGuard,

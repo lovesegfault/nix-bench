@@ -1,14 +1,12 @@
 //! IAM role and instance profile management for nix-bench agents
 
+use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use crate::aws::context::AwsContext;
-use crate::wait::{wait_for_resource, WaitConfig};
+use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
-use aws_sdk_iam::error::ProvideErrorMetadata;
 use aws_sdk_iam::Client;
+use aws_sdk_iam::error::ProvideErrorMetadata;
 use chrono::Utc;
-use super::tags::{
-    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
-};
 use std::future::Future;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;

@@ -1,14 +1,12 @@
 //! S3 bucket and object management
 
+use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use crate::aws::context::AwsContext;
 use crate::aws::error::classify_aws_error;
 use anyhow::{Context, Result};
 use aws_sdk_s3::error::ProvideErrorMetadata;
-use aws_sdk_s3::{primitives::ByteStream, Client};
+use aws_sdk_s3::{Client, primitives::ByteStream};
 use chrono::Utc;
-use super::tags::{
-    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
-};
 use std::future::Future;
 use std::path::Path;
 use tracing::{debug, info};

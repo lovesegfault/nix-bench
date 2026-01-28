@@ -11,20 +11,20 @@ use super::types::{InstanceState, InstanceStatus};
 use crate::aws::context::AwsContext;
 use crate::aws::ec2::LaunchInstanceConfig;
 use crate::aws::resource_guard::{
-    create_cleanup_system, Ec2InstanceGuard, IamRoleGuard, ResourceGuardBuilder, S3BucketGuard,
-    SecurityGroupGuard, SecurityGroupRuleGuard,
+    Ec2InstanceGuard, IamRoleGuard, ResourceGuardBuilder, S3BucketGuard, SecurityGroupGuard,
+    SecurityGroupRuleGuard, create_cleanup_system,
 };
 use crate::aws::{
-    extract_error_details, get_coordinator_public_ip, get_current_account_id, AccountId, Ec2Client,
-    IamClient, S3Client,
+    AccountId, Ec2Client, IamClient, S3Client, extract_error_details, get_coordinator_public_ip,
+    get_current_account_id,
 };
-use crate::config::{detect_system, AgentConfig, RunConfig};
+use crate::config::{AgentConfig, RunConfig, detect_system};
 use crate::tui::{InitPhase, LogBuffer};
 use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use nix_bench_common::jittered_delay_25;
 use nix_bench_common::tls::{
-    generate_agent_cert, generate_ca, generate_coordinator_cert, TlsConfig,
+    TlsConfig, generate_agent_cert, generate_ca, generate_coordinator_cert,
 };
 use std::collections::HashMap;
 use std::time::Duration;

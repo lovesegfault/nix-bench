@@ -1,15 +1,13 @@
 //! EC2 instance lifecycle operations
 
-use super::types::{LaunchInstanceConfig, LaunchedInstance};
 use super::Ec2Client;
-use crate::aws::error::{classify_anyhow_error, AwsError};
+use super::types::{LaunchInstanceConfig, LaunchedInstance};
+use crate::aws::error::{AwsError, classify_anyhow_error};
+use crate::aws::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use anyhow::{Context, Result};
 use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
-use crate::aws::tags::{
-    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
-};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 

@@ -2,7 +2,7 @@
 
 use super::channel::{ChannelOptions, GrpcChannelBuilder};
 use crate::tui::TuiMessage;
-use crate::wait::{wait_for_resource, WaitConfig};
+use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
 use backon::{ExponentialBuilder, Retryable};
 use nix_bench_common::TlsConfig;

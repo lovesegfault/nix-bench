@@ -3,7 +3,7 @@
 //! This module handles all host setup that was previously done in cloud-init user-data.
 //! All output is streamed via gRPC for real-time visibility in the TUI.
 
-use crate::command::{run_command_streaming, CommandConfig};
+use crate::command::{CommandConfig, run_command_streaming};
 use crate::grpc::LogBroadcaster;
 use anyhow::{Context, Result};
 use nix_bench_common::timestamp_millis;

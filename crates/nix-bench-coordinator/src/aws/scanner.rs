@@ -3,14 +3,12 @@
 //! Discovers resources directly from AWS APIs, independent of local database.
 //! This enables cleanup of orphaned resources that were never recorded in the DB.
 
+pub use super::resource_kind::ResourceKind;
+use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use crate::aws::context::AwsContext;
 use anyhow::Result;
 use aws_sdk_ec2::types::Filter;
 use chrono::{DateTime, Duration, Utc};
-use super::tags::{
-    self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE,
-};
-pub use super::resource_kind::ResourceKind;
 use std::collections::HashMap;
 use tracing::debug;
 
@@ -167,10 +165,12 @@ impl ResourceScanner {
     ) -> Result<Vec<DiscoveredResource>> {
         let client = self.ctx.ec2_client();
 
-        let mut filters = vec![Filter::builder()
-            .name(format!("tag:{}", TAG_TOOL))
-            .values(TAG_TOOL_VALUE)
-            .build()];
+        let mut filters = vec![
+            Filter::builder()
+                .name(format!("tag:{}", TAG_TOOL))
+                .values(TAG_TOOL_VALUE)
+                .build(),
+        ];
 
         if let Some(ref run_id) = config.run_id {
             filters.push(

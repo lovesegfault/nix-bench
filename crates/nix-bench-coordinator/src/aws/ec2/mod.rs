@@ -10,7 +10,7 @@ pub use types::{LaunchInstanceConfig, LaunchedInstance};
 
 use crate::aws::context::AwsContext;
 use anyhow::{Context, Result};
-use aws_sdk_ec2::{types::Filter, Client};
+use aws_sdk_ec2::{Client, types::Filter};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -62,10 +62,7 @@ impl Ec2Client {
         // already inserted while we were fetching, use the existing value.
         let ami = {
             let mut cache = self.ami_cache.lock().unwrap();
-            cache
-                .entry(arch_filter.to_string())
-                .or_insert(ami)
-                .clone()
+            cache.entry(arch_filter.to_string()).or_insert(ami).clone()
         };
 
         debug!(ami = %ami, arch = %arch, "Found and cached AL2023 AMI");

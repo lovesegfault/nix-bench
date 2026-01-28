@@ -14,9 +14,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use test_utils::{
-    find_available_port, generate_test_certs, GrpcTestFixture, TEST_INSTANCE_TYPE, TEST_RUN_ID,
+    GrpcTestFixture, TEST_INSTANCE_TYPE, TEST_RUN_ID, find_available_port, generate_test_certs,
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]

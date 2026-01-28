@@ -63,12 +63,12 @@ uuid = { version = "1", features = ["v7"] }
 backon = { version = "1", features = ["tokio-sleep"] }
 
 # TUI (coordinator-only)
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
-tui-logger = { version = "0.17", features = ["tracing-support"] }
-throbber-widgets-tui = "0.9"
-tui-scrollview = "0.5"
+tui-logger = { version = "0.18", features = ["tracing-support"] }
+throbber-widgets-tui = "0.10"
+tui-scrollview = "0.6"
 unicode-width = "0.2"
 unicode-truncate = "2"
 
@@ -79,7 +79,7 @@ comfy-table = "7"
 
 # HTTP (coordinator-only)
 base64 = "0.22"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 # Testing
 tempfile = "3"

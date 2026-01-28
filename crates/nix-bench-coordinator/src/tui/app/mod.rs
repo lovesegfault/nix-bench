@@ -513,7 +513,7 @@ impl App {
     // ========================================================================
 
     /// Main event loop
-    pub async fn run<B: Backend>(
+    pub async fn run<B: Backend<Error: Send + Sync + 'static>>(
         &mut self,
         terminal: &mut Terminal<B>,
         _config: &RunConfig,
@@ -524,7 +524,7 @@ impl App {
     }
 
     /// Main event loop with channel for receiving updates
-    pub async fn run_with_channel<B: Backend>(
+    pub async fn run_with_channel<B: Backend<Error: Send + Sync + 'static>>(
         &mut self,
         terminal: &mut Terminal<B>,
         rx: &mut tokio::sync::mpsc::Receiver<crate::tui::TuiMessage>,
@@ -696,7 +696,7 @@ impl App {
     ///
     /// During cleanup, the TUI remains fully interactive (scrolling, navigation, etc.)
     /// but quit requests are ignored since cleanup is already in progress.
-    pub async fn run_cleanup_phase<B: ratatui::backend::Backend>(
+    pub async fn run_cleanup_phase<B: ratatui::backend::Backend<Error: Send + Sync + 'static>>(
         &mut self,
         terminal: &mut Terminal<B>,
         cleanup_handle: tokio::task::JoinHandle<anyhow::Result<()>>,

@@ -29,6 +29,11 @@ pub async fn download_config_with_tls(
     instance_type: &str,
     timeout: Duration,
 ) -> Result<Config> {
+    let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    let client = Client::new(&aws_config);
+
     let start = Instant::now();
     let mut delay = Duration::from_secs(2);
     let max_delay = Duration::from_secs(30);
@@ -42,7 +47,7 @@ pub async fn download_config_with_tls(
             );
         }
 
-        match download_config_raw(bucket, run_id, instance_type).await {
+        match download_config_raw(&client, bucket, run_id, instance_type).await {
             Ok(config) => {
                 // Check if TLS certs are present
                 if config.ca_cert_pem.is_some()
@@ -77,13 +82,12 @@ pub async fn download_config_with_tls(
 }
 
 /// Download config from S3 without validation (for polling)
-async fn download_config_raw(bucket: &str, run_id: &str, instance_type: &str) -> Result<Config> {
-    let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .load()
-        .await;
-
-    let client = Client::new(&aws_config);
-
+async fn download_config_raw(
+    client: &Client,
+    bucket: &str,
+    run_id: &str,
+    instance_type: &str,
+) -> Result<Config> {
     let key = format!("{}/config-{}.json", run_id, instance_type);
     debug!(bucket, key = %key, "Fetching config object");
 

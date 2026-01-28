@@ -3,9 +3,9 @@
 use anyhow::Result;
 use nix_bench_common::{Architecture, RunResult, TlsConfig};
 use nix_bench_proto::{
-    AckCompleteRequest, AckCompleteResponse, LogEntry, LogStream, LogStreamServer,
-    RunResult as ProtoRunResult, StatusCode as ProtoStatusCode, StatusRequest, StatusResponse,
-    StreamLogsRequest,
+    AckCompleteRequest, AckCompleteResponse, CancelBenchmarkRequest, CancelBenchmarkResponse,
+    LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult,
+    StatusCode as ProtoStatusCode, StatusRequest, StatusResponse, StreamLogsRequest,
 };
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -284,6 +284,37 @@ impl LogStream for LogStreamService {
         info!(run_id = %req.run_id, "Received completion acknowledgment from coordinator");
         self.acknowledged.store(true, Ordering::Relaxed);
         Ok(Response::new(AckCompleteResponse { acknowledged: true }))
+    }
+
+    async fn cancel_benchmark(
+        &self,
+        request: Request<CancelBenchmarkRequest>,
+    ) -> Result<Response<CancelBenchmarkResponse>, Status> {
+        let req = request.into_inner();
+        let reason = if req.reason.is_empty() {
+            "coordinator requested cancellation".to_string()
+        } else {
+            req.reason
+        };
+
+        warn!(run_id = %req.run_id, reason = %reason, "Cancellation requested by coordinator");
+
+        // Signal the benchmark to stop via the cancellation token
+        self.shutdown_token.cancel();
+
+        // Update status to Failed with the cancellation reason
+        {
+            let mut status = self.status.write().await;
+            if status.status != StatusCode::Complete && status.status != StatusCode::Failed {
+                status.status = StatusCode::Failed;
+                status.error_message = format!("Cancelled: {}", reason);
+            }
+        }
+
+        Ok(Response::new(CancelBenchmarkResponse {
+            cancelled: true,
+            message: "Cancellation requested".to_string(),
+        }))
     }
 }
 

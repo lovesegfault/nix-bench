@@ -5,6 +5,8 @@ service LogStream {
   rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
   rpc GetStatus(StatusRequest) returns (StatusResponse);
   rpc AcknowledgeComplete(AckCompleteRequest) returns (AckCompleteResponse);
+  // Request the agent to cancel the current benchmark run
+  rpc CancelBenchmark(CancelBenchmarkRequest) returns (CancelBenchmarkResponse);
 }
 
 message AckCompleteRequest {
@@ -33,6 +35,16 @@ message StreamLogsRequest {
 message LogEntry {
   int64 timestamp = 1;
   string message = 2;  // Combined stdout+stderr (like terminal)
+}
+
+message CancelBenchmarkRequest {
+  string run_id = 1;
+  string reason = 2;  // Human-readable reason for cancellation
+}
+
+message CancelBenchmarkResponse {
+  bool cancelled = 1;
+  string message = 2;  // Status message (e.g., "cancellation requested")
 }
 
 message StatusRequest {}

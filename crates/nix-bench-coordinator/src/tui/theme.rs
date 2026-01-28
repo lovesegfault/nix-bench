@@ -221,3 +221,25 @@ pub fn theme() -> &'static Theme {
     static THEME: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
     THEME.get_or_init(Theme::default)
 }
+
+/// Create a themed block with focused styling
+pub fn themed_block_focused(title: &str) -> ratatui::widgets::Block<'_> {
+    use ratatui::widgets::{Block, Borders};
+    let t = theme();
+    Block::default()
+        .title(format!(" {} ", title))
+        .borders(Borders::ALL)
+        .border_style(t.block_focused())
+        .style(ratatui::style::Style::default().bg(t.bg))
+}
+
+/// Create a themed block with unfocused styling
+pub fn themed_block_unfocused(title: &str) -> ratatui::widgets::Block<'_> {
+    use ratatui::widgets::{Block, Borders};
+    let t = theme();
+    Block::default()
+        .title(format!(" {} ", title))
+        .title_style(t.title_unfocused())
+        .borders(Borders::ALL)
+        .border_style(t.block_unfocused())
+}

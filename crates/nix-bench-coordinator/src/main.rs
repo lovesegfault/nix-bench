@@ -105,6 +105,44 @@ struct RunArgs {
     gc_between_runs: bool,
 }
 
+impl RunArgs {
+    /// Parse instance types from the comma-separated string
+    fn parse_instance_types(&self) -> Vec<String> {
+        self.instances
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+}
+
+impl From<RunArgs> for config::RunConfig {
+    fn from(args: RunArgs) -> Self {
+        let instance_types = args.parse_instance_types();
+        Self {
+            instance_types,
+            attr: args.attr,
+            runs: args.runs,
+            region: args.region,
+            aws_profile: args.aws_profile,
+            output: args.output,
+            keep: args.keep,
+            timeout: args.timeout,
+            no_tui: args.no_tui,
+            agent_x86_64: args.agent_x86_64,
+            agent_aarch64: args.agent_aarch64,
+            subnet_id: args.subnet_id,
+            security_group_id: args.security_group_id,
+            instance_profile: args.instance_profile,
+            dry_run: args.dry_run,
+            flake_ref: args.flake_ref,
+            build_timeout: args.build_timeout,
+            max_failures: args.max_failures,
+            gc_between_runs: args.gc_between_runs,
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Run benchmarks on EC2 instances
@@ -250,14 +288,8 @@ async fn run() -> Result<()> {
                 info!(profile = %profile, "Using AWS profile");
             }
 
-            let instance_types: Vec<String> = run_args
-                .instances
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
             // Validate instance types before launching TUI
+            let instance_types = run_args.parse_instance_types();
             {
                 use nix_bench_coordinator::aws::{context::AwsContext, Ec2Client};
                 let aws =
@@ -278,30 +310,8 @@ async fn run() -> Result<()> {
                 "Starting benchmark run"
             );
 
-            let config = config::RunConfig {
-                instance_types,
-                attr: run_args.attr,
-                runs: run_args.runs,
-                region: run_args.region,
-                aws_profile: run_args.aws_profile,
-                output: run_args.output,
-                keep: run_args.keep,
-                timeout: run_args.timeout,
-                no_tui: run_args.no_tui,
-                agent_x86_64: run_args.agent_x86_64,
-                agent_aarch64: run_args.agent_aarch64,
-                subnet_id: run_args.subnet_id,
-                security_group_id: run_args.security_group_id,
-                instance_profile: run_args.instance_profile,
-                dry_run: run_args.dry_run,
-                flake_ref: run_args.flake_ref,
-                build_timeout: run_args.build_timeout,
-                max_failures: run_args.max_failures,
-                gc_between_runs: run_args.gc_between_runs,
-                log_capture,
-            };
-
-            orchestrator::run_benchmarks(config).await?;
+            let config: config::RunConfig = (*run_args).into();
+            orchestrator::run_benchmarks(config, log_capture).await?;
         }
 
         Command::Scan {
@@ -310,66 +320,7 @@ async fn run() -> Result<()> {
             run_id,
             format,
         } => {
-            info!(region = %region, min_age_hours, run_id = ?run_id, "Scanning for nix-bench resources");
-
-            let scanner = ResourceScanner::new(&region).await?;
-            let config = ScanConfig {
-                min_age: Duration::hours(min_age_hours as i64),
-                run_id,
-                include_creating: false,
-                ..Default::default()
-            };
-
-            let resources = scanner.scan_all(&config).await?;
-
-            if resources.is_empty() {
-                println!("No nix-bench resources found matching criteria.");
-                return Ok(());
-            }
-
-            if format == "json" {
-                // Output as JSON
-                let json_resources: Vec<_> = resources
-                    .iter()
-                    .map(|r| {
-                        serde_json::json!({
-                            "type": format!("{:?}", r.resource_type),
-                            "id": r.resource_id,
-                            "region": r.region,
-                            "run_id": r.run_id,
-                            "created_at": r.created_at.to_rfc3339(),
-                            "status": r.status,
-                        })
-                    })
-                    .collect();
-                println!("{}", serde_json::to_string_pretty(&json_resources)?);
-            } else {
-                // Output as table
-                println!(
-                    "{:<15} {:<25} {:<15} {:<20} {:<10}",
-                    "TYPE", "ID", "RUN_ID", "CREATED_AT", "STATUS"
-                );
-                println!("{}", "-".repeat(85));
-                for r in &resources {
-                    println!(
-                        "{:<15} {:<25} {:<15} {:<20} {:<10}",
-                        format!("{:?}", r.resource_type),
-                        if r.resource_id.len() > 24 {
-                            format!("{}...", &r.resource_id[..21])
-                        } else {
-                            r.resource_id.clone()
-                        },
-                        if r.run_id.len() > 14 {
-                            format!("{}...", &r.run_id[..11])
-                        } else {
-                            r.run_id.clone()
-                        },
-                        r.created_at.format("%Y-%m-%d %H:%M:%S"),
-                        r.status,
-                    );
-                }
-                println!("\nTotal: {} resources", resources.len());
-            }
+            handle_scan(region, min_age_hours, run_id, format).await?;
         }
 
         Command::CleanupOrphans {
@@ -379,45 +330,127 @@ async fn run() -> Result<()> {
             execute,
             force,
         } => {
-            let mode = if execute { "EXECUTE" } else { "DRY-RUN" };
-            info!(
-                region = %region,
-                min_age_hours,
-                run_id = ?run_id,
-                mode,
-                force,
-                "Cleaning up orphaned resources"
-            );
-
-            let cleanup = TagBasedCleanup::new(&region).await?;
-            let config = CleanupConfig {
-                min_age: Duration::hours(min_age_hours as i64),
-                run_id,
-                dry_run: !execute,
-                force,
-            };
-
-            let report = cleanup.cleanup(&config).await?;
-
-            println!("\n=== Cleanup Report ===");
-            println!("Mode: {}", mode);
-            println!("Region: {}", region);
-            println!();
-            println!("Resources found: {}", report.total_found);
-            println!("  EC2 Instances:    {}", report.ec2_instances);
-            println!("  Security Groups:  {}", report.security_groups);
-            println!("  IAM Roles:        {}", report.iam_roles);
-            println!("  S3 Buckets:       {}", report.s3_buckets);
-            println!();
-            if execute {
-                println!("Deleted: {}", report.deleted);
-                println!("Failed:  {}", report.failed);
-            } else {
-                println!("Skipped: {} (dry-run mode)", report.skipped);
-                println!();
-                println!("Run with --execute to actually delete resources.");
-            }
+            handle_cleanup_orphans(region, min_age_hours, run_id, execute, force).await?;
         }
+    }
+
+    Ok(())
+}
+
+/// Handle the scan command
+async fn handle_scan(
+    region: String,
+    min_age_hours: u64,
+    run_id: Option<String>,
+    format: String,
+) -> Result<()> {
+    info!(region = %region, min_age_hours, run_id = ?run_id, "Scanning for nix-bench resources");
+
+    let scanner = ResourceScanner::new(&region).await?;
+    let config = ScanConfig {
+        min_age: Duration::hours(min_age_hours as i64),
+        run_id,
+        include_creating: false,
+        ..Default::default()
+    };
+
+    let resources = scanner.scan_all(&config).await?;
+
+    if resources.is_empty() {
+        println!("No nix-bench resources found matching criteria.");
+        return Ok(());
+    }
+
+    if format == "json" {
+        let json_resources: Vec<_> = resources
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "type": format!("{:?}", r.resource_type),
+                    "id": r.resource_id,
+                    "region": r.region,
+                    "run_id": r.run_id,
+                    "created_at": r.created_at.to_rfc3339(),
+                    "status": r.status,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_resources)?);
+    } else {
+        println!(
+            "{:<15} {:<25} {:<15} {:<20} {:<10}",
+            "TYPE", "ID", "RUN_ID", "CREATED_AT", "STATUS"
+        );
+        println!("{}", "-".repeat(85));
+        for r in &resources {
+            println!(
+                "{:<15} {:<25} {:<15} {:<20} {:<10}",
+                format!("{:?}", r.resource_type),
+                if r.resource_id.len() > 24 {
+                    format!("{}...", &r.resource_id[..21])
+                } else {
+                    r.resource_id.clone()
+                },
+                if r.run_id.len() > 14 {
+                    format!("{}...", &r.run_id[..11])
+                } else {
+                    r.run_id.clone()
+                },
+                r.created_at.format("%Y-%m-%d %H:%M:%S"),
+                r.status,
+            );
+        }
+        println!("\nTotal: {} resources", resources.len());
+    }
+
+    Ok(())
+}
+
+/// Handle the cleanup-orphans command
+async fn handle_cleanup_orphans(
+    region: String,
+    min_age_hours: u64,
+    run_id: Option<String>,
+    execute: bool,
+    force: bool,
+) -> Result<()> {
+    let mode = if execute { "EXECUTE" } else { "DRY-RUN" };
+    info!(
+        region = %region,
+        min_age_hours,
+        run_id = ?run_id,
+        mode,
+        force,
+        "Cleaning up orphaned resources"
+    );
+
+    let cleanup = TagBasedCleanup::new(&region).await?;
+    let config = CleanupConfig {
+        min_age: Duration::hours(min_age_hours as i64),
+        run_id,
+        dry_run: !execute,
+        force,
+    };
+
+    let report = cleanup.cleanup(&config).await?;
+
+    println!("\n=== Cleanup Report ===");
+    println!("Mode: {}", mode);
+    println!("Region: {}", region);
+    println!();
+    println!("Resources found: {}", report.total_found);
+    println!("  EC2 Instances:    {}", report.ec2_instances);
+    println!("  Security Groups:  {}", report.security_groups);
+    println!("  IAM Roles:        {}", report.iam_roles);
+    println!("  S3 Buckets:       {}", report.s3_buckets);
+    println!();
+    if execute {
+        println!("Deleted: {}", report.deleted);
+        println!("Failed:  {}", report.failed);
+    } else {
+        println!("Skipped: {} (dry-run mode)", report.skipped);
+        println!();
+        println!("Run with --execute to actually delete resources.");
     }
 
     Ok(())

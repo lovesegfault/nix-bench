@@ -22,6 +22,7 @@ pub use progress::{ChannelReporter, InitProgressReporter, InstanceUpdate, LogRep
 pub use types::{InstanceState, InstanceStatus};
 
 use crate::config::{detect_system, RunConfig};
+use crate::tui::LogCapture;
 use anyhow::Result;
 use tracing::info;
 use uuid::Uuid;
@@ -30,7 +31,7 @@ use uuid::Uuid;
 pub(crate) const GRPC_PORT: u16 = 50051;
 
 /// Run benchmarks on the specified instances
-pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
+pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) -> Result<()> {
     // Determine which architectures we need
     let needs_x86_64 = config
         .instance_types
@@ -132,8 +133,15 @@ pub async fn run_benchmarks(config: RunConfig) -> Result<()> {
 
     // For TUI mode, start TUI immediately and run init in background
     if !config.no_tui {
-        benchmark::run_benchmarks_with_tui(config, run_id, bucket_name, agent_x86_64, agent_aarch64)
-            .await
+        benchmark::run_benchmarks_with_tui(
+            config,
+            run_id,
+            bucket_name,
+            agent_x86_64,
+            agent_aarch64,
+            log_capture,
+        )
+        .await
     } else {
         benchmark::run_benchmarks_no_tui(config, run_id, bucket_name, agent_x86_64, agent_aarch64)
             .await

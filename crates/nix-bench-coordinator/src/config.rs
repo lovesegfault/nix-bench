@@ -1,7 +1,5 @@
 //! Configuration types for the coordinator
 
-use crate::tui::LogCapture;
-
 // Re-export from common for use by orchestration code
 pub use nix_bench_common::{detect_system, AgentConfig};
 
@@ -65,7 +63,4 @@ pub struct RunConfig {
     /// Run garbage collection between benchmark runs
     /// Preserves fixed-output derivations (fetched sources) but removes build outputs
     pub gc_between_runs: bool,
-
-    /// Log capture for printing errors/warnings after TUI exit
-    pub log_capture: Option<LogCapture>,
 }

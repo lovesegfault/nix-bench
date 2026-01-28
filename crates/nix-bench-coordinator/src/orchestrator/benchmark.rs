@@ -24,7 +24,7 @@ use crate::aws::{
     send_ack_complete, start_log_streaming_unified, GrpcStatusPoller, LogStreamingOptions,
 };
 use crate::config::RunConfig;
-use crate::tui::{self, InitPhase, TuiMessage};
+use crate::tui::{self, InitPhase, LogCapture, TuiMessage};
 use nix_bench_common::{StatusCode, TlsConfig};
 
 // ─── Shared Infrastructure ──────────────────────────────────────────────────
@@ -167,6 +167,7 @@ pub async fn run_benchmarks_with_tui(
     bucket_name: String,
     agent_x86_64: Option<String>,
     agent_aarch64: Option<String>,
+    log_capture: Option<LogCapture>,
 ) -> Result<()> {
     use crossterm::{
         event::{DisableMouseCapture, EnableMouseCapture},
@@ -302,8 +303,8 @@ pub async fn run_benchmarks_with_tui(
     terminal.show_cursor()?;
 
     // Print any captured errors/warnings to stderr
-    if let Some(ref log_capture) = config.log_capture {
-        log_capture.print_to_stderr();
+    if let Some(ref capture) = log_capture {
+        capture.print_to_stderr();
     }
 
     // Print results and write output

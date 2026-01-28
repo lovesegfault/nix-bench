@@ -4,7 +4,7 @@
 //! to become ready, with configurable exponential backoff, jitter, and cancellation.
 
 use anyhow::Result;
-use nix_bench_common::jittered_delay;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use std::future::Future;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -35,6 +35,9 @@ impl Default for WaitConfig {
 }
 
 /// Wait for a resource to become ready with exponential backoff.
+///
+/// Uses `backon::ExponentialBuilder` for delay calculation and `tokio::select!`
+/// for cancellation support.
 ///
 /// # Arguments
 /// * `config` - Wait configuration
@@ -69,8 +72,16 @@ where
     Fut: Future<Output = Result<bool>>,
 {
     let start = std::time::Instant::now();
-    let mut delay = config.initial_delay;
     let mut attempts = 0u32;
+
+    let backoff = ExponentialBuilder::default()
+        .with_min_delay(config.initial_delay)
+        .with_max_delay(config.max_delay)
+        .with_factor(2.0)
+        .with_jitter()
+        .build();
+
+    let mut delays = backoff.into_iter();
 
     loop {
         attempts += 1;
@@ -99,18 +110,17 @@ where
                 return Ok(());
             }
             Ok(false) => {
-                // Add jitter to delay
-                let jittered = jittered_delay(delay, config.jitter);
+                let delay = delays.next().unwrap_or(config.max_delay);
                 debug!(
                     resource = %resource_name,
                     attempt = attempts,
-                    delay_ms = jittered.as_millis(),
+                    delay_ms = delay.as_millis(),
                     "Resource not ready, retrying"
                 );
 
                 // Wait with cancellation support
                 tokio::select! {
-                    _ = tokio::time::sleep(jittered) => {}
+                    _ = tokio::time::sleep(delay) => {}
                     _ = async {
                         if let Some(token) = cancel {
                             token.cancelled().await
@@ -121,9 +131,6 @@ where
                         anyhow::bail!("Wait for {} cancelled", resource_name);
                     }
                 }
-
-                // Exponential backoff
-                delay = (delay * 2).min(config.max_delay);
             }
             Err(e) => {
                 warn!(resource = %resource_name, error = ?e, "Resource check failed");

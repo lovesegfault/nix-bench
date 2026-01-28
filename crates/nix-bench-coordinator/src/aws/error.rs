@@ -307,7 +307,7 @@ fn extract_error_code(debug_str: &str) -> Option<String> {
     None
 }
 
-/// Get a user-friendly suggestion for a known error code
+/// Get a user-friendly suggestion for a known error code.
 fn suggestion_for_code(code: &str) -> Option<String> {
     match code {
         // Capacity issues
@@ -337,5 +337,156 @@ fn suggestion_for_code(code: &str) -> Option<String> {
         }
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── classify_aws_error ──────────────────────────────────────────
+
+    #[test]
+    fn not_found_codes() {
+        for code in NOT_FOUND_CODES {
+            let err = classify_aws_error(Some(code), Some("some message"));
+            assert!(err.is_not_found(), "Expected NotFound for code: {code}");
+        }
+    }
+
+    #[test]
+    fn already_exists_codes() {
+        for code in ALREADY_EXISTS_CODES {
+            let err = classify_aws_error(Some(code), Some("msg"));
+            assert!(err.is_already_exists(), "Expected AlreadyExists for code: {code}");
+        }
+    }
+
+    #[test]
+    fn throttling_codes() {
+        for code in THROTTLING_CODES {
+            let err = classify_aws_error(Some(code), Some("msg"));
+            assert!(err.is_retryable(), "Expected retryable for code: {code}");
+            assert!(matches!(err, AwsError::Throttled));
+        }
+    }
+
+    #[test]
+    fn dependency_violation() {
+        let err = classify_aws_error(Some("DependencyViolation"), Some("ENI attached"));
+        assert!(err.is_retryable());
+        assert!(matches!(err, AwsError::DependencyViolation));
+    }
+
+    #[test]
+    fn iam_propagation_delay() {
+        let err = classify_aws_error(
+            Some("InvalidParameterValue"),
+            Some("Value for parameter iamInstanceProfile is invalid"),
+        );
+        assert!(matches!(err, AwsError::IamPropagationDelay));
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn iam_propagation_alternate_message() {
+        let err = classify_aws_error(
+            Some("SomeCode"),
+            Some("Invalid IAM Instance Profile name"),
+        );
+        assert!(matches!(err, AwsError::IamPropagationDelay));
+    }
+
+    #[test]
+    fn unknown_code_falls_through_to_sdk() {
+        let err = classify_aws_error(Some("SomeNewError"), Some("details"));
+        assert!(matches!(err, AwsError::Sdk { .. }));
+    }
+
+    #[test]
+    fn no_code_falls_through_to_sdk() {
+        let err = classify_aws_error(None, Some("something failed"));
+        assert!(matches!(err, AwsError::Sdk { code: None, .. }));
+    }
+
+    // ── extract_error_code ──────────────────────────────────────────
+
+    #[test]
+    fn extract_known_codes_from_debug_string() {
+        for code_list in ALL_KNOWN_CODE_LISTS {
+            for code in *code_list {
+                let debug_str = format!("SdkError {{ code: Some(\"{code}\"), message: \"fail\" }}");
+                let extracted = extract_error_code(&debug_str);
+                assert!(
+                    extracted.is_some(),
+                    "Failed to extract any code from string containing: {code}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn extract_code_from_code_field() {
+        let debug_str = r#"SdkError { code: Some("SomeRandomCode"), message: "fail" }"#;
+        let extracted = extract_error_code(debug_str);
+        assert_eq!(extracted.as_deref(), Some("SomeRandomCode"));
+    }
+
+    #[test]
+    fn extract_none_from_unrelated_string() {
+        let extracted = extract_error_code("connection refused");
+        assert!(extracted.is_none());
+    }
+
+    // ── suggestion_for_code ─────────────────────────────────────────
+
+    #[test]
+    fn suggestions_exist_for_capacity_codes() {
+        for code in CAPACITY_CODES {
+            assert!(
+                suggestion_for_code(code).is_some(),
+                "No suggestion for capacity code: {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn suggestions_exist_for_limit_codes() {
+        for code in LIMIT_CODES {
+            assert!(
+                suggestion_for_code(code).is_some(),
+                "No suggestion for limit code: {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_suggestion_for_unknown_code() {
+        assert!(suggestion_for_code("SomeUnknownCode").is_none());
+    }
+
+    // ── AwsError methods ────────────────────────────────────────────
+
+    #[test]
+    fn is_not_found_only_for_not_found() {
+        assert!(AwsError::NotFound {
+            resource_type: "test",
+            resource_id: "id".to_string()
+        }
+        .is_not_found());
+        assert!(!AwsError::Throttled.is_not_found());
+    }
+
+    #[test]
+    fn is_retryable_for_expected_variants() {
+        assert!(AwsError::IamPropagationDelay.is_retryable());
+        assert!(AwsError::Throttled.is_retryable());
+        assert!(AwsError::DependencyViolation.is_retryable());
+        assert!(!AwsError::AlreadyExists.is_retryable());
+        assert!(!AwsError::NotFound {
+            resource_type: "test",
+            resource_id: "id".to_string()
+        }
+        .is_retryable());
     }
 }

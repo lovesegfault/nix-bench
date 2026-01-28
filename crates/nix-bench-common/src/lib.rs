@@ -26,7 +26,11 @@ pub use stats::DurationStats;
 pub use status::StatusCode;
 pub use tls::{CertKeyPair, TlsConfig};
 
+// Re-export RunId for ergonomic use
+// (defined below, after Architecture)
+
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// System architecture for EC2 instances.
 ///
@@ -80,6 +84,50 @@ impl Architecture {
 impl std::fmt::Display for Architecture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// Unique identifier for a benchmark run (UUIDv7).
+///
+/// Wraps a UUIDv7 string to provide type safety for run identifiers.
+/// Implements `Display`, `AsRef<str>`, and serde traits for ergonomic use.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RunId(String);
+
+impl RunId {
+    /// Generate a new RunId using UUIDv7 (time-based).
+    pub fn new() -> Self {
+        Self(Uuid::now_v7().to_string())
+    }
+
+    /// Get the string representation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for RunId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for RunId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for RunId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for RunId {
+    fn from(s: String) -> Self {
+        Self(s)
     }
 }
 
@@ -162,6 +210,42 @@ mod tests {
         assert_eq!(json, "\"aarch64-linux\"");
         let back: Architecture = serde_json::from_str(&json).unwrap();
         assert_eq!(back, arm);
+    }
+
+    #[test]
+    fn test_run_id_is_uuid() {
+        let id = RunId::new();
+        // UUIDv7 format: 8-4-4-4-12 hex chars
+        assert_eq!(id.as_str().len(), 36);
+        assert!(id.as_str().contains('-'));
+    }
+
+    #[test]
+    fn test_run_id_unique() {
+        let a = RunId::new();
+        let b = RunId::new();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_run_id_display() {
+        let id = RunId::new();
+        let s = format!("{}", id);
+        assert_eq!(s, id.as_str());
+    }
+
+    #[test]
+    fn test_run_id_serde_roundtrip() {
+        let id = RunId::new();
+        let json = serde_json::to_string(&id).unwrap();
+        let back: RunId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn test_run_id_from_string() {
+        let id = RunId::from("test-123".to_string());
+        assert_eq!(id.as_str(), "test-123");
     }
 
     #[test]

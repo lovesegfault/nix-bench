@@ -19,6 +19,9 @@ serde_json.workspace = true
 rcgen.workspace = true
 rand.workspace = true
 
+# Unique identifiers
+uuid.workspace = true
+
 # Optional tonic integration for TlsConfig methods
 tonic = { workspace = true, optional = true }
 

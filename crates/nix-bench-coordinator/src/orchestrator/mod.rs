@@ -25,9 +25,8 @@ use crate::config::RunConfig;
 use crate::tui::LogCapture;
 use anyhow::Result;
 use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
-use nix_bench_common::{Architecture, detect_system};
+use nix_bench_common::{Architecture, RunId, detect_system};
 use tracing::info;
-use uuid::Uuid;
 
 /// gRPC port for agent communication (from common defaults)
 pub(crate) const GRPC_PORT: u16 = DEFAULT_GRPC_PORT;
@@ -129,8 +128,8 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
         return Ok(());
     }
 
-    // Generate run ID
-    let run_id = Uuid::now_v7().to_string();
+    // Generate run ID (UUIDv7)
+    let run_id = RunId::new().to_string();
     let bucket_name = format!("nix-bench-{}", run_id);
 
     // For TUI mode, start TUI immediately and run init in background

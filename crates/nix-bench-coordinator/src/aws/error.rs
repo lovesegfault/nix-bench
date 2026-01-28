@@ -506,3 +506,45 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// extract_error_code never panics on arbitrary input
+        #[test]
+        fn extract_error_code_never_panics(input in ".*") {
+            let _ = extract_error_code(&input);
+        }
+
+        /// classify_aws_error never panics on arbitrary input
+        #[test]
+        fn classify_aws_error_never_panics(
+            code in proptest::option::of("[A-Za-z.]{0,50}"),
+            message in proptest::option::of(".{0,200}"),
+        ) {
+            let _ = classify_aws_error(code.as_deref(), message.as_deref());
+        }
+
+        /// Known codes are always correctly extracted from debug strings
+        #[test]
+        fn known_codes_always_found(
+            prefix in ".{0,100}",
+            suffix in ".{0,100}",
+            code_idx in 0..NOT_FOUND_CODES.len(),
+        ) {
+            let code = NOT_FOUND_CODES[code_idx];
+            let debug_str = format!("{}{}{}", prefix, code, suffix);
+            let extracted = extract_error_code(&debug_str);
+            prop_assert!(extracted.is_some(), "Failed to extract known code: {}", code);
+        }
+
+        /// suggestion_for_code never panics
+        #[test]
+        fn suggestion_never_panics(code in ".{0,50}") {
+            let _ = suggestion_for_code(&code);
+        }
+    }
+}

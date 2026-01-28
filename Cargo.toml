@@ -80,6 +80,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 # Testing
 tempfile = "3"
+proptest = "1"
 
 [profile.release]
 opt-level = 3

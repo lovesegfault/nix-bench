@@ -10,7 +10,6 @@
 
 pub mod account;
 pub mod cleanup;
-pub mod cleanup_util;
 pub mod context;
 pub mod ec2;
 pub mod error;
@@ -36,7 +35,7 @@ pub use error::{
 };
 
 // Cleanup utilities
-pub use cleanup_util::{CleanupResult, delete_resource, partition_resources_for_cleanup};
+pub use cleanup::{CleanupResult, delete_resource, partition_resources_for_cleanup};
 
 // gRPC client
 pub use grpc_client::{

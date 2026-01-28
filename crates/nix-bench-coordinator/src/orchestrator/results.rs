@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, ContentArrangement, Table};
+use nix_bench_common::DurationStats;
 use tracing::info;
 
 use super::types::{InstanceState, InstanceStatus};
@@ -28,25 +29,8 @@ pub async fn write_results(
         let results: HashMap<String, serde_json::Value> = instances
             .iter()
             .map(|(k, v)| {
-                let avg = if !v.durations().is_empty() {
-                    v.durations().iter().sum::<f64>() / v.durations().len() as f64
-                } else {
-                    0.0
-                };
-                let min = v
-                    .durations()
-                    .iter()
-                    .cloned()
-                    .filter(|x| x.is_finite())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(0.0);
-                let max = v
-                    .durations()
-                    .iter()
-                    .cloned()
-                    .filter(|x| x.is_finite())
-                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(0.0);
+                let durations = v.durations();
+                let stats = DurationStats::from_durations(&durations);
 
                 (
                     k.clone(),
@@ -56,11 +40,11 @@ pub async fn write_results(
                         "status": format!("{:?}", v.status),
                         "runs_completed": v.run_progress,
                         "runs_total": v.total_runs,
-                        "durations_seconds": v.durations(),
+                        "durations_seconds": durations,
                         "stats": {
-                            "avg_seconds": avg,
-                            "min_seconds": min,
-                            "max_seconds": max,
+                            "avg_seconds": stats.avg,
+                            "min_seconds": stats.min,
+                            "max_seconds": stats.max,
                         }
                     }),
                 )
@@ -109,15 +93,17 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
     // Sort by average duration (fastest first), with instances that have no results at the end
     let mut sorted: Vec<_> = instances.iter().collect();
     sorted.sort_by(|(k1, s1), (k2, s2)| {
-        let avg1 = if s1.durations().is_empty() {
+        let stats1 = DurationStats::from_durations(&s1.durations());
+        let stats2 = DurationStats::from_durations(&s2.durations());
+        let avg1 = if stats1.is_empty() {
             f64::MAX
         } else {
-            s1.durations().iter().sum::<f64>() / s1.durations().len() as f64
+            stats1.avg
         };
-        let avg2 = if s2.durations().is_empty() {
+        let avg2 = if stats2.is_empty() {
             f64::MAX
         } else {
-            s2.durations().iter().sum::<f64>() / s2.durations().len() as f64
+            stats2.avg
         };
         avg1.partial_cmp(&avg2)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -125,38 +111,18 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
     });
 
     for (instance_type, state) in sorted {
-        let status = match state.status {
-            InstanceStatus::Pending => "Pending",
-            InstanceStatus::Launching => "Launching",
-            InstanceStatus::Starting => "Starting",
-            InstanceStatus::Running => "Running",
-            InstanceStatus::Complete => "Complete",
-            InstanceStatus::Failed => "Failed",
-            InstanceStatus::Terminated => "Terminated",
-        };
-
+        let status = state.status.as_str();
         let runs = format!("{}/{}", state.run_progress, state.total_runs);
 
-        let (min, avg, max) = if state.durations().is_empty() {
+        let durations = state.durations();
+        let stats = DurationStats::from_durations(&durations);
+        let (min, avg, max) = if stats.is_empty() {
             ("-".to_string(), "-".to_string(), "-".to_string())
         } else {
-            let min_val = state
-                .durations()
-                .iter()
-                .cloned()
-                .filter(|x| x.is_finite())
-                .fold(f64::MAX, f64::min);
-            let avg_val = state.durations().iter().sum::<f64>() / state.durations().len() as f64;
-            let max_val = state
-                .durations()
-                .iter()
-                .cloned()
-                .filter(|x| x.is_finite())
-                .fold(f64::MIN, f64::max);
             (
-                format!("{:.1}", min_val),
-                format!("{:.1}", avg_val),
-                format!("{:.1}", max_val),
+                format!("{:.1}", stats.min),
+                format!("{:.1}", stats.avg),
+                format!("{:.1}", stats.max),
             )
         };
 

@@ -65,10 +65,15 @@ impl ResourceScanner {
     /// Create a new scanner for the given region
     pub async fn new(region: &str) -> Result<Self> {
         let ctx = AwsContext::new(region).await;
-        Ok(Self {
-            ctx,
-            region: region.to_string(),
-        })
+        Ok(Self::from_context(&ctx))
+    }
+
+    /// Create a scanner from a shared AWS context.
+    pub fn from_context(ctx: &AwsContext) -> Self {
+        Self {
+            ctx: ctx.clone(),
+            region: ctx.region().to_string(),
+        }
     }
 
     /// Scan all resource types and return discovered nix-bench resources

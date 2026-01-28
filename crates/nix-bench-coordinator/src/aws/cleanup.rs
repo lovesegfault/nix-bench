@@ -6,6 +6,7 @@
 
 use super::resource_kind::ResourceKind;
 use super::scanner::{DiscoveredResource, ResourceScanner, ScanConfig};
+use crate::aws::context::AwsContext;
 use crate::aws::{Ec2Client, IamClient, S3Client};
 use anyhow::Result;
 use chrono::Duration;
@@ -62,12 +63,21 @@ pub struct TagBasedCleanup {
 impl TagBasedCleanup {
     /// Create a new tag-based cleanup instance
     pub async fn new(region: &str) -> Result<Self> {
+        let ctx = AwsContext::new(region).await;
+        Self::from_context(&ctx)
+    }
+
+    /// Create a tag-based cleanup instance from a shared AWS context.
+    ///
+    /// This avoids creating redundant AWS SDK clients when the caller
+    /// already has an `AwsContext`.
+    pub fn from_context(ctx: &AwsContext) -> Result<Self> {
         Ok(Self {
-            scanner: ResourceScanner::new(region).await?,
-            ec2: Ec2Client::new(region).await?,
-            s3: S3Client::new(region).await?,
-            iam: IamClient::new(region).await?,
-            region: region.to_string(),
+            scanner: ResourceScanner::from_context(ctx),
+            ec2: Ec2Client::from_context(ctx),
+            s3: S3Client::from_context(ctx),
+            iam: IamClient::from_context(ctx),
+            region: ctx.region().to_string(),
         })
     }
 

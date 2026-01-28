@@ -225,7 +225,9 @@ pub(crate) fn source_nix_profile() -> Result<()> {
 
     let current_path = std::env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", nix_paths.join(":"), current_path);
-    std::env::set_var("PATH", &new_path);
+    // SAFETY: This runs during single-threaded agent bootstrap before any
+    // concurrent tasks are spawned, so no other threads can observe the env.
+    unsafe { std::env::set_var("PATH", &new_path) };
 
     // Also set NIX_SSL_CERT_FILE if not set (needed for Nix to fetch from https)
     if std::env::var("NIX_SSL_CERT_FILE").is_err() {
@@ -238,7 +240,8 @@ pub(crate) fn source_nix_profile() -> Result<()> {
         ];
         for loc in cert_locations {
             if Path::new(loc).exists() {
-                std::env::set_var("NIX_SSL_CERT_FILE", loc);
+                // SAFETY: Same as above - single-threaded bootstrap phase.
+                unsafe { std::env::set_var("NIX_SSL_CERT_FILE", loc) };
                 debug!(path = %loc, "Set NIX_SSL_CERT_FILE");
                 break;
             }

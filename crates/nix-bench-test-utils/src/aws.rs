@@ -73,18 +73,24 @@ mod tests {
         let original_region = std::env::var("AWS_REGION").ok();
         let original_default = std::env::var("AWS_DEFAULT_REGION").ok();
 
-        std::env::remove_var("AWS_REGION");
-        std::env::remove_var("AWS_DEFAULT_REGION");
+        // SAFETY: Test-only code, tests are run serially with --test-threads=1
+        // or env mutation is acceptable for this test.
+        unsafe {
+            std::env::remove_var("AWS_REGION");
+            std::env::remove_var("AWS_DEFAULT_REGION");
+        }
 
         let region = get_test_region();
         assert_eq!(region, "us-east-2");
 
         // Restore env vars
-        if let Some(r) = original_region {
-            std::env::set_var("AWS_REGION", r);
-        }
-        if let Some(r) = original_default {
-            std::env::set_var("AWS_DEFAULT_REGION", r);
+        unsafe {
+            if let Some(r) = original_region {
+                std::env::set_var("AWS_REGION", r);
+            }
+            if let Some(r) = original_default {
+                std::env::set_var("AWS_DEFAULT_REGION", r);
+            }
         }
     }
 

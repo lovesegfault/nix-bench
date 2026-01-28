@@ -119,6 +119,9 @@ impl Ec2Client {
         &self,
         params: LaunchParams<'_>,
     ) -> Result<LaunchedInstance> {
+        use aws_sdk_ec2::types::{BlockDeviceMapping, EbsBlockDevice, VolumeType};
+        use nix_bench_common::defaults::DEFAULT_ROOT_VOLUME_SIZE_GIB;
+
         let created_at = tags::format_created_at(Utc::now());
         let mut request = self
             .client
@@ -128,6 +131,18 @@ impl Ec2Client {
             .min_count(1)
             .max_count(1)
             .user_data(params.user_data_b64)
+            .block_device_mappings(
+                BlockDeviceMapping::builder()
+                    .device_name("/dev/xvda")
+                    .ebs(
+                        EbsBlockDevice::builder()
+                            .volume_size(DEFAULT_ROOT_VOLUME_SIZE_GIB)
+                            .volume_type(VolumeType::Gp3)
+                            .delete_on_termination(true)
+                            .build(),
+                    )
+                    .build(),
+            )
             .tag_specifications(
                 TagSpecification::builder()
                     .resource_type(ResourceType::Instance)

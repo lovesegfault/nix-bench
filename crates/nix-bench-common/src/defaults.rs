@@ -38,6 +38,9 @@ pub const DEFAULT_BOOTSTRAP_TIMEOUT_SECS: u64 = 600;
 /// Default GC timeout (seconds)
 pub const DEFAULT_GC_TIMEOUT_SECS: u64 = 600;
 
+/// Default root EBS volume size in GiB for benchmark instances
+pub const DEFAULT_ROOT_VOLUME_SIZE_GIB: i32 = 100;
+
 // Serde default functions for struct field defaults
 
 /// Returns the default flake reference

@@ -52,7 +52,7 @@ impl Default for AgentStatus {
 }
 
 /// Maximum number of messages to buffer for late subscribers
-const LOG_BUFFER_SIZE: usize = 1000;
+const LOG_BUFFER_SIZE: usize = nix_bench_common::defaults::DEFAULT_LOG_BUFFER_SIZE;
 
 /// Broadcasts log entries to all connected gRPC clients
 pub struct LogBroadcaster {
@@ -107,8 +107,8 @@ pub struct LogStreamService {
     shutdown_token: CancellationToken,
     /// Counter for total dropped messages across all clients (for monitoring)
     dropped_messages: Arc<AtomicU64>,
-    /// Set when coordinator acknowledges completion
-    acknowledged: Arc<std::sync::atomic::AtomicBool>,
+    /// Notified when coordinator acknowledges completion
+    acknowledged: AckFlag,
 }
 
 impl LogStreamService {
@@ -126,20 +126,8 @@ impl LogStreamService {
             status,
             shutdown_token,
             dropped_messages: Arc::new(AtomicU64::new(0)),
-            acknowledged: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            acknowledged: new_ack_flag(),
         }
-    }
-
-    /// Wait for the coordinator to acknowledge completion, with a fallback timeout.
-    pub async fn wait_for_ack(&self, timeout: std::time::Duration) -> Result<()> {
-        let ack = self.acknowledged.clone();
-        tokio::time::timeout(timeout, async move {
-            while !ack.load(Ordering::Relaxed) {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("Timed out waiting for coordinator acknowledgment"))
     }
 }
 
@@ -282,7 +270,7 @@ impl LogStream for LogStreamService {
     ) -> Result<Response<AckCompleteResponse>, Status> {
         let req = request.into_inner();
         info!(run_id = %req.run_id, "Received completion acknowledgment from coordinator");
-        self.acknowledged.store(true, Ordering::Relaxed);
+        self.acknowledged.notify_one();
         Ok(Response::new(AckCompleteResponse { acknowledged: true }))
     }
 
@@ -332,53 +320,56 @@ impl LogStream for LogStreamService {
 /// # Returns
 /// * `Ok(())` when server shuts down gracefully
 /// * `Err` on server error
-pub type AckFlag = Arc<std::sync::atomic::AtomicBool>;
+
+/// Event-driven acknowledgment flag using `Notify` instead of busy-wait polling.
+pub type AckFlag = Arc<tokio::sync::Notify>;
 
 /// Create a new acknowledgment flag.
 pub fn new_ack_flag() -> AckFlag {
-    Arc::new(std::sync::atomic::AtomicBool::new(false))
+    Arc::new(tokio::sync::Notify::new())
 }
 
 /// Wait for the acknowledgment flag to be set, with a fallback timeout.
+///
+/// Uses `tokio::sync::Notify` for event-driven wake-up instead of polling.
 pub async fn wait_for_ack(ack: &AckFlag, timeout: std::time::Duration) -> Result<()> {
-    tokio::time::timeout(timeout, async {
-        while !ack.load(Ordering::Relaxed) {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("Timed out waiting for coordinator acknowledgment"))
+    tokio::time::timeout(timeout, ack.notified())
+        .await
+        .map(|_| ())
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for coordinator acknowledgment"))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_grpc_server(
-    port: u16,
-    broadcaster: Arc<LogBroadcaster>,
-    run_id: String,
-    instance_type: String,
-    status: Arc<RwLock<AgentStatus>>,
-    tls_config: TlsConfig,
-    shutdown_token: CancellationToken,
-    ack_flag: AckFlag,
-) -> Result<()> {
-    let addr = format!("0.0.0.0:{}", port).parse()?;
+/// Configuration for the gRPC server
+pub struct GrpcServerConfig {
+    pub port: u16,
+    pub broadcaster: Arc<LogBroadcaster>,
+    pub run_id: String,
+    pub instance_type: String,
+    pub status: Arc<RwLock<AgentStatus>>,
+    pub tls_config: TlsConfig,
+    pub shutdown_token: CancellationToken,
+    pub ack_flag: AckFlag,
+}
+
+pub async fn run_grpc_server(config: GrpcServerConfig) -> Result<()> {
+    let addr = format!("0.0.0.0:{}", config.port).parse()?;
 
     let mut service = LogStreamService::new(
-        broadcaster,
-        run_id,
-        instance_type,
-        status,
-        shutdown_token.clone(),
+        config.broadcaster,
+        config.run_id,
+        config.instance_type,
+        config.status,
+        config.shutdown_token.clone(),
     );
-    service.acknowledged = ack_flag;
+    service.acknowledged = config.ack_flag;
 
-    let tls = tls_config.server_tls_config()?;
+    let tls = config.tls_config.server_tls_config()?;
     info!(%addr, "Starting gRPC server with mTLS");
 
     tonic::transport::Server::builder()
         .tls_config(tls)?
         .add_service(LogStreamServer::new(service))
-        .serve_with_shutdown(addr, shutdown_token.cancelled_owned())
+        .serve_with_shutdown(addr, config.shutdown_token.cancelled_owned())
         .await?;
 
     info!("gRPC server shut down gracefully");

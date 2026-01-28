@@ -7,13 +7,11 @@ use anyhow::Result;
 use clap::Parser;
 use grpc::StatusCode;
 use nix_bench_agent::{benchmark, bootstrap, gc, grpc, logging, results};
+use nix_bench_common::defaults::{DEFAULT_ACK_TIMEOUT_SECS, DEFAULT_BROADCAST_CAPACITY};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-
-/// Default broadcast channel capacity for gRPC log streaming
-const DEFAULT_BROADCAST_CAPACITY: usize = 1024;
 
 #[derive(Parser, Debug)]
 #[command(name = "nix-bench-agent")]
@@ -92,7 +90,8 @@ async fn main() -> Result<()> {
     let logger = logging::GrpcLogger::new(broadcaster.clone());
     logger.write_line("Waiting for benchmark config with TLS certificates from S3...");
 
-    let tls_timeout = std::time::Duration::from_secs(300); // 5 minutes timeout
+    let tls_timeout =
+        std::time::Duration::from_secs(nix_bench_common::defaults::DEFAULT_TLS_CONFIG_TIMEOUT_SECS);
     let config = match results::download_config_with_tls(
         &args.bucket,
         &args.run_id,
@@ -144,16 +143,16 @@ async fn main() -> Result<()> {
     let ack_flag_for_grpc = ack_flag.clone();
 
     let grpc_handle = tokio::spawn(async move {
-        if let Err(e) = grpc::run_grpc_server(
-            grpc_port,
-            grpc_broadcaster,
-            grpc_run_id,
-            grpc_instance_type,
-            grpc_status,
+        if let Err(e) = grpc::run_grpc_server(grpc::GrpcServerConfig {
+            port: grpc_port,
+            broadcaster: grpc_broadcaster,
+            run_id: grpc_run_id,
+            instance_type: grpc_instance_type,
+            status: grpc_status,
             tls_config,
-            grpc_shutdown,
-            ack_flag_for_grpc,
-        )
+            shutdown_token: grpc_shutdown,
+            ack_flag: ack_flag_for_grpc,
+        })
         .await
         {
             error!(error = %e, "gRPC server error");
@@ -221,7 +220,8 @@ async fn main() -> Result<()> {
         config.runs, config.attr, config.flake_ref, config.build_timeout, config.max_failures
     ));
 
-    let run_results = benchmark::run_benchmarks_with_retry(&config, &logger, &status).await?;
+    let run_results =
+        benchmark::run_benchmarks_with_retry(&config, &logger, &status, &shutdown_token).await?;
 
     // Signal completion (results are now available via gRPC GetStatus)
     {
@@ -237,7 +237,12 @@ async fn main() -> Result<()> {
 
     // Wait for coordinator to acknowledge completion, with fallback timeout
     info!("Waiting for coordinator acknowledgment...");
-    match grpc::wait_for_ack(&ack_flag, std::time::Duration::from_secs(120)).await {
+    match grpc::wait_for_ack(
+        &ack_flag,
+        std::time::Duration::from_secs(DEFAULT_ACK_TIMEOUT_SECS),
+    )
+    .await
+    {
         Ok(()) => info!("Coordinator acknowledged completion"),
         Err(_) => warn!("Timed out waiting for coordinator ack, shutting down anyway"),
     }

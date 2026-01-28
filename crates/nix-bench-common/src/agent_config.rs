@@ -16,6 +16,7 @@ fn default_gc_between_runs() -> bool {
 /// This struct is serialized by the coordinator and deserialized by the agent.
 /// All fields needed for the agent to execute benchmarks are included here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     /// Unique run identifier (UUIDv7)
     pub run_id: String,

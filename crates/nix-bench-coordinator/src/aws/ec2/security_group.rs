@@ -29,7 +29,13 @@ impl Ec2Client {
         coordinator_cidr: &str,
         vpc_id: Option<&str>,
     ) -> Result<String> {
-        let sg_name = format!("nix-bench-{}", &run_id[..13.min(run_id.len())]);
+        let sg_name = format!("nix-bench-{}", run_id);
+        // AWS SG names can be up to 255 chars; truncate only if needed
+        let sg_name = if sg_name.len() > 255 {
+            sg_name[..255].to_string()
+        } else {
+            sg_name
+        };
         info!(name = %sg_name, "Creating security group");
 
         // Get VPC ID if not provided

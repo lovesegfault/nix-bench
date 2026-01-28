@@ -32,10 +32,20 @@ impl AwsContext {
     /// This loads credentials, region configuration, and other AWS SDK
     /// settings from the environment, config files, and IAM roles.
     pub async fn new(region: &str) -> Self {
-        let config = aws_config::defaults(BehaviorVersion::latest())
-            .region(Region::new(region.to_string()))
-            .load()
-            .await;
+        Self::with_profile(region, None).await
+    }
+
+    /// Load AWS configuration with an optional named profile.
+    ///
+    /// If `profile` is provided, uses the specified AWS profile for
+    /// credential resolution instead of the default chain.
+    pub async fn with_profile(region: &str, profile: Option<&str>) -> Self {
+        let mut loader =
+            aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region.to_string()));
+        if let Some(profile) = profile {
+            loader = loader.profile_name(profile);
+        }
+        let config = loader.load().await;
 
         Self {
             config: Arc::new(config),

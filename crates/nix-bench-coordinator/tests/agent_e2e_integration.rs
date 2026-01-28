@@ -112,6 +112,8 @@ async fn test_full_benchmark_with_agent() {
     nix_bench_test_utils::init_crypto();
 
     let region = get_test_region();
+    cleanup_stale_test_resources(&region).await;
+
     let run_id = test_run_id();
     let bucket_name = format!("nix-bench-{}", run_id);
 
@@ -151,16 +153,15 @@ async fn test_full_benchmark_with_agent() {
         .await
         .expect("AWS credentials required");
 
-    // Track resources for cleanup
-    let mut instance_ids: Vec<String> = Vec::new();
-    let mut security_group_id: Option<String> = None;
-    let mut role_name: Option<String> = None;
+    // Track resources for cleanup (RAII guard handles panic cleanup)
+    let mut tracker = TestResourceTracker::new(&region);
 
     let result = async {
         // === Step 1: Create S3 bucket ===
         println!("\n[1/8] Creating S3 bucket: {}", bucket_name);
         s3.create_bucket(&bucket_name).await?;
         s3.tag_bucket(&bucket_name, &run_id).await?;
+        tracker.track_bucket(bucket_name.clone());
 
         // === Step 2: Upload agent binaries ===
         println!("[2/8] Uploading agent binaries...");
@@ -177,7 +178,7 @@ async fn test_full_benchmark_with_agent() {
         let (rn, _profile) = iam
             .create_benchmark_role(&run_id, &bucket_name, None)
             .await?;
-        role_name = Some(rn.clone());
+        tracker.track_iam_role(rn.clone());
 
         // === Step 4: Create security group ===
         println!("[4/8] Creating security group...");
@@ -189,7 +190,7 @@ async fn test_full_benchmark_with_agent() {
         let sg_id = ec2
             .create_security_group(&run_id, &coordinator_cidr, None)
             .await?;
-        security_group_id = Some(sg_id.clone());
+        tracker.track_sg(sg_id.clone());
         println!(
             "  Security group: {} (allowed from {})",
             sg_id, coordinator_cidr
@@ -198,6 +199,9 @@ async fn test_full_benchmark_with_agent() {
         // === Step 5: Launch instances ===
         println!("[5/8] Launching instances...");
         let mut instance_ips: HashMap<String, String> = HashMap::new();
+
+        // Wait for IAM instance profile to propagate to EC2
+        tokio::time::sleep(Duration::from_secs(10)).await;
 
         for (instance_type, _arch, system) in &available_instances {
             let user_data = generate_user_data(&bucket_name, &run_id, instance_type);
@@ -212,12 +216,12 @@ async fn test_full_benchmark_with_agent() {
                 "  Launched {} ({}) - {}",
                 instance_type, system, instance.instance_id
             );
-            instance_ids.push(instance.instance_id.clone());
+            tracker.track_instance(instance.instance_id.clone());
         }
 
         // === Step 6: Wait for instances and get IPs ===
         println!("[6/8] Waiting for instances to be running...");
-        for (idx, instance_id) in instance_ids.iter().enumerate() {
+        for (idx, instance_id) in tracker.instance_ids.iter().enumerate() {
             let instance_type = available_instances[idx].0;
             let public_ip = ec2
                 .wait_for_running(instance_id, Some(INSTANCE_TIMEOUT_SECS))
@@ -312,7 +316,7 @@ async fn test_full_benchmark_with_agent() {
     println!("\n=== Cleanup ===");
 
     // Terminate instances
-    for instance_id in &instance_ids {
+    for instance_id in &tracker.instance_ids {
         println!("  Terminating instance: {}", instance_id);
         if let Err(e) = ec2.terminate_instance(instance_id).await {
             eprintln!("    Warning: Failed to terminate: {}", e);
@@ -320,32 +324,40 @@ async fn test_full_benchmark_with_agent() {
     }
 
     // Wait for termination before deleting SG
-    for instance_id in &instance_ids {
+    for instance_id in &tracker.instance_ids {
         let _ = ec2.wait_for_terminated(instance_id).await;
     }
 
     // Delete security group
     tokio::time::sleep(Duration::from_secs(5)).await;
-    if let Some(sg_id) = security_group_id {
+    for sg_id in &tracker.security_group_ids {
         println!("  Deleting security group: {}", sg_id);
-        if let Err(e) = ec2.delete_security_group(&sg_id).await {
+        if let Err(e) = ec2.delete_security_group(sg_id).await {
             eprintln!("    Warning: Failed to delete SG: {}", e);
         }
     }
 
     // Delete IAM role
-    if let Some(rn) = role_name {
+    for rn in &tracker.iam_role_names {
         println!("  Deleting IAM role: {}", rn);
-        if let Err(e) = iam.delete_benchmark_role(&rn).await {
+        if let Err(e) = iam.delete_benchmark_role(rn).await {
             eprintln!("    Warning: Failed to delete role: {}", e);
         }
     }
 
     // Delete S3 bucket
-    println!("  Deleting S3 bucket: {}", bucket_name);
-    if let Err(e) = s3.delete_bucket(&bucket_name).await {
-        eprintln!("    Warning: Failed to delete bucket: {}", e);
+    for bucket in &tracker.bucket_names {
+        println!("  Deleting S3 bucket: {}", bucket);
+        if let Err(e) = s3.delete_bucket(bucket).await {
+            eprintln!("    Warning: Failed to delete bucket: {}", e);
+        }
     }
+
+    // Clear tracker since we cleaned up successfully
+    tracker.instance_ids.clear();
+    tracker.security_group_ids.clear();
+    tracker.iam_role_names.clear();
+    tracker.bucket_names.clear();
 
     println!("\n=== Agent E2E Test Complete ===");
 
@@ -363,6 +375,8 @@ async fn test_infrastructure_setup_only() {
     nix_bench_test_utils::init_crypto();
 
     let region = get_test_region();
+    cleanup_stale_test_resources(&region).await;
+
     let run_id = test_run_id();
     let bucket_name = format!("nix-bench-{}", run_id);
 
@@ -379,17 +393,22 @@ async fn test_infrastructure_setup_only() {
         .await
         .expect("AWS credentials required");
 
+    // Track resources for cleanup-on-failure
+    let mut tracker = TestResourceTracker::new(&region);
+
     // Create resources
     println!("[1/4] Creating S3 bucket...");
     s3.create_bucket(&bucket_name)
         .await
         .expect("Should create bucket");
+    tracker.track_bucket(bucket_name.clone());
 
     println!("[2/4] Creating IAM role...");
     let (role_name, _profile) = iam
         .create_benchmark_role(&run_id, &bucket_name, None)
         .await
         .expect("Should create role");
+    tracker.track_iam_role(role_name.clone());
 
     println!("[3/4] Creating security group...");
     let coordinator_ip = get_coordinator_public_ip()
@@ -399,6 +418,10 @@ async fn test_infrastructure_setup_only() {
         .create_security_group(&run_id, &format!("{}/32", coordinator_ip), None)
         .await
         .expect("Should create SG");
+    tracker.track_sg(sg_id.clone());
+
+    // Wait for IAM instance profile to propagate to EC2
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     println!("[4/4] Launching instance...");
     let user_data = "#!/bin/bash\necho 'Test instance'\nsleep 300";
@@ -412,6 +435,7 @@ async fn test_infrastructure_setup_only() {
         .expect("Should launch instance");
 
     println!("  Instance: {}", instance.instance_id);
+    tracker.track_instance(instance.instance_id.clone());
 
     let public_ip = ec2
         .wait_for_running(&instance.instance_id, Some(300))
@@ -438,6 +462,12 @@ async fn test_infrastructure_setup_only() {
     s3.delete_bucket(&bucket_name)
         .await
         .expect("Should delete bucket");
+
+    // Clear tracker since we cleaned up successfully
+    tracker.instance_ids.clear();
+    tracker.security_group_ids.clear();
+    tracker.iam_role_names.clear();
+    tracker.bucket_names.clear();
 
     println!("\n=== Infrastructure Test Complete ===");
 }

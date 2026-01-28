@@ -145,52 +145,17 @@ pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError
     }
 }
 
-/// Classify an error from an anyhow::Error by extracting the error code.
+/// Classify an error from an anyhow::Error.
 ///
 /// This is a fallback for when we don't have direct access to the SDK error.
-/// It uses string matching on the Debug output as a last resort.
+/// All AWS SDK errors should be classified via `classify_aws_error` first;
+/// this function only provides a generic SDK error passthrough.
 pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
-    let error_debug = format!("{:?}", error);
+    tracing::warn!(
+        error = %error,
+        "classify_anyhow_error fallback reached — consider using classify_aws_error instead"
+    );
 
-    // Check for not-found codes
-    for code in NOT_FOUND_CODES {
-        if error_debug.contains(code) {
-            return AwsError::NotFound {
-                resource_type: "resource",
-                resource_id: code.to_string(),
-            };
-        }
-    }
-
-    // Check for already-exists codes
-    for code in ALREADY_EXISTS_CODES {
-        if error_debug.contains(code) {
-            return AwsError::AlreadyExists;
-        }
-    }
-
-    // Check for throttling codes
-    for code in THROTTLING_CODES {
-        if error_debug.contains(code) {
-            return AwsError::Throttled;
-        }
-    }
-
-    // Check for dependency violations
-    for code in DEPENDENCY_CODES {
-        if error_debug.contains(code) {
-            return AwsError::DependencyViolation;
-        }
-    }
-
-    // Check for IAM propagation delay
-    if (error_debug.contains("InvalidParameterValue") && error_debug.contains("iamInstanceProfile"))
-        || error_debug.contains("Invalid IAM Instance Profile")
-    {
-        return AwsError::IamPropagationDelay;
-    }
-
-    // Fallback
     AwsError::Sdk {
         code: None,
         message: error.to_string(),

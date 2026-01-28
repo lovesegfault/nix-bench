@@ -62,11 +62,14 @@ async fn test_get_al2023_ami() {
 #[ignore]
 async fn test_security_group_lifecycle() {
     let region = get_test_region();
+    cleanup_stale_test_resources(&region).await;
+
     let client = Ec2Client::new(&region)
         .await
         .expect("AWS credentials required");
 
     let run_id = test_run_id();
+    let mut tracker = TestResourceTracker::new(&region);
 
     // Create security group
     let sg_id = client
@@ -78,6 +81,7 @@ async fn test_security_group_lifecycle() {
         "SG ID should start with 'sg-', got: {}",
         sg_id
     );
+    tracker.track_sg(sg_id.clone());
 
     // Add another ingress rule
     client
@@ -96,6 +100,9 @@ async fn test_security_group_lifecycle() {
         .delete_security_group(&sg_id)
         .await
         .expect("Should delete security group");
+
+    // Clear tracker since we cleaned up successfully
+    tracker.security_group_ids.clear();
 }
 
 /// Test full instance launch and terminate cycle
@@ -103,11 +110,14 @@ async fn test_security_group_lifecycle() {
 #[ignore]
 async fn test_launch_and_terminate_instance() {
     let region = get_test_region();
+    cleanup_stale_test_resources(&region).await;
+
     let client = Ec2Client::new(&region)
         .await
         .expect("AWS credentials required");
 
     let run_id = test_run_id();
+    let mut tracker = TestResourceTracker::new(&region);
 
     // Minimal user-data that just exits
     let user_data = "#!/bin/bash\necho 'Integration test instance'\n";
@@ -127,6 +137,7 @@ async fn test_launch_and_terminate_instance() {
     );
     assert_eq!(instance.instance_type, TEST_INSTANCE_TYPE);
     assert_eq!(instance.system, "x86_64-linux");
+    tracker.track_instance(instance.instance_id.clone());
 
     // Wait for running (with timeout)
     let public_ip = client
@@ -154,4 +165,7 @@ async fn test_launch_and_terminate_instance() {
         .wait_for_terminated(&instance.instance_id)
         .await
         .expect("Instance should reach terminated state");
+
+    // Clear tracker since we cleaned up successfully
+    tracker.instance_ids.clear();
 }

@@ -6,6 +6,7 @@
 mod test_utils;
 
 use nix_bench_agent::grpc::{AgentStatus, LogBroadcaster, LogStreamService, StatusCode};
+use nix_bench_common::RunResult;
 use nix_bench_coordinator::aws::{GrpcLogClient, GrpcStatusPoller};
 use nix_bench_coordinator::tui::TuiMessage;
 use nix_bench_proto::LogStreamServer;
@@ -247,7 +248,6 @@ async fn test_bootstrap_streaming_integration() {
         status: StatusCode::Bootstrap,
         run_progress: 0,
         total_runs: 0,
-        durations: Vec::new(),
         run_results: Vec::new(),
         attr: String::new(),
         system: String::new(),
@@ -357,7 +357,6 @@ async fn test_bootstrap_status_transitions() {
         status: StatusCode::Bootstrap,
         run_progress: 0,
         total_runs: 0,
-        durations: Vec::new(),
         run_results: Vec::new(),
         attr: String::new(),
         system: String::new(),
@@ -415,7 +414,13 @@ async fn test_bootstrap_status_transitions() {
             status: StatusCode::Complete,
             run_progress: 5,
             total_runs: 5,
-            durations: vec![10.5, 11.2, 10.8, 11.0, 10.9],
+            run_results: vec![
+                RunResult::success(1, 10.5),
+                RunResult::success(2, 11.2),
+                RunResult::success(3, 10.8),
+                RunResult::success(4, 11.0),
+                RunResult::success(5, 10.9),
+            ],
             ..Default::default()
         })
         .await;
@@ -426,5 +431,5 @@ async fn test_bootstrap_status_transitions() {
         .expect("Should have status");
     assert_eq!(complete_status.status, Some(StatusCode::Complete));
     assert_eq!(complete_status.run_progress, Some(5));
-    assert_eq!(complete_status.durations.len(), 5);
+    assert_eq!(complete_status.run_results.len(), 5);
 }

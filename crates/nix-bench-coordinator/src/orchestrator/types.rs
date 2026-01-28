@@ -4,6 +4,7 @@
 //! the state of benchmark instances during a run.
 
 use crate::tui::LogBuffer;
+use nix_bench_common::RunResult;
 
 /// Instance state during a benchmark run
 #[derive(Debug, Clone)]
@@ -20,8 +21,8 @@ pub struct InstanceState {
     pub run_progress: u32,
     /// Total number of runs to execute
     pub total_runs: u32,
-    /// Build durations in seconds for completed runs
-    pub durations: Vec<f64>,
+    /// Detailed run results with success/failure status
+    pub run_results: Vec<RunResult>,
     /// Public IP address (once assigned)
     pub public_ip: Option<String>,
     /// Console/build output buffer (ring buffer capped at 10,000 lines)
@@ -38,10 +39,19 @@ impl InstanceState {
             status: InstanceStatus::Pending,
             run_progress: 0,
             total_runs,
-            durations: Vec::new(),
+            run_results: Vec::new(),
             public_ip: None,
             console_output: LogBuffer::new(10_000),
         }
+    }
+
+    /// Get successful durations from run results
+    pub fn durations(&self) -> Vec<f64> {
+        self.run_results
+            .iter()
+            .filter(|r| r.success)
+            .map(|r| r.duration_secs)
+            .collect()
     }
 
     /// Check if this instance has completed (successfully or with failure)

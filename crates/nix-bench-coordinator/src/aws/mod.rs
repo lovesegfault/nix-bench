@@ -11,7 +11,7 @@
 pub mod account;
 pub mod cleanup;
 pub mod cleanup_util;
-pub(crate) mod context;
+pub mod context;
 pub mod ec2;
 pub mod error;
 pub mod grpc_client;
@@ -38,6 +38,6 @@ pub use cleanup_util::{delete_resource, partition_resources_for_cleanup, Cleanup
 
 // gRPC client
 pub use grpc_client::{
-    start_log_streaming_unified, wait_for_tcp_ready, GrpcInstanceStatus, GrpcLogClient,
-    GrpcStatusPoller, LogStreamingOptions,
+    send_ack_complete, start_log_streaming_unified, wait_for_tcp_ready, GrpcInstanceStatus,
+    GrpcLogClient, GrpcStatusPoller, LogStreamingOptions,
 };

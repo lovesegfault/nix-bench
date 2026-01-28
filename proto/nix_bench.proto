@@ -4,6 +4,15 @@ package nix_bench;
 service LogStream {
   rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
   rpc GetStatus(StatusRequest) returns (StatusResponse);
+  rpc AcknowledgeComplete(AckCompleteRequest) returns (AckCompleteResponse);
+}
+
+message AckCompleteRequest {
+  string run_id = 1;
+}
+
+message AckCompleteResponse {
+  bool acknowledged = 1;
 }
 
 // Canonical status codes for agent/coordinator communication
@@ -41,12 +50,14 @@ message StatusResponse {
   uint32 total_runs = 3;
   // Total number of log messages dropped due to slow client consumption
   uint64 dropped_log_count = 4;
-  // Build durations in seconds for completed runs (deprecated: use run_results)
-  repeated double durations = 5;
+  reserved 5;
+  reserved "durations";
   // Detailed results per run with success/failure status
   repeated RunResult run_results = 6;
   // Nix attribute that was built (e.g., "shallow.hello")
   string attr = 7;
   // System architecture (e.g., "x86_64-linux", "aarch64-linux")
   string system = 8;
+  // Protocol version for compatibility detection
+  uint32 protocol_version = 9;
 }

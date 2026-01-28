@@ -115,10 +115,9 @@ async fn run_benchmarks_with_retry(
                     success: true,
                 });
 
-                // Update gRPC status with new duration and run result
+                // Update gRPC status with run result
                 {
                     let mut s = status.write().await;
-                    s.durations.push(duration.as_secs_f64());
                     s.run_results.push(RunResult {
                         run_number: slot as u32,
                         duration_secs: duration.as_secs_f64(),
@@ -197,7 +196,6 @@ async fn main() -> Result<()> {
         status: StatusCode::Bootstrap,
         run_progress: 0,
         total_runs: 0,
-        durations: Vec::new(),
         run_results: Vec::new(),
         attr: String::new(),
         system: String::new(),
@@ -276,6 +274,8 @@ async fn main() -> Result<()> {
     let grpc_status = status.clone();
     let grpc_shutdown = shutdown_token.clone();
     let grpc_port = args.grpc_port;
+    let ack_flag = grpc::new_ack_flag();
+    let ack_flag_for_grpc = ack_flag.clone();
 
     let grpc_handle = tokio::spawn(async move {
         if let Err(e) = grpc::run_grpc_server(
@@ -286,6 +286,7 @@ async fn main() -> Result<()> {
             grpc_status,
             tls_config,
             grpc_shutdown,
+            ack_flag_for_grpc,
         )
         .await
         {
@@ -368,12 +369,12 @@ async fn main() -> Result<()> {
     ));
     info!("Benchmark complete");
 
-    // Wait for coordinator to poll final status before shutting down gRPC server.
-    // The coordinator polls every 2 seconds, so waiting 60 seconds ensures it has
-    // many chances to see our Complete status with durations. Without this delay,
-    // the coordinator might miss the Complete status and never terminate the instance.
-    info!("Waiting for coordinator to poll final status...");
-    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    // Wait for coordinator to acknowledge completion, with fallback timeout
+    info!("Waiting for coordinator acknowledgment...");
+    match grpc::wait_for_ack(&ack_flag, std::time::Duration::from_secs(120)).await {
+        Ok(()) => info!("Coordinator acknowledged completion"),
+        Err(_) => warn!("Timed out waiting for coordinator ack, shutting down anyway"),
+    }
 
     // Gracefully shut down gRPC server
     info!("Shutting down gRPC server...");

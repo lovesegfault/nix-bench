@@ -18,5 +18,6 @@ pub use nix_bench::log_stream_client::LogStreamClient;
 
 // Message types (used by both)
 pub use nix_bench::{
-    LogEntry, RunResult, StatusCode, StatusRequest, StatusResponse, StreamLogsRequest,
+    AckCompleteRequest, AckCompleteResponse, LogEntry, RunResult, StatusCode, StatusRequest,
+    StatusResponse, StreamLogsRequest,
 };

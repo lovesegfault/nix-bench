@@ -49,9 +49,7 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-# State persistence
-sqlx.workspace = true
-directories.workspace = true
+# Table formatting
 comfy-table.workspace = true
 
 # Error handling

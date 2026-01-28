@@ -81,30 +81,6 @@ dependencies = ["build-coordinator"]
 command = "./target/release/nix-bench-coordinator"
 args = ["${@}"]
 
-[tasks.state]
-description = "Run coordinator state subcommand (list, cleanup, prune)"
-dependencies = ["build-coordinator"]
-command = "./target/release/nix-bench-coordinator"
-args = ["state", "${@}"]
-
-[tasks.cleanup]
-description = "Cleanup orphaned AWS resources"
-dependencies = ["build-coordinator"]
-command = "./target/release/nix-bench-coordinator"
-args = ["state", "cleanup"]
-
-[tasks.list]
-description = "List tracked resources"
-dependencies = ["build-coordinator"]
-command = "./target/release/nix-bench-coordinator"
-args = ["state", "list"]
-
-[tasks.prune]
-description = "Prune stale entries from local database"
-dependencies = ["build-coordinator"]
-command = "./target/release/nix-bench-coordinator"
-args = ["state", "prune"]
-
 [tasks.scan]
 description = "Scan AWS for nix-bench resources using tags"
 dependencies = ["build-coordinator"]
@@ -205,10 +181,15 @@ dependencies = ["agent", "build-coordinator-debug"]
 command = "./target/debug/nix-bench-coordinator"
 args = ["run", "${@}"]
 
-[tasks.watch]
-description = "Watch for changes and run check"
+[tasks.clean]
+description = "Clean build artifacts"
 command = "cargo"
-args = ["watch", "-x", "check"]
+args = ["clean"]
+
+[tasks.docs]
+description = "Build and open documentation"
+command = "cargo"
+args = ["doc", "--workspace", "--no-deps", "--open"]
 
 [tasks.fmt]
 description = "Format code"

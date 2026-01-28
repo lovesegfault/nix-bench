@@ -102,7 +102,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
             let max_name_len = available_width.saturating_sub(runs_str.len() + 4);
 
             // Get trend arrow and time
-            let (arrow, arrow_color, time_str) = format_trend_time(&state.durations);
+            let (arrow, arrow_color, time_str) = format_trend_time(&state.durations());
 
             let line = Line::from(vec![
                 Span::styled(format!("{} ", symbol), Style::default().fg(color)),

@@ -28,20 +28,20 @@ pub async fn write_results(
         let results: HashMap<String, serde_json::Value> = instances
             .iter()
             .map(|(k, v)| {
-                let avg = if !v.durations.is_empty() {
-                    v.durations.iter().sum::<f64>() / v.durations.len() as f64
+                let avg = if !v.durations().is_empty() {
+                    v.durations().iter().sum::<f64>() / v.durations().len() as f64
                 } else {
                     0.0
                 };
                 let min = v
-                    .durations
+                    .durations()
                     .iter()
                     .cloned()
                     .filter(|x| x.is_finite())
                     .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or(0.0);
                 let max = v
-                    .durations
+                    .durations()
                     .iter()
                     .cloned()
                     .filter(|x| x.is_finite())
@@ -56,7 +56,7 @@ pub async fn write_results(
                         "status": format!("{:?}", v.status),
                         "runs_completed": v.run_progress,
                         "runs_total": v.total_runs,
-                        "durations_seconds": v.durations,
+                        "durations_seconds": v.durations(),
                         "stats": {
                             "avg_seconds": avg,
                             "min_seconds": min,
@@ -109,15 +109,15 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
     // Sort by average duration (fastest first), with instances that have no results at the end
     let mut sorted: Vec<_> = instances.iter().collect();
     sorted.sort_by(|(k1, s1), (k2, s2)| {
-        let avg1 = if s1.durations.is_empty() {
+        let avg1 = if s1.durations().is_empty() {
             f64::MAX
         } else {
-            s1.durations.iter().sum::<f64>() / s1.durations.len() as f64
+            s1.durations().iter().sum::<f64>() / s1.durations().len() as f64
         };
-        let avg2 = if s2.durations.is_empty() {
+        let avg2 = if s2.durations().is_empty() {
             f64::MAX
         } else {
-            s2.durations.iter().sum::<f64>() / s2.durations.len() as f64
+            s2.durations().iter().sum::<f64>() / s2.durations().len() as f64
         };
         avg1.partial_cmp(&avg2)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -137,18 +137,18 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
 
         let runs = format!("{}/{}", state.run_progress, state.total_runs);
 
-        let (min, avg, max) = if state.durations.is_empty() {
+        let (min, avg, max) = if state.durations().is_empty() {
             ("-".to_string(), "-".to_string(), "-".to_string())
         } else {
             let min_val = state
-                .durations
+                .durations()
                 .iter()
                 .cloned()
                 .filter(|x| x.is_finite())
                 .fold(f64::MAX, f64::min);
-            let avg_val = state.durations.iter().sum::<f64>() / state.durations.len() as f64;
+            let avg_val = state.durations().iter().sum::<f64>() / state.durations().len() as f64;
             let max_val = state
-                .durations
+                .durations()
                 .iter()
                 .cloned()
                 .filter(|x| x.is_finite())

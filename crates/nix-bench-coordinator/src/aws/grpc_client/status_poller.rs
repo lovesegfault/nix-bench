@@ -16,8 +16,6 @@ pub struct GrpcInstanceStatus {
     pub run_progress: Option<u32>,
     /// Total number of runs
     pub total_runs: Option<u32>,
-    /// Build durations in seconds for completed runs
-    pub durations: Vec<f64>,
     /// Number of dropped log messages (for monitoring)
     pub dropped_log_count: u64,
     /// Detailed run results with success/failure
@@ -115,7 +113,6 @@ impl GrpcStatusPoller {
                         status: status_code,
                         run_progress: Some(status.run_progress),
                         total_runs: Some(status.total_runs),
-                        durations: status.durations,
                         dropped_log_count: status.dropped_log_count,
                         run_results,
                         attr: if status.attr.is_empty() {
@@ -139,6 +136,40 @@ impl GrpcStatusPoller {
                 );
                 None
             }
+        }
+    }
+}
+
+/// Send an AcknowledgeComplete RPC to an agent.
+///
+/// This tells the agent that the coordinator has received its final status
+/// and it can shut down promptly instead of waiting for a fallback timeout.
+pub async fn send_ack_complete(ip: &str, port: u16, run_id: &str, tls_config: &TlsConfig) {
+    let channel = GrpcChannelBuilder::new(ip, port, tls_config)
+        .with_options(ChannelOptions {
+            connect_timeout: std::time::Duration::from_secs(5),
+            ..Default::default()
+        })
+        .connect()
+        .await;
+
+    let channel = match channel {
+        Ok(c) => c,
+        Err(e) => {
+            debug!(ip = %ip, error = %e, "Failed to connect for ack");
+            return;
+        }
+    };
+
+    let mut client = LogStreamClient::new(channel);
+    let request = nix_bench_proto::AckCompleteRequest {
+        run_id: run_id.to_string(),
+    };
+
+    match client.acknowledge_complete(request).await {
+        Ok(_) => debug!(ip = %ip, "Sent completion acknowledgment"),
+        Err(e) => {
+            debug!(ip = %ip, error = %e, "Failed to send ack (agent may have already shut down)")
         }
     }
 }

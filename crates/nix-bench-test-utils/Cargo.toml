@@ -10,9 +10,6 @@ description = "Shared test utilities for nix-bench"
 anyhow = { workspace = true }
 tokio = { workspace = true }
 
-# Database testing
-sqlx = { workspace = true }
-
 # Time/IDs for test resources
 chrono = { workspace = true }
 

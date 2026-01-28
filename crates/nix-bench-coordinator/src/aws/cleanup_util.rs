@@ -4,7 +4,7 @@
 //! error handling and ordering.
 
 use crate::aws::{Ec2Client, IamClient, S3Client};
-use crate::state::{self, DbPool, ResourceType};
+use nix_bench_common::ResourceKind;
 use tracing::{info, warn};
 
 /// Result of a single resource cleanup operation
@@ -21,26 +21,22 @@ pub enum CleanupResult {
 }
 
 /// Delete a single resource and handle "not found" errors gracefully.
-///
-/// Returns `CleanupResult` indicating what happened. If `db` is provided,
-/// marks the resource as deleted in the database on success or "not found".
 pub async fn delete_resource(
-    resource_type: ResourceType,
+    resource_type: ResourceKind,
     resource_id: &str,
     ec2: &Ec2Client,
     s3: &S3Client,
     iam: &IamClient,
-    db: Option<&DbPool>,
 ) -> CleanupResult {
     let result = match resource_type {
-        ResourceType::Ec2Instance => ec2.terminate_instance(resource_id).await,
-        ResourceType::ElasticIp => ec2.release_elastic_ip(resource_id).await,
-        ResourceType::S3Bucket => s3.delete_bucket(resource_id).await,
-        ResourceType::S3Object => return CleanupResult::Skipped, // Cleaned with bucket
-        ResourceType::IamRole => iam.delete_benchmark_role(resource_id).await,
-        ResourceType::IamInstanceProfile => iam.delete_instance_profile(resource_id).await,
-        ResourceType::SecurityGroup => ec2.delete_security_group(resource_id).await,
-        ResourceType::SecurityGroupRule => {
+        ResourceKind::Ec2Instance => ec2.terminate_instance(resource_id).await,
+        ResourceKind::ElasticIp => ec2.release_elastic_ip(resource_id).await,
+        ResourceKind::S3Bucket => s3.delete_bucket(resource_id).await,
+        ResourceKind::S3Object => return CleanupResult::Skipped, // Cleaned with bucket
+        ResourceKind::IamRole => iam.delete_benchmark_role(resource_id).await,
+        ResourceKind::IamInstanceProfile => iam.delete_instance_profile(resource_id).await,
+        ResourceKind::SecurityGroup => ec2.delete_security_group(resource_id).await,
+        ResourceKind::SecurityGroupRule => {
             if let Some((sg_id, cidr_ip)) = resource_id.split_once(':') {
                 ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await
             } else {
@@ -50,14 +46,9 @@ pub async fn delete_resource(
         }
     };
 
-    // All cleanup methods now handle not-found internally and return Ok(())
-    // So we only need to distinguish between success and failure
     match result {
         Ok(()) => {
             info!(resource_type = %resource_type.as_str(), resource_id = %resource_id, "Deleted");
-            if let Some(pool) = db {
-                let _ = state::mark_resource_deleted(pool, resource_type, resource_id).await;
-            }
             CleanupResult::Deleted
         }
         Err(e) => {
@@ -80,15 +71,15 @@ pub fn partition_resources_for_cleanup<T, F>(
     get_type: F,
 ) -> (Vec<T>, Vec<T>, Vec<T>)
 where
-    F: Fn(&T) -> ResourceType,
+    F: Fn(&T) -> ResourceKind,
 {
     let (instances, rest): (Vec<_>, Vec<_>) = resources
         .into_iter()
-        .partition(|r| get_type(r) == ResourceType::Ec2Instance);
+        .partition(|r| get_type(r) == ResourceKind::Ec2Instance);
 
     let (security_groups, other): (Vec<_>, Vec<_>) = rest
         .into_iter()
-        .partition(|r| get_type(r) == ResourceType::SecurityGroup);
+        .partition(|r| get_type(r) == ResourceKind::SecurityGroup);
 
     (instances, other, security_groups)
 }

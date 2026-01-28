@@ -15,7 +15,6 @@ use tracing::{debug, info, warn};
 
 use super::types::{InstanceState, InstanceStatus};
 use crate::aws::{Ec2Client, IamClient, S3Client};
-use crate::state::{self, ResourceType, RunStatus};
 use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
 
 /// Request to cleanup resources
@@ -35,6 +34,12 @@ pub enum CleanupRequest {
         run_id: String,
         bucket_name: String,
         instances: HashMap<String, InstanceState>,
+        /// Security group ID created by nix-bench (if any)
+        security_group_id: Option<String>,
+        /// IAM role name created by nix-bench (if any)
+        iam_role_name: Option<String>,
+        /// Security group rules added by nix-bench (sg_id:cidr pairs)
+        sg_rules: Vec<String>,
     },
 }
 
@@ -63,14 +68,6 @@ pub async fn cleanup_executor(
         }
     };
 
-    let db = match state::open_db().await {
-        Ok(d) => d,
-        Err(e) => {
-            warn!(error = ?e, "Failed to open database for cleanup executor");
-            return;
-        }
-    };
-
     while let Some(request) = rx.recv().await {
         match request {
             CleanupRequest::TerminateInstance {
@@ -87,14 +84,6 @@ pub async fn cleanup_executor(
                 match ec2.terminate_instance(&instance_id).await {
                     Ok(()) => {
                         info!(instance_id = %instance_id, "Instance terminated");
-                        let _ = state::mark_resource_deleted(
-                            &db,
-                            ResourceType::Ec2Instance,
-                            &instance_id,
-                        )
-                        .await;
-
-                        // Notify TUI that instance was terminated
                         let _ = tx
                             .send(TuiMessage::InstanceUpdate {
                                 instance_type: instance_type.clone(),
@@ -110,13 +99,6 @@ pub async fn cleanup_executor(
                         let error_str = format!("{:?}", e);
                         if error_str.contains("InvalidInstanceID.NotFound") {
                             debug!(instance_id = %instance_id, "Instance already terminated");
-                            let _ = state::mark_resource_deleted(
-                                &db,
-                                ResourceType::Ec2Instance,
-                                &instance_id,
-                            )
-                            .await;
-
                             let _ = tx
                                 .send(TuiMessage::InstanceUpdate {
                                     instance_type: instance_type.clone(),
@@ -137,19 +119,23 @@ pub async fn cleanup_executor(
             CleanupRequest::FullCleanup {
                 region: cleanup_region,
                 keep,
-                run_id,
+                run_id: _run_id,
                 bucket_name,
                 instances,
+                security_group_id,
+                iam_role_name,
+                sg_rules,
             } => {
                 info!("Starting full cleanup");
 
-                // Perform the full cleanup using the existing logic
                 if let Err(e) = do_full_cleanup(
                     &cleanup_region,
                     keep,
-                    &run_id,
                     &bucket_name,
                     &instances,
+                    security_group_id.as_deref(),
+                    iam_role_name.as_deref(),
+                    &sg_rules,
                     &tx,
                 )
                 .await
@@ -157,7 +143,6 @@ pub async fn cleanup_executor(
                     warn!(error = ?e, "Full cleanup failed");
                 }
 
-                // After full cleanup, the executor is done
                 debug!("Full cleanup complete, exiting executor");
                 return;
             }
@@ -169,72 +154,34 @@ pub async fn cleanup_executor(
 
 /// Perform full cleanup of all resources for a run
 ///
-/// This is called by the cleanup executor when a FullCleanup request is received.
-/// Handles: EC2 instances, S3 bucket, IAM roles, security groups
+/// Uses in-memory resource tracking (no database) to determine what to clean up.
+#[allow(clippy::too_many_arguments)]
 async fn do_full_cleanup(
     region: &str,
     keep: bool,
-    run_id: &str,
     bucket_name: &str,
     instances: &HashMap<String, InstanceState>,
+    security_group_id: Option<&str>,
+    iam_role_name: Option<&str>,
+    sg_rules: &[String],
     tx: &mpsc::Sender<TuiMessage>,
 ) -> Result<()> {
-    let db = state::open_db().await?;
     let ec2 = Ec2Client::new(region).await?;
     let s3 = S3Client::new(region).await?;
 
     if !keep {
-        // Get all undeleted resources from the database
-        // Note: get_run_resources only returns resources with deleted_at IS NULL,
-        // so resources already cleaned up by the termination watcher are excluded
-        let db_resources = state::get_run_resources(&db, run_id)
-            .await
-            .unwrap_or_default();
-
-        // Collect instance IDs to terminate from both the HashMap and database
-        // (database includes instances created but not tracked in HashMap, e.g., if user quit early)
-        let mut instance_ids: std::collections::HashSet<String> = instances
+        // Collect instance IDs to terminate
+        let instance_ids: Vec<String> = instances
             .values()
             .filter(|s| !s.instance_id.is_empty())
+            .filter(|s| s.status != InstanceStatus::Terminated)
             .map(|s| s.instance_id.clone())
-            .collect();
-
-        // Add any instances from the database not in the HashMap
-        for resource in &db_resources {
-            if resource.resource_type == ResourceType::Ec2Instance {
-                instance_ids.insert(resource.resource_id.clone());
-            }
-        }
-
-        // Filter out instances that are already deleted according to DB
-        // (the HashMap might have stale data if termination watcher already cleaned them)
-        let db_instance_ids: std::collections::HashSet<String> = db_resources
-            .iter()
-            .filter(|r| r.resource_type == ResourceType::Ec2Instance)
-            .map(|r| r.resource_id.clone())
-            .collect();
-        instance_ids.retain(|id| db_instance_ids.contains(id));
-
-        // Count resources for progress tracking
-        let iam_roles: Vec<_> = db_resources
-            .iter()
-            .filter(|r| r.resource_type == ResourceType::IamRole && r.deleted_at.is_none())
-            .collect();
-        let sg_rules: Vec<_> = db_resources
-            .iter()
-            .filter(|r| {
-                r.resource_type == ResourceType::SecurityGroupRule && r.deleted_at.is_none()
-            })
-            .collect();
-        let security_groups: Vec<_> = db_resources
-            .iter()
-            .filter(|r| r.resource_type == ResourceType::SecurityGroup && r.deleted_at.is_none())
             .collect();
 
         let mut progress = CleanupProgress::new(
             instance_ids.len(),
             0, // No EIPs to release
-            iam_roles.len(),
+            if iam_role_name.is_some() { 1 } else { 0 },
             sg_rules.len(),
         );
 
@@ -243,13 +190,10 @@ async fn do_full_cleanup(
         progress.current_step = format!("Terminating {} EC2 instances...", instance_ids.len());
         send_cleanup_progress(tx, progress.clone()).await;
 
-        let instance_ids_vec: Vec<String> = instance_ids.iter().cloned().collect();
-        if let Err(e) = ec2.terminate_instances(&instance_ids_vec).await {
-            warn!(error = ?e, "Failed to terminate instances in batch");
-        }
-        // Mark all as deleted in DB
-        for instance_id in &instance_ids {
-            let _ = state::mark_resource_deleted(&db, ResourceType::Ec2Instance, instance_id).await;
+        if !instance_ids.is_empty() {
+            if let Err(e) = ec2.terminate_instances(&instance_ids).await {
+                warn!(error = ?e, "Failed to terminate instances in batch");
+            }
         }
         progress.ec2_instances.0 = instance_ids.len();
         send_cleanup_progress(tx, progress.clone()).await;
@@ -259,47 +203,24 @@ async fn do_full_cleanup(
         progress.current_step = "Deleting S3 bucket...".to_string();
         send_cleanup_progress(tx, progress.clone()).await;
 
-        match s3.delete_bucket(bucket_name).await {
-            Ok(()) => {
-                // delete_bucket returns Ok for both successful deletion and not-found
-                let _ =
-                    state::mark_resource_deleted(&db, ResourceType::S3Bucket, bucket_name).await;
-            }
-            Err(e) => {
-                warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
-            }
+        if let Err(e) = s3.delete_bucket(bucket_name).await {
+            warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
         }
         progress.s3_bucket = true;
         send_cleanup_progress(tx, progress.clone()).await;
 
         // Delete IAM resources
-        if !iam_roles.is_empty() {
-            info!(count = iam_roles.len(), "Deleting IAM resources...");
-            progress.current_step = format!("Deleting {} IAM roles...", iam_roles.len());
+        if let Some(role_name) = iam_role_name {
+            info!("Deleting IAM resources...");
+            progress.current_step = "Deleting IAM role...".to_string();
             send_cleanup_progress(tx, progress.clone()).await;
 
             let iam = IamClient::new(region).await?;
-            for resource in &iam_roles {
-                if let Err(e) = iam.delete_benchmark_role(&resource.resource_id).await {
-                    warn!(role = %resource.resource_id, error = ?e, "Failed to delete IAM role");
-                } else {
-                    let _ = state::mark_resource_deleted(
-                        &db,
-                        ResourceType::IamRole,
-                        &resource.resource_id,
-                    )
-                    .await;
-                    // Instance profile has the same name as the role
-                    let _ = state::mark_resource_deleted(
-                        &db,
-                        ResourceType::IamInstanceProfile,
-                        &resource.resource_id,
-                    )
-                    .await;
-                }
-                progress.iam_roles.0 += 1;
-                send_cleanup_progress(tx, progress.clone()).await;
+            if let Err(e) = iam.delete_benchmark_role(role_name).await {
+                warn!(role = %role_name, error = ?e, "Failed to delete IAM role");
             }
+            progress.iam_roles.0 += 1;
+            send_cleanup_progress(tx, progress.clone()).await;
         }
 
         // Delete security group rules (for user-provided security groups)
@@ -308,25 +229,11 @@ async fn do_full_cleanup(
             progress.current_step = format!("Removing {} security group rules...", sg_rules.len());
             send_cleanup_progress(tx, progress.clone()).await;
 
-            for resource in &sg_rules {
-                // Parse resource_id format: "sg-xxx:cidr_ip"
-                if let Some((sg_id, cidr_ip)) = resource.resource_id.split_once(':') {
-                    match ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await {
-                        Ok(()) => {
-                            // remove_grpc_ingress_rule returns Ok for both successful removal and not-found
-                            let _ = state::mark_resource_deleted(
-                                &db,
-                                ResourceType::SecurityGroupRule,
-                                &resource.resource_id,
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            warn!(security_group = %sg_id, cidr_ip = %cidr_ip, error = ?e, "Failed to remove security group rule");
-                        }
+            for rule in sg_rules {
+                if let Some((sg_id, cidr_ip)) = rule.split_once(':') {
+                    if let Err(e) = ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await {
+                        warn!(security_group = %sg_id, cidr_ip = %cidr_ip, error = ?e, "Failed to remove security group rule");
                     }
-                } else {
-                    warn!(resource_id = %resource.resource_id, "Invalid SecurityGroupRule resource_id format");
                 }
                 progress.security_rules.0 += 1;
                 send_cleanup_progress(tx, progress.clone()).await;
@@ -335,38 +242,21 @@ async fn do_full_cleanup(
 
         // Delete security groups (for nix-bench-created security groups)
         // Must wait for instances to fully terminate first
-        if !security_groups.is_empty() {
-            // Wait for all instances to terminate before deleting security groups (in parallel)
-            if !instance_ids_vec.is_empty() {
-                info!(
-                    "Waiting for instances to fully terminate before deleting security groups..."
-                );
+        if let Some(sg_id) = security_group_id {
+            if !instance_ids.is_empty() {
+                info!("Waiting for instances to fully terminate before deleting security group...");
                 progress.current_step = "Waiting for instances to terminate...".to_string();
                 send_cleanup_progress(tx, progress.clone()).await;
 
-                ec2.wait_for_all_terminated(&instance_ids_vec).await?;
+                ec2.wait_for_all_terminated(&instance_ids).await?;
             }
 
-            info!(count = security_groups.len(), "Deleting security groups...");
-            progress.current_step =
-                format!("Deleting {} security groups...", security_groups.len());
+            info!("Deleting security group...");
+            progress.current_step = "Deleting security group...".to_string();
             send_cleanup_progress(tx, progress.clone()).await;
 
-            for resource in &security_groups {
-                match ec2.delete_security_group(&resource.resource_id).await {
-                    Ok(()) => {
-                        // delete_security_group returns Ok for both successful deletion and not-found
-                        let _ = state::mark_resource_deleted(
-                            &db,
-                            ResourceType::SecurityGroup,
-                            &resource.resource_id,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        warn!(sg_id = %resource.resource_id, error = ?e, "Failed to delete security group");
-                    }
-                }
+            if let Err(e) = ec2.delete_security_group(sg_id).await {
+                warn!(sg_id = %sg_id, error = ?e, "Failed to delete security group");
             }
         }
 
@@ -377,23 +267,6 @@ async fn do_full_cleanup(
         info!("Keeping instances, bucket, and IAM resources (--keep specified)");
     }
 
-    // Update run status
-    let all_complete = !instances.is_empty()
-        && instances
-            .values()
-            .all(|s| s.status == InstanceStatus::Complete);
-
-    state::update_run_status(
-        &db,
-        run_id,
-        if all_complete {
-            RunStatus::Completed
-        } else {
-            RunStatus::Failed
-        },
-    )
-    .await?;
-
     Ok(())
 }
 
@@ -403,9 +276,12 @@ async fn do_full_cleanup(
 /// Progress updates are logged instead of sent to a TUI.
 pub async fn cleanup_resources_no_tui(
     config: &crate::config::RunConfig,
-    run_id: &str,
+    _run_id: &str,
     bucket_name: &str,
     instances: &HashMap<String, InstanceState>,
+    security_group_id: Option<&str>,
+    iam_role_name: Option<&str>,
+    sg_rules: &[String],
 ) -> Result<()> {
     // Create a dummy channel that we won't actually use
     let (tx, _rx) = mpsc::channel::<TuiMessage>(1);
@@ -413,9 +289,11 @@ pub async fn cleanup_resources_no_tui(
     do_full_cleanup(
         &config.region,
         config.keep,
-        run_id,
         bucket_name,
         instances,
+        security_group_id,
+        iam_role_name,
+        sg_rules,
         &tx,
     )
     .await

@@ -35,6 +35,8 @@ const INSTANCE_TIMEOUT_SECS: u64 = 300;
 #[ignore]
 async fn test_minimal_benchmark_run() {
     let region = get_test_region();
+    cleanup_stale_test_resources(&region).await;
+
     let run_id = test_run_id();
     let bucket_name = format!("nix-bench-{}", run_id);
 
@@ -49,11 +51,15 @@ async fn test_minimal_benchmark_run() {
         .await
         .expect("AWS credentials required");
 
+    // Set up resource tracker for cleanup-on-failure
+    let mut tracker = TestResourceTracker::new(&region);
+
     // === Step 1: Create S3 bucket ===
     println!("Creating S3 bucket: {}", bucket_name);
     s3.create_bucket(&bucket_name)
         .await
         .expect("Should create S3 bucket");
+    tracker.track_bucket(bucket_name.clone());
 
     // Upload a dummy config file
     let config_json = format!(
@@ -75,6 +81,7 @@ async fn test_minimal_benchmark_run() {
         .create_benchmark_role(&run_id, &bucket_name, None)
         .await
         .expect("Should create IAM role");
+    tracker.track_iam_role(role_name.clone());
 
     // === Step 3: Create security group ===
     println!("Creating security group...");
@@ -87,6 +94,7 @@ async fn test_minimal_benchmark_run() {
         .create_security_group(&run_id, &coordinator_cidr, None)
         .await
         .expect("Should create security group");
+    tracker.track_sg(sg_id.clone());
 
     // === Step 4: Launch instance ===
     println!("Launching {} instance...", TEST_INSTANCE_TYPE);
@@ -113,6 +121,7 @@ echo "Listener started on port 50051"
         .expect("Should launch instance");
     let instance_id = instance.instance_id.clone();
     println!("Launched instance: {}", instance.instance_id);
+    tracker.track_instance(instance_id.clone());
 
     // === Step 5: Wait for running and get dynamic public IP ===
     println!("Waiting for instance to be running...");
@@ -170,6 +179,12 @@ echo "Listener started on port 50051"
     if let Err(e) = s3.delete_bucket(&bucket_name).await {
         eprintln!("Warning: Failed to delete bucket: {}", e);
     }
+
+    // Clear tracker since we cleaned up successfully
+    tracker.instance_ids.clear();
+    tracker.security_group_ids.clear();
+    tracker.iam_role_names.clear();
+    tracker.bucket_names.clear();
 
     println!("E2E test complete!");
 }

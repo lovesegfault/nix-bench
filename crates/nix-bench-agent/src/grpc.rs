@@ -3,8 +3,9 @@
 use anyhow::Result;
 use nix_bench_common::{RunResult, TlsConfig};
 use nix_bench_proto::{
-    LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult,
-    StatusCode as ProtoStatusCode, StatusRequest, StatusResponse, StreamLogsRequest,
+    AckCompleteRequest, AckCompleteResponse, LogEntry, LogStream, LogStreamServer,
+    RunResult as ProtoRunResult, StatusCode as ProtoStatusCode, StatusRequest, StatusResponse,
+    StreamLogsRequest,
 };
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -26,8 +27,6 @@ pub struct AgentStatus {
     pub status: StatusCode,
     pub run_progress: u32,
     pub total_runs: u32,
-    /// Build durations in seconds for completed runs (kept for backward compat)
-    pub durations: Vec<f64>,
     /// Detailed run results with success/failure
     pub run_results: Vec<RunResult>,
     /// Nix attribute being built
@@ -42,7 +41,6 @@ impl Default for AgentStatus {
             status: StatusCode::Pending,
             run_progress: 0,
             total_runs: 0,
-            durations: Vec::new(),
             run_results: Vec::new(),
             attr: String::new(),
             system: String::new(),
@@ -106,6 +104,8 @@ pub struct LogStreamService {
     shutdown_token: CancellationToken,
     /// Counter for total dropped messages across all clients (for monitoring)
     dropped_messages: Arc<AtomicU64>,
+    /// Set when coordinator acknowledges completion
+    acknowledged: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl LogStreamService {
@@ -123,7 +123,20 @@ impl LogStreamService {
             status,
             shutdown_token,
             dropped_messages: Arc::new(AtomicU64::new(0)),
+            acknowledged: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Wait for the coordinator to acknowledge completion, with a fallback timeout.
+    pub async fn wait_for_ack(&self, timeout: std::time::Duration) -> Result<()> {
+        let ack = self.acknowledged.clone();
+        tokio::time::timeout(timeout, async move {
+            while !ack.load(Ordering::Relaxed) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for coordinator acknowledgment"))
     }
 }
 
@@ -252,11 +265,21 @@ impl LogStream for LogStreamService {
             run_progress: status.run_progress,
             total_runs: status.total_runs,
             dropped_log_count: self.dropped_messages.load(Ordering::Relaxed),
-            durations: status.durations.clone(),
             run_results,
             attr: status.attr.clone(),
             system: status.system.clone(),
+            protocol_version: 1,
         }))
+    }
+
+    async fn acknowledge_complete(
+        &self,
+        request: Request<AckCompleteRequest>,
+    ) -> Result<Response<AckCompleteResponse>, Status> {
+        let req = request.into_inner();
+        info!(run_id = %req.run_id, "Received completion acknowledgment from coordinator");
+        self.acknowledged.store(true, Ordering::Relaxed);
+        Ok(Response::new(AckCompleteResponse { acknowledged: true }))
     }
 }
 
@@ -274,6 +297,25 @@ impl LogStream for LogStreamService {
 /// # Returns
 /// * `Ok(())` when server shuts down gracefully
 /// * `Err` on server error
+pub type AckFlag = Arc<std::sync::atomic::AtomicBool>;
+
+/// Create a new acknowledgment flag.
+pub fn new_ack_flag() -> AckFlag {
+    Arc::new(std::sync::atomic::AtomicBool::new(false))
+}
+
+/// Wait for the acknowledgment flag to be set, with a fallback timeout.
+pub async fn wait_for_ack(ack: &AckFlag, timeout: std::time::Duration) -> Result<()> {
+    tokio::time::timeout(timeout, async {
+        while !ack.load(Ordering::Relaxed) {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("Timed out waiting for coordinator acknowledgment"))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run_grpc_server(
     port: u16,
     broadcaster: Arc<LogBroadcaster>,
@@ -282,16 +324,18 @@ pub async fn run_grpc_server(
     status: Arc<RwLock<AgentStatus>>,
     tls_config: TlsConfig,
     shutdown_token: CancellationToken,
+    ack_flag: AckFlag,
 ) -> Result<()> {
     let addr = format!("0.0.0.0:{}", port).parse()?;
 
-    let service = LogStreamService::new(
+    let mut service = LogStreamService::new(
         broadcaster,
         run_id,
         instance_type,
         status,
         shutdown_token.clone(),
     );
+    service.acknowledged = ack_flag;
 
     let tls = tls_config.server_tls_config()?;
     info!(%addr, "Starting gRPC server with mTLS");
@@ -359,7 +403,6 @@ mod tests {
             status: StatusCode::Running,
             run_progress: 3,
             total_runs: 10,
-            durations: Vec::new(),
             run_results: Vec::new(),
             attr: "shallow.hello".to_string(),
             system: "x86_64-linux".to_string(),

@@ -10,7 +10,7 @@ use nix_bench_common::defaults::{DEFAULT_BUILD_TIMEOUT, DEFAULT_FLAKE_REF, DEFAU
 use nix_bench_coordinator::aws::cleanup::{CleanupConfig, TagBasedCleanup};
 use nix_bench_coordinator::aws::scanner::{ResourceScanner, ScanConfig};
 use nix_bench_coordinator::tui::{LogCapture, LogCaptureLayer};
-use nix_bench_coordinator::{config, orchestrator, state};
+use nix_bench_coordinator::{config, orchestrator};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -110,13 +110,7 @@ enum Command {
     /// Run benchmarks on EC2 instances
     Run(Box<RunArgs>),
 
-    /// Manage local state and AWS resources
-    State {
-        #[command(subcommand)]
-        action: StateAction,
-    },
-
-    /// Scan AWS for nix-bench resources using tags (independent of local database)
+    /// Scan AWS for nix-bench resources using tags
     Scan {
         /// AWS region to scan
         #[arg(long, default_value = "us-east-2")]
@@ -157,18 +151,6 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-}
-
-#[derive(Subcommand, Debug)]
-enum StateAction {
-    /// Show all tracked resources
-    List,
-
-    /// Find orphaned resources and delete them
-    Cleanup,
-
-    /// Remove stale entries from local database
-    Prune,
 }
 
 #[tokio::main]
@@ -264,9 +246,7 @@ async fn run() -> Result<()> {
 
     match args.command {
         Command::Run(run_args) => {
-            // Set AWS profile before any AWS SDK calls
             if let Some(profile) = &run_args.aws_profile {
-                std::env::set_var("AWS_PROFILE", profile);
                 info!(profile = %profile, "Using AWS profile");
             }
 
@@ -279,8 +259,11 @@ async fn run() -> Result<()> {
 
             // Validate instance types before launching TUI
             {
-                use nix_bench_coordinator::aws::Ec2Client;
-                let ec2 = Ec2Client::new(&run_args.region).await?;
+                use nix_bench_coordinator::aws::{context::AwsContext, Ec2Client};
+                let aws =
+                    AwsContext::with_profile(&run_args.region, run_args.aws_profile.as_deref())
+                        .await;
+                let ec2 = Ec2Client::from_context(&aws);
                 ec2.validate_instance_types(&instance_types).await?;
             }
 
@@ -300,6 +283,7 @@ async fn run() -> Result<()> {
                 attr: run_args.attr,
                 runs: run_args.runs,
                 region: run_args.region,
+                aws_profile: run_args.aws_profile,
                 output: run_args.output,
                 keep: run_args.keep,
                 timeout: run_args.timeout,
@@ -319,18 +303,6 @@ async fn run() -> Result<()> {
 
             orchestrator::run_benchmarks(config).await?;
         }
-
-        Command::State { action } => match action {
-            StateAction::List => {
-                state::list_resources().await?;
-            }
-            StateAction::Cleanup => {
-                state::cleanup_resources().await?;
-            }
-            StateAction::Prune => {
-                state::prune_database().await?;
-            }
-        },
 
         Command::Scan {
             region,

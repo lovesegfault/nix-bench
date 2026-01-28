@@ -27,7 +27,6 @@
     flake-parts.lib.mkFlake { inherit inputs; } (
       { self, ... }:
       {
-        debug = true;
         imports = [
           inputs.git-hooks.flakeModule
           inputs.treefmt-nix.flakeModule
@@ -82,7 +81,6 @@
               version = "0.1.0";
               buildInputs = with pkgs; [
                 openssl
-                sqlite
               ];
               nativeBuildInputs = with pkgs; [
                 pkg-config
@@ -148,7 +146,6 @@
                     HOST_CC = "${pkgs.stdenv.cc.nativePrefix}cc";
                     buildInputs = with crossPkgs; [
                       openssl.dev
-                      sqlite
                     ];
                     nativeBuildInputs = with pkgs; [
                       pkg-config
@@ -284,7 +281,6 @@
                     rustToolchain
                     pkg-config
                     openssl
-                    sqlite
                     cargo-nextest
                     cargo-make
 

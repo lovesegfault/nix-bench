@@ -19,7 +19,6 @@ use crate::aws::{
     IamClient, S3Client,
 };
 use crate::config::{detect_system, AgentConfig, RunConfig};
-use crate::state::{self, DbPool, ResourceType};
 use crate::tui::{InitPhase, LogBuffer};
 use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -39,12 +38,10 @@ type AgentCertificateMap = HashMap<String, (String, String, String)>;
 
 /// Services and state needed during initialization
 ///
-/// Bundles together the AWS clients, database, and resource guards to simplify
+/// Bundles together the AWS clients and resource guards to simplify
 /// passing them between initialization helper methods.
 struct InitServices<'a> {
     ec2: &'a Ec2Client,
-    db: &'a DbPool,
-    account_id: &'a AccountId,
     builder: &'a ResourceGuardBuilder,
     guards: &'a mut ResourceGuards,
 }
@@ -55,7 +52,6 @@ pub struct InitContext {
     pub bucket_name: String,
     pub account_id: AccountId,
     pub region: String,
-    pub db: DbPool,
     pub ec2: Ec2Client,
     pub s3: S3Client,
     pub instance_profile_name: Option<String>,
@@ -65,6 +61,10 @@ pub struct InitContext {
     /// TLS configuration for coordinator (required for mTLS)
     pub coordinator_tls_config: TlsConfig,
     pub instances: HashMap<String, InstanceState>,
+    /// IAM role name created by nix-bench (for cleanup)
+    pub iam_role_name: Option<String>,
+    /// Security group rules added by nix-bench (sg_id:cidr pairs, for cleanup)
+    pub sg_rules: Vec<String>,
 }
 
 impl InitContext {
@@ -116,17 +116,15 @@ impl<'a> BenchmarkInitializer<'a> {
         reporter.report_run_info(&self.run_id, &self.bucket_name);
         info!(run_id = %self.run_id, bucket = %self.bucket_name, "Starting benchmark run");
 
-        // Phase 1: AWS setup and open database early for incremental recording
-        let aws = AwsContext::new(&self.config.region).await;
+        // Phase 1: AWS setup
+        let aws =
+            AwsContext::with_profile(&self.config.region, self.config.aws_profile.as_deref()).await;
         let account_id = get_current_account_id(aws.sdk_config()).await?;
         info!(account_id = %account_id, "AWS account validated");
         reporter.report_account_info(account_id.as_str());
 
         let ec2 = Ec2Client::from_context(&aws);
         let s3 = S3Client::from_context(&aws);
-
-        // Open database early so we can record resources immediately after creation
-        let db = state::open_db().await?;
 
         // Create the cleanup system for RAII resource protection
         let (registry, executor) = create_cleanup_system();
@@ -137,36 +135,15 @@ impl<'a> BenchmarkInitializer<'a> {
         // Track all guards so they aren't dropped until we're done
         let mut guards = ResourceGuards::default();
 
-        // Create run record first
-        state::insert_run(
-            &db,
-            &self.run_id,
-            &account_id,
-            &self.config.region,
-            &self.config.instance_types,
-            &self.config.attr,
-        )
-        .await?;
-
         // Phase 2: Create S3 bucket and apply tags
         reporter.report_phase(InitPhase::CreatingBucket);
         s3.create_bucket(&self.bucket_name).await?;
         s3.tag_bucket(&self.bucket_name, &self.run_id).await?;
-        // Immediately record to DB, then create guard
-        state::insert_resource(
-            &db,
-            &self.run_id,
-            &account_id,
-            ResourceType::S3Bucket,
-            &self.bucket_name,
-            &self.config.region,
-        )
-        .await?;
         guards.s3_bucket = Some(builder.s3_bucket(self.bucket_name.clone()));
-        debug!(bucket = %self.bucket_name, "S3 bucket created and recorded");
+        debug!(bucket = %self.bucket_name, "S3 bucket created");
 
         // Phase 3: Create IAM role/profile if needed
-        let (instance_profile_name, _iam_role_name) = if self.config.instance_profile.is_some() {
+        let (instance_profile_name, iam_role_name) = if self.config.instance_profile.is_some() {
             (self.config.instance_profile.clone(), None)
         } else {
             reporter.report_phase(InitPhase::CreatingIamRole);
@@ -174,27 +151,8 @@ impl<'a> BenchmarkInitializer<'a> {
             let (role_name, profile_name) = iam
                 .create_benchmark_role(&self.run_id, &self.bucket_name, None)
                 .await?;
-            // Immediately record both to DB
-            state::insert_resource(
-                &db,
-                &self.run_id,
-                &account_id,
-                ResourceType::IamRole,
-                &role_name,
-                &self.config.region,
-            )
-            .await?;
-            state::insert_resource(
-                &db,
-                &self.run_id,
-                &account_id,
-                ResourceType::IamInstanceProfile,
-                &profile_name,
-                &self.config.region,
-            )
-            .await?;
             guards.iam_role = Some(builder.iam_role(role_name.clone(), profile_name.clone()));
-            debug!(role = %role_name, profile = %profile_name, "IAM role/profile created and recorded");
+            debug!(role = %role_name, profile = %profile_name, "IAM role/profile created");
             (Some(profile_name), Some(role_name))
         };
 
@@ -205,12 +163,10 @@ impl<'a> BenchmarkInitializer<'a> {
         // Phase 5: Setup security group
         let mut services = InitServices {
             ec2: &ec2,
-            db: &db,
-            account_id: &account_id,
             builder: &builder,
             guards: &mut guards,
         };
-        let (security_group_id, coordinator_ip, _sg_rule_id) =
+        let (security_group_id, coordinator_ip, sg_rule_ids) =
             self.setup_security_group(&mut services).await?;
 
         // Phase 6: Launch instances
@@ -262,7 +218,6 @@ impl<'a> BenchmarkInitializer<'a> {
             bucket_name: self.bucket_name.clone(),
             account_id,
             region: self.config.region.clone(),
-            db,
             ec2,
             s3,
             instance_profile_name,
@@ -271,16 +226,18 @@ impl<'a> BenchmarkInitializer<'a> {
             agent_certs,
             coordinator_tls_config,
             instances,
+            iam_role_name,
+            sg_rules: sg_rule_ids,
         })
     }
 
-    /// Setup security group with immediate DB recording
+    /// Setup security group
     async fn setup_security_group(
         &self,
         svc: &mut InitServices<'_>,
-    ) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    ) -> Result<(Option<String>, Option<String>, Vec<String>)> {
         let coordinator_ip = get_coordinator_public_ip().await.ok();
-        let mut sg_rule_id = None;
+        let mut sg_rule_ids = Vec::new();
 
         let security_group_id = if let Some(ref sg_id) = self.config.security_group_id {
             // User-provided security group - just add the rule
@@ -288,19 +245,10 @@ impl<'a> BenchmarkInitializer<'a> {
                 let cidr = format!("{}/32", ip);
                 if svc.ec2.add_grpc_ingress_rule(sg_id, &cidr).await.is_ok() {
                     let rule_id = format!("{}:{}", sg_id, cidr);
-                    state::insert_resource(
-                        svc.db,
-                        &self.run_id,
-                        svc.account_id,
-                        ResourceType::SecurityGroupRule,
-                        &rule_id,
-                        &self.config.region,
-                    )
-                    .await?;
                     svc.guards
                         .sg_rules
                         .push(svc.builder.security_group_rule(sg_id.clone(), cidr.clone()));
-                    sg_rule_id = Some(rule_id);
+                    sg_rule_ids.push(rule_id);
                 }
             }
             Some(sg_id.clone())
@@ -312,17 +260,8 @@ impl<'a> BenchmarkInitializer<'a> {
                 .await
             {
                 Ok(sg_id) => {
-                    state::insert_resource(
-                        svc.db,
-                        &self.run_id,
-                        svc.account_id,
-                        ResourceType::SecurityGroup,
-                        &sg_id,
-                        &self.config.region,
-                    )
-                    .await?;
                     svc.guards.security_group = Some(svc.builder.security_group(sg_id.clone()));
-                    debug!(sg_id = %sg_id, "Security group created and recorded");
+                    debug!(sg_id = %sg_id, "Security group created");
                     Some(sg_id)
                 }
                 Err(e) => {
@@ -334,10 +273,10 @@ impl<'a> BenchmarkInitializer<'a> {
             None
         };
 
-        Ok((security_group_id, coordinator_ip, sg_rule_id))
+        Ok((security_group_id, coordinator_ip, sg_rule_ids))
     }
 
-    /// Launch instances with immediate DB recording
+    /// Launch instances
     async fn launch_instances<R: InitProgressReporter>(
         &self,
         svc: &mut InitServices<'_>,
@@ -372,20 +311,10 @@ impl<'a> BenchmarkInitializer<'a> {
             }
             match svc.ec2.launch_instance(launch_config).await {
                 Ok(launched) => {
-                    // Immediately record to DB
-                    state::insert_resource(
-                        svc.db,
-                        &self.run_id,
-                        svc.account_id,
-                        ResourceType::Ec2Instance,
-                        &launched.instance_id,
-                        &self.config.region,
-                    )
-                    .await?;
                     svc.guards
                         .ec2_instances
                         .push(svc.builder.ec2_instance(launched.instance_id.clone()));
-                    debug!(instance_id = %launched.instance_id, instance_type = %instance_type, "Instance launched and recorded");
+                    debug!(instance_id = %launched.instance_id, instance_type = %instance_type, "Instance launched");
 
                     reporter.report_instance_update(InstanceUpdate {
                         instance_type: instance_type.clone(),
@@ -401,8 +330,8 @@ impl<'a> BenchmarkInitializer<'a> {
                             system: system.to_string(),
                             status: InstanceStatus::Launching,
                             run_progress: 0,
+                            run_results: Vec::new(),
                             total_runs: self.config.runs,
-                            durations: Vec::new(),
                             public_ip: None,
                             console_output: LogBuffer::default(),
                         },

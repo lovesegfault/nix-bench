@@ -20,6 +20,9 @@ pub struct RunConfig {
     /// AWS region
     pub region: String,
 
+    /// AWS profile name (overrides default credential resolution)
+    pub aws_profile: Option<String>,
+
     /// Output JSON file path
     pub output: Option<String>,
 

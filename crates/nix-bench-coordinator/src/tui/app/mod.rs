@@ -68,7 +68,7 @@ impl App {
                     status: InstanceStatus::Pending,
                     run_progress: 0,
                     total_runs,
-                    durations: Vec::new(),
+                    run_results: Vec::new(),
                     public_ip: None,
                     console_output: LogBuffer::default(),
                 },
@@ -236,7 +236,7 @@ impl App {
         self.instances.data.values().all(|s| {
             match s.status {
                 // Complete instances must have all their durations
-                InstanceStatus::Complete => s.durations.len() as u32 >= s.run_progress,
+                InstanceStatus::Complete => s.durations().len() as u32 >= s.run_progress,
                 // Failed/Terminated instances may not have all results, that's OK
                 InstanceStatus::Failed | InstanceStatus::Terminated => true,
                 // Still running, not captured yet
@@ -467,7 +467,7 @@ impl App {
                 if let Some(progress) = status.run_progress {
                     state.run_progress = progress;
                 }
-                state.durations = status.durations.clone();
+                state.run_results = status.run_results.clone();
 
                 // Check if instance just became complete and we haven't requested cleanup yet
                 if state.status == InstanceStatus::Complete
@@ -605,7 +605,11 @@ impl App {
                                     state.run_progress = rp;
                                 }
                                 if let Some(d) = durations {
-                                    state.durations = d;
+                                    state.run_results = d
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, &dur)| nix_bench_common::RunResult::success((i + 1) as u32, dur))
+                                        .collect();
                                 }
                             }
                             // Re-sort instances by average duration (fastest first)
@@ -888,7 +892,11 @@ mod tests {
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Complete;
             state.run_progress = 5;
-            state.durations = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+            state.run_results = [1.0, 2.0, 3.0, 4.0, 5.0]
+                .iter()
+                .enumerate()
+                .map(|(i, &d)| nix_bench_common::RunResult::success((i + 1) as u32, d))
+                .collect();
         }
 
         assert!(app.all_results_captured());
@@ -902,7 +910,11 @@ mod tests {
             state.status = InstanceStatus::Complete;
             state.run_progress = 5;
             // Only 4 durations captured, but run_progress says 5 completed
-            state.durations = vec![1.0, 2.0, 3.0, 4.0];
+            state.run_results = [1.0, 2.0, 3.0, 4.0]
+                .iter()
+                .enumerate()
+                .map(|(i, &d)| nix_bench_common::RunResult::success((i + 1) as u32, d))
+                .collect();
         }
 
         assert!(!app.all_results_captured());
@@ -916,7 +928,11 @@ mod tests {
             state.status = InstanceStatus::Failed;
             state.run_progress = 3;
             // Failed instances don't need all durations
-            state.durations = vec![1.0, 2.0];
+            state.run_results = [1.0, 2.0]
+                .iter()
+                .enumerate()
+                .map(|(i, &d)| nix_bench_common::RunResult::success((i + 1) as u32, d))
+                .collect();
         }
 
         assert!(app.all_results_captured());
@@ -929,7 +945,11 @@ mod tests {
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Running;
             state.run_progress = 3;
-            state.durations = vec![1.0, 2.0, 3.0];
+            state.run_results = [1.0, 2.0, 3.0]
+                .iter()
+                .enumerate()
+                .map(|(i, &d)| nix_bench_common::RunResult::success((i + 1) as u32, d))
+                .collect();
         }
 
         // Running instances are not "captured"

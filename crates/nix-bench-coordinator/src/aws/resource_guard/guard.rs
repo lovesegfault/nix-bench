@@ -2,6 +2,7 @@
 
 use super::registry::ResourceRegistry;
 use super::types::{ResourceId, ResourceMeta};
+use std::mem::ManuallyDrop;
 use std::ops::Deref;
 
 /// RAII guard that tracks an AWS resource
@@ -21,13 +22,12 @@ use std::ops::Deref;
 ///
 /// // If we crash here, the instance will be cleaned up by the executor
 ///
-/// // After recording to DB, commit the guard
-/// db.insert_resource(ResourceType::Ec2Instance, &instance_id).await?;
+/// // Commit the guard
 /// let instance_id = guard.commit(); // No cleanup will happen
 /// ```
 pub struct ResourceGuard<T> {
     /// The wrapped value (e.g., instance_id String)
-    value: T,
+    value: ManuallyDrop<T>,
     /// Resource identifier for cleanup
     resource_id: ResourceId,
     /// Metadata for cleanup
@@ -50,7 +50,7 @@ impl<T> ResourceGuard<T> {
         registry.register(resource_id.clone(), meta.clone());
 
         Self {
-            value,
+            value: ManuallyDrop::new(value),
             resource_id,
             meta,
             registry,
@@ -60,15 +60,14 @@ impl<T> ResourceGuard<T> {
 
     /// Commit this resource - transfers ownership to persistent storage
     ///
-    /// After commit, drop will NOT trigger cleanup. Call this after
-    /// the resource has been successfully recorded in the database.
+    /// After commit, drop will NOT trigger cleanup.
     pub fn commit(mut self) -> T {
         self.committed = true;
         self.registry.commit(&self.resource_id);
 
-        // Move out value without running Drop cleanup
-        // SAFETY: We set committed=true and forget self, so Drop won't run
-        let value = unsafe { std::ptr::read(&self.value) };
+        // SAFETY: We set committed=true so Drop won't use the value,
+        // and we only call take() once here before Drop runs.
+        let value = unsafe { ManuallyDrop::take(&mut self.value) };
         std::mem::forget(self);
         value
     }
@@ -96,7 +95,8 @@ impl<T> ResourceGuard<T> {
         self.committed = true;
         self.registry.commit(&self.resource_id);
 
-        let value = unsafe { std::ptr::read(&self.value) };
+        // SAFETY: Same as commit() - committed=true prevents Drop from using value.
+        let value = unsafe { ManuallyDrop::take(&mut self.value) };
         std::mem::forget(self);
         value
     }

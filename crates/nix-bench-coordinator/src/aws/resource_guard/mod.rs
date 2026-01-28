@@ -50,10 +50,6 @@
 //! let instance = ec2.launch_instance(...).await?;
 //! let instance_guard = builder.ec2_instance(instance.instance_id.clone());
 //!
-//! // After all resources created, record to database
-//! db.insert_resource(ResourceType::S3Bucket, "my-bucket").await?;
-//! db.insert_resource(ResourceType::Ec2Instance, &instance.instance_id).await?;
-//!
 //! // Commit guards - no cleanup will happen
 //! bucket_guard.commit();
 //! instance_guard.commit();

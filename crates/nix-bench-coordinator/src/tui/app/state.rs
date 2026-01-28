@@ -62,10 +62,10 @@ impl InstancesState {
             .data
             .iter()
             .map(|(k, v)| {
-                let avg = if v.durations.is_empty() {
+                let avg = if v.durations().is_empty() {
                     None
                 } else {
-                    Some(v.durations.iter().sum::<f64>() / v.durations.len() as f64)
+                    Some(v.durations().iter().sum::<f64>() / v.durations().len() as f64)
                 };
                 (k.clone(), avg)
             })

@@ -7,7 +7,7 @@ mod streaming;
 
 pub use channel::{ChannelOptions, GrpcChannelBuilder};
 pub use log_client::GrpcLogClient;
-pub use status_poller::{GrpcInstanceStatus, GrpcStatusPoller};
+pub use status_poller::{send_ack_complete, GrpcInstanceStatus, GrpcStatusPoller};
 pub use streaming::{start_log_streaming_unified, LogOutput, LogStreamingOptions};
 
 use anyhow::Result;

@@ -335,6 +335,7 @@ impl<'a> BenchmarkInitializer<'a> {
                             total_runs: self.config.runs,
                             public_ip: None,
                             console_output: LogBuffer::default(),
+                            cached_durations: Vec::new(),
                         },
                     );
                 }

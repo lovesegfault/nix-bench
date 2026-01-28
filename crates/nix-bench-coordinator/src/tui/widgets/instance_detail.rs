@@ -59,8 +59,8 @@ fn render_info(frame: &mut Frame, area: Rect, instance: &InstanceState) {
     let status_col = status_color(instance.status);
 
     // Calculate stats
-    let avg_duration = if !instance.durations().is_empty() {
-        instance.durations().iter().sum::<f64>() / instance.durations().len() as f64
+    let avg_duration = if !instance.cached_durations.is_empty() {
+        instance.cached_durations.iter().sum::<f64>() / instance.cached_durations.len() as f64
     } else {
         0.0
     };
@@ -124,8 +124,8 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
     let visible_rows = area.height.saturating_sub(2) as usize;
 
     // Calculate average for comparison
-    let avg_duration = if !instance.durations().is_empty() {
-        instance.durations().iter().sum::<f64>() / instance.durations().len() as f64
+    let avg_duration = if !instance.cached_durations.is_empty() {
+        instance.cached_durations.iter().sum::<f64>() / instance.cached_durations.len() as f64
     } else {
         0.0
     };
@@ -146,9 +146,9 @@ fn render_run_history(frame: &mut Frame, area: Rect, instance: &InstanceState, t
     let all_rows: Vec<Row> = (1..=total_runs)
         .map(|run| {
             let (duration_str, status_str, status_style, diff_str) =
-                if let Some(&duration) = instance.durations().get(run as usize - 1) {
+                if let Some(&duration) = instance.cached_durations.get(run as usize - 1) {
                     let diff = duration - avg_duration;
-                    let diff_str = if instance.durations().len() > 1 {
+                    let diff_str = if instance.cached_durations.len() > 1 {
                         if diff > 0.0 {
                             format!("+{:.1}s", diff)
                         } else {

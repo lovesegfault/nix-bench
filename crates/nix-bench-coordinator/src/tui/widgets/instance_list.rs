@@ -101,8 +101,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
             let runs_str = format!("{}/{}", state.run_progress, state.total_runs);
             let max_name_len = available_width.saturating_sub(runs_str.len() + 4);
 
-            // Get trend arrow and time
-            let (arrow, arrow_color, time_str) = format_trend_time(&state.durations());
+            // Get trend arrow and time (use cached durations to avoid recomputing per frame)
+            let (arrow, arrow_color, time_str) = format_trend_time(&state.cached_durations);
 
             let line = Line::from(vec![
                 Span::styled(format!("{} ", symbol), Style::default().fg(color)),

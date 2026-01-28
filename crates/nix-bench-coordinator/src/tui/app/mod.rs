@@ -74,6 +74,7 @@ impl App {
                     run_results: Vec::new(),
                     public_ip: None,
                     console_output: LogBuffer::default(),
+                    cached_durations: Vec::new(),
                 },
             );
         }
@@ -471,6 +472,7 @@ impl App {
                     state.run_progress = progress;
                 }
                 state.run_results = status.run_results.clone();
+                state.refresh_cache();
 
                 // Check if instance just became complete and we haven't requested cleanup yet
                 if state.status == InstanceStatus::Complete
@@ -614,6 +616,7 @@ impl App {
                                         .enumerate()
                                         .map(|(i, &dur)| nix_bench_common::RunResult::success((i + 1) as u32, dur))
                                         .collect();
+                                    state.refresh_cache();
                                 }
                             }
                             // Re-sort instances by average duration (fastest first)

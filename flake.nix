@@ -309,7 +309,6 @@
                   echo "  cargo make coord     - Build coordinator, run any subcommand (pass args after --)"
                   echo "  cargo make test      - Run tests with nextest"
                   echo "  cargo make test-all  - Run all tests including AWS integration"
-                  echo "  cargo make e2e       - Build agents then run full E2E test"
                   echo ""
                 '';
 

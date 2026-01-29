@@ -56,11 +56,6 @@ args = ["nextest", "run"]
 
 [tasks.test-all]
 description = "Run all tests including AWS integration"
-command = "cargo"
-args = ["nextest", "run", "--run-ignored", "all"]
-
-[tasks.e2e]
-description = "Build agents then run full E2E test"
 dependencies = ["agent"]
 command = "cargo"
-args = ["test", "--test", "agent_e2e_integration", "--", "--ignored", "--nocapture"]
+args = ["nextest", "run", "--run-ignored", "all"]

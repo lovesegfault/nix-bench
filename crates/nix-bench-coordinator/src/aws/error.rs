@@ -62,163 +62,36 @@ impl AwsError {
     pub fn suggestion(&self) -> Option<&'static str> {
         let code = match self {
             AwsError::Sdk { code: Some(c), .. } => c.as_str(),
-            AwsError::Throttled => "Throttling",
+            AwsError::Throttled => {
+                return Some(
+                    "AWS API rate limit hit. The operation will be retried automatically.",
+                );
+            }
             _ => return None,
         };
-        ERROR_CODES
-            .iter()
-            .find(|e| e.code == code)
-            .and_then(|e| e.suggestion)
+        match code {
+            "Throttling" | "ThrottlingException" | "RequestLimitExceeded" => {
+                Some("AWS API rate limit hit. The operation will be retried automatically.")
+            }
+            "InsufficientInstanceCapacity"
+            | "InsufficientHostCapacity"
+            | "InsufficientCapacity" => Some("Try a different availability zone or instance type."),
+            "InsufficientReservedInstanceCapacity" => {
+                Some("Your reserved instance capacity is exhausted. Try on-demand instances.")
+            }
+            "InstanceLimitExceeded" | "VcpuLimitExceeded" => {
+                Some("Request a service limit increase via AWS Service Quotas console.")
+            }
+            "MaxSpotInstanceCountExceeded" => {
+                Some("Reduce spot instance count or request a limit increase.")
+            }
+            "Unsupported" | "UnsupportedOperation" => {
+                Some("This instance type may not be available in this region/AZ.")
+            }
+            _ => None,
+        }
     }
 }
-
-// --- Unified error code table ---
-
-#[derive(Debug, Clone, Copy)]
-enum ErrorCategory {
-    NotFound,
-    AlreadyExists,
-    Throttling,
-    Dependency,
-    /// Codes that are only used for suggestions (no classification effect)
-    SuggestionOnly,
-}
-
-struct ErrorCodeEntry {
-    code: &'static str,
-    category: ErrorCategory,
-    suggestion: Option<&'static str>,
-}
-
-const ERROR_CODES: &[ErrorCodeEntry] = &[
-    // Not found
-    ErrorCodeEntry {
-        code: "InvalidInstanceID.NotFound",
-        category: ErrorCategory::NotFound,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "InvalidAllocationID.NotFound",
-        category: ErrorCategory::NotFound,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "InvalidGroup.NotFound",
-        category: ErrorCategory::NotFound,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "InvalidPermission.NotFound",
-        category: ErrorCategory::NotFound,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "NoSuchBucket",
-        category: ErrorCategory::NotFound,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "NoSuchKey",
-        category: ErrorCategory::NotFound,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "NoSuchEntity",
-        category: ErrorCategory::NotFound,
-        suggestion: None,
-    },
-    // Already exists
-    ErrorCodeEntry {
-        code: "InvalidPermission.Duplicate",
-        category: ErrorCategory::AlreadyExists,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "InvalidGroup.Duplicate",
-        category: ErrorCategory::AlreadyExists,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "EntityAlreadyExists",
-        category: ErrorCategory::AlreadyExists,
-        suggestion: None,
-    },
-    ErrorCodeEntry {
-        code: "BucketAlreadyOwnedByYou",
-        category: ErrorCategory::AlreadyExists,
-        suggestion: None,
-    },
-    // Throttling
-    ErrorCodeEntry {
-        code: "Throttling",
-        category: ErrorCategory::Throttling,
-        suggestion: Some("AWS API rate limit hit. The operation will be retried automatically."),
-    },
-    ErrorCodeEntry {
-        code: "ThrottlingException",
-        category: ErrorCategory::Throttling,
-        suggestion: Some("AWS API rate limit hit. The operation will be retried automatically."),
-    },
-    ErrorCodeEntry {
-        code: "RequestLimitExceeded",
-        category: ErrorCategory::Throttling,
-        suggestion: Some("AWS API rate limit hit. The operation will be retried automatically."),
-    },
-    // Dependency
-    ErrorCodeEntry {
-        code: "DependencyViolation",
-        category: ErrorCategory::Dependency,
-        suggestion: None,
-    },
-    // Capacity (suggestion-only)
-    ErrorCodeEntry {
-        code: "InsufficientInstanceCapacity",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("Try a different availability zone or instance type."),
-    },
-    ErrorCodeEntry {
-        code: "InsufficientHostCapacity",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("Try a different availability zone or instance type."),
-    },
-    ErrorCodeEntry {
-        code: "InsufficientCapacity",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("Try a different availability zone or instance type."),
-    },
-    ErrorCodeEntry {
-        code: "InsufficientReservedInstanceCapacity",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("Your reserved instance capacity is exhausted. Try on-demand instances."),
-    },
-    // Limits (suggestion-only)
-    ErrorCodeEntry {
-        code: "InstanceLimitExceeded",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("Request a service limit increase via AWS Service Quotas console."),
-    },
-    ErrorCodeEntry {
-        code: "VcpuLimitExceeded",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("Request a service limit increase via AWS Service Quotas console."),
-    },
-    ErrorCodeEntry {
-        code: "MaxSpotInstanceCountExceeded",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("Reduce spot instance count or request a limit increase."),
-    },
-    // Unsupported (suggestion-only)
-    ErrorCodeEntry {
-        code: "Unsupported",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("This instance type may not be available in this region/AZ."),
-    },
-    ErrorCodeEntry {
-        code: "UnsupportedOperation",
-        category: ErrorCategory::SuggestionOnly,
-        suggestion: Some("This instance type may not be available in this region/AZ."),
-    },
-];
 
 /// Convert an AWS SDK result into Ok(None) if the error is "not found",
 /// Ok(Some(value)) on success, or propagate other errors.
@@ -246,32 +119,51 @@ pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError
     let message = message.unwrap_or("Unknown error").to_string();
 
     if let Some(c) = code {
-        if let Some(entry) = ERROR_CODES.iter().find(|e| e.code == c) {
-            return match entry.category {
-                ErrorCategory::NotFound => AwsError::NotFound {
+        match c {
+            // Not found
+            "InvalidInstanceID.NotFound"
+            | "InvalidAllocationID.NotFound"
+            | "InvalidGroup.NotFound"
+            | "InvalidPermission.NotFound"
+            | "NoSuchBucket"
+            | "NoSuchKey"
+            | "NoSuchEntity" => {
+                return AwsError::NotFound {
                     resource_type: "resource",
                     resource_id: message,
-                },
-                ErrorCategory::AlreadyExists => AwsError::AlreadyExists,
-                ErrorCategory::Throttling => AwsError::Throttled,
-                ErrorCategory::Dependency => AwsError::DependencyViolation,
-                ErrorCategory::SuggestionOnly => AwsError::Sdk {
-                    code: Some(c.to_string()),
-                    message,
-                },
-            };
+                };
+            }
+            // Already exists
+            "InvalidPermission.Duplicate"
+            | "InvalidGroup.Duplicate"
+            | "EntityAlreadyExists"
+            | "BucketAlreadyOwnedByYou" => return AwsError::AlreadyExists,
+            // Throttling
+            "Throttling" | "ThrottlingException" | "RequestLimitExceeded" => {
+                return AwsError::Throttled;
+            }
+            // Dependency
+            "DependencyViolation" => return AwsError::DependencyViolation,
+            // IAM propagation delay (special case)
+            "InvalidParameterValue" if message.contains("iamInstanceProfile") => {
+                return AwsError::IamPropagationDelay;
+            }
+            _ => {}
         }
-        // Special case: IAM propagation delay
-        if c == "InvalidParameterValue" && message.contains("iamInstanceProfile") {
-            return AwsError::IamPropagationDelay;
-        }
+
+        // Secondary check: IAM propagation in message
         if message.contains("Invalid IAM Instance Profile") {
             return AwsError::IamPropagationDelay;
         }
+
+        return AwsError::Sdk {
+            code: Some(c.to_string()),
+            message,
+        };
     }
 
     AwsError::Sdk {
-        code: code.map(|s| s.to_string()),
+        code: None,
         message,
     }
 }

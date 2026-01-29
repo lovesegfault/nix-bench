@@ -18,7 +18,7 @@ use crate::aws::{
     AccountId, Ec2Client, FromAwsContext, IamClient, S3Client, extract_error_details,
     get_coordinator_public_ip, get_current_account_id,
 };
-use crate::config::{AgentConfig, RunConfig, detect_system};
+use crate::config::{AgentConfig, Architecture, RunConfig};
 use crate::log_buffer::LogBuffer;
 use crate::tui::InitPhase;
 use anyhow::{Context, Result};
@@ -302,7 +302,7 @@ impl<'a> BenchmarkInitializer<'a> {
                 tokio::time::sleep(delay).await;
             }
 
-            let system = detect_system(instance_type);
+            let system = Architecture::from_instance_type(instance_type);
             let user_data = super::user_data::generate_user_data(
                 &self.bucket_name,
                 self.run_id.as_str(),
@@ -443,7 +443,7 @@ impl<'a> BenchmarkInitializer<'a> {
         agent_certs: &HashMap<String, (String, String, String)>,
     ) -> Result<()> {
         for instance_type in &self.config.instances.instance_types {
-            let system = detect_system(instance_type);
+            let system = Architecture::from_instance_type(instance_type);
             let (ca_cert_pem, agent_cert_pem, agent_key_pem) = agent_certs
                 .get(instance_type)
                 .map(|(ca, cert, key)| (Some(ca.clone()), Some(cert.clone()), Some(key.clone())))

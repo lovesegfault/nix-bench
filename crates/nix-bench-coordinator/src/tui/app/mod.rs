@@ -59,7 +59,7 @@ impl App {
                 InstanceState {
                     instance_id: String::new(),
                     instance_type: instance_type.clone(),
-                    system: crate::config::detect_system(instance_type),
+                    system: nix_bench_common::Architecture::from_instance_type(instance_type),
                     status: InstanceStatus::Pending,
                     run_progress: 0,
                     total_runs,

@@ -131,13 +131,6 @@ impl From<String> for RunId {
     }
 }
 
-/// Detect system architecture from EC2 instance type.
-///
-/// This is a convenience wrapper around [`Architecture::from_instance_type`].
-pub fn detect_system(instance_type: &str) -> Architecture {
-    Architecture::from_instance_type(instance_type)
-}
-
 /// Get the current timestamp in milliseconds since UNIX epoch.
 ///
 /// Returns 0 if system time is before the epoch (should never happen in practice).
@@ -197,16 +190,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_detect_system() {
+    fn test_from_instance_type() {
         // x86_64 instances
-        assert_eq!(detect_system("c7i.metal"), Architecture::X86_64);
-        assert_eq!(detect_system("m8a.48xlarge"), Architecture::X86_64);
-        assert_eq!(detect_system("c5.xlarge"), Architecture::X86_64);
+        assert_eq!(
+            Architecture::from_instance_type("c7i.metal"),
+            Architecture::X86_64
+        );
+        assert_eq!(
+            Architecture::from_instance_type("m8a.48xlarge"),
+            Architecture::X86_64
+        );
+        assert_eq!(
+            Architecture::from_instance_type("c5.xlarge"),
+            Architecture::X86_64
+        );
 
         // Graviton (aarch64) instances
-        assert_eq!(detect_system("c7g.metal"), Architecture::Aarch64);
-        assert_eq!(detect_system("m7gd.16xlarge"), Architecture::Aarch64);
-        assert_eq!(detect_system("c6gd.metal"), Architecture::Aarch64);
+        assert_eq!(
+            Architecture::from_instance_type("c7g.metal"),
+            Architecture::Aarch64
+        );
+        assert_eq!(
+            Architecture::from_instance_type("m7gd.16xlarge"),
+            Architecture::Aarch64
+        );
+        assert_eq!(
+            Architecture::from_instance_type("c6gd.metal"),
+            Architecture::Aarch64
+        );
     }
 
     #[test]

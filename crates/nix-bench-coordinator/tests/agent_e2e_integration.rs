@@ -257,7 +257,7 @@ async fn test_full_benchmark_with_agent() {
                 attr: "shallow.hello".to_string(), // Simple, fast build
                 runs: 1,
                 instance_type: instance_type.to_string(),
-                system: nix_bench_common::detect_system(instance_type),
+                system: nix_bench_common::Architecture::from_instance_type(instance_type),
                 flake_ref: "github:lovesegfault/nix-bench".to_string(),
                 build_timeout: 300,
                 max_failures: 1,

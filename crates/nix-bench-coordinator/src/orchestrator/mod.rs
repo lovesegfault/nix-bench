@@ -28,7 +28,7 @@ use crate::config::RunConfig;
 use crate::tui::LogCapture;
 use anyhow::Result;
 use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
-use nix_bench_common::{Architecture, RunId, detect_system};
+use nix_bench_common::{Architecture, RunId};
 use tracing::info;
 
 /// gRPC port for agent communication (from common defaults)
@@ -41,12 +41,12 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
         .instances
         .instance_types
         .iter()
-        .any(|t| detect_system(t) == Architecture::X86_64);
+        .any(|t| Architecture::from_instance_type(t) == Architecture::X86_64);
     let needs_aarch64 = config
         .instances
         .instance_types
         .iter()
-        .any(|t| detect_system(t) == Architecture::Aarch64);
+        .any(|t| Architecture::from_instance_type(t) == Architecture::Aarch64);
 
     // Try to auto-detect agent binaries if not provided
     let agent_x86_64 = config.instances.agent_x86_64.clone().or_else(|| {
@@ -92,7 +92,7 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
         println!();
         println!("  Instance types:");
         for instance_type in &config.instances.instance_types {
-            let system = detect_system(instance_type);
+            let system = Architecture::from_instance_type(instance_type);
             println!("    - {} ({})", instance_type, system);
         }
         println!();

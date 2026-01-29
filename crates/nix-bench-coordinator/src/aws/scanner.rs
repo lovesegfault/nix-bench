@@ -175,17 +175,19 @@ impl ResourceScanner {
         let now = Utc::now();
         items
             .iter()
-            .filter(|(tags, _)| self.should_include(tags, config, now))
             .filter_map(|(tags, id)| {
-                let run_id = tags.get(TAG_RUN_ID)?;
-                Some(DiscoveredResource {
-                    resource: make_resource(id.clone()),
-                    region: self.region.clone(),
-                    run_id: run_id.clone(),
-                    created_at: parse_created_at(tags),
-                    status: tags.get(TAG_STATUS).cloned().unwrap_or_default(),
-                    tags: tags.clone(),
-                })
+                self.build_discovered_resource(
+                    ResourceCandidate {
+                        make_resource,
+                        resource_id: id,
+                        tags: tags.clone(),
+                        is_untagged_orphan: false,
+                        fallback_created_at: None,
+                        name_prefix: "",
+                    },
+                    config,
+                    now,
+                )
             })
             .collect()
     }
@@ -419,6 +421,7 @@ impl ResourceScanner {
             fallback_created_at,
             name_prefix,
         } = params;
+
         // For tagged resources, verify the tool tag
         if !is_untagged_orphan && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
             return None;
@@ -430,14 +433,33 @@ impl ResourceScanner {
             parse_created_at(&tags)
         };
 
-        // Apply age/status/run_id filters
-        if is_untagged_orphan {
-            let age = now - created_at;
-            if age < config.min_age {
+        // Apply age filter
+        let age = now - created_at;
+        if age < config.min_age {
+            return None;
+        }
+
+        let status = if is_untagged_orphan {
+            "orphaned".to_string()
+        } else {
+            tags.get(TAG_STATUS).cloned().unwrap_or_default()
+        };
+
+        // Apply status filters
+        if !config.include_creating && status == tags::status::CREATING {
+            return None;
+        }
+        if let Some(ref filter_status) = config.status {
+            if status != *filter_status {
                 return None;
             }
-        } else if !self.should_include(&tags, config, now) {
-            return None;
+        }
+
+        // Apply run_id filter
+        if let Some(ref filter_run_id) = config.run_id {
+            if tags.get(TAG_RUN_ID) != Some(filter_run_id) {
+                return None;
+            }
         }
 
         // Extract run_id: from tags if available, otherwise from resource name
@@ -450,12 +472,6 @@ impl ResourceScanner {
                 .to_string()
         };
 
-        let status = if is_untagged_orphan {
-            "orphaned".to_string()
-        } else {
-            tags.get(TAG_STATUS).cloned().unwrap_or_default()
-        };
-
         Some(DiscoveredResource {
             resource: make_resource(resource_id.to_string()),
             region: self.region.clone(),
@@ -464,45 +480,6 @@ impl ResourceScanner {
             status,
             tags,
         })
-    }
-
-    /// Check if a resource should be included based on config
-    fn should_include(
-        &self,
-        tags: &HashMap<String, String>,
-        config: &ScanConfig,
-        now: DateTime<Utc>,
-    ) -> bool {
-        // Check age filter
-        if let Some(created_str) = tags.get(TAG_CREATED_AT) {
-            if let Some(created) = tags::parse_created_at(created_str) {
-                let age = now - created;
-                if age < config.min_age {
-                    return false; // Skip resources in grace period
-                }
-            }
-        }
-
-        // Check status filter
-        let status = tags.get(TAG_STATUS).cloned().unwrap_or_default();
-        if !config.include_creating && status == tags::status::CREATING {
-            return false; // Skip resources still being created
-        }
-
-        if let Some(ref filter_status) = config.status {
-            if &status != filter_status {
-                return false;
-            }
-        }
-
-        // Check run_id filter (already handled by tag filter for EC2, but double-check)
-        if let Some(ref filter_run_id) = config.run_id {
-            if tags.get(TAG_RUN_ID) != Some(filter_run_id) {
-                return false;
-            }
-        }
-
-        true
     }
 }
 

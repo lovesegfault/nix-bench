@@ -170,11 +170,6 @@ impl Theme {
         Style::default().fg(self.success)
     }
 
-    /// Style for warning text
-    pub fn warning_style(&self) -> Style {
-        Style::default().fg(self.warning)
-    }
-
     /// Style for error text
     pub fn error_style(&self) -> Style {
         Style::default().fg(self.error)

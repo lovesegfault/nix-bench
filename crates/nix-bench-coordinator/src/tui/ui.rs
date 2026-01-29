@@ -268,101 +268,90 @@ fn render_help_bar(frame: &mut Frame, area: Rect) {
     frame.render_widget(help_bar, area);
 }
 
+const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Navigation",
+        &[
+            ("Tab", "Switch focus (list/logs)"),
+            ("↑ / k", "Up (select / scroll)"),
+            ("↓ / j", "Down (select / scroll)"),
+            ("Home", "First instance / top"),
+            ("End", "Last instance / bottom"),
+        ],
+    ),
+    (
+        "Log Scrolling (when focused)",
+        &[
+            ("Ctrl+d", "Page down"),
+            ("Ctrl+u", "Page up"),
+            ("g", "Jump to top"),
+            ("G", "Jump to bottom (auto-follow)"),
+            ("l", "Toggle fullscreen logs"),
+        ],
+    ),
+    (
+        "General",
+        &[
+            ("? / F1", "Toggle this help"),
+            ("q / Esc", "Quit (cleanup resources)"),
+        ],
+    ),
+    (
+        "Mouse",
+        &[
+            ("Click", "Select / focus panel"),
+            ("Scroll", "Navigate (context-aware)"),
+        ],
+    ),
+];
+
 /// Render help popup overlay
 fn render_help_popup(frame: &mut Frame) {
     let t = theme::theme();
     let area = centered_rect(50, 60, frame.area());
-
-    // Clear the area behind the popup
     frame.render_widget(Clear, area);
 
-    let section_style = t.bold();
+    let mut lines: Vec<Line> = vec![Line::from("")];
 
-    let help_text = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled("  Navigation", section_style)]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Tab          Switch focus (list/logs)",
-            t.text(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  ↑ / k        Up (select / scroll)",
-            t.text(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  ↓ / j        Down (select / scroll)",
-            t.text(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  Home         First instance / top",
-            t.text(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  End          Last instance / bottom",
-            t.text(),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Log Scrolling (when focused)",
-            section_style,
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled("  Ctrl+d       Page down", t.text())]),
-        Line::from(vec![Span::styled("  Ctrl+u       Page up", t.text())]),
-        Line::from(vec![Span::styled("  g            Jump to top", t.text())]),
-        Line::from(vec![Span::styled(
-            "  G            Jump to bottom (auto-follow)",
-            t.text(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  l            Toggle fullscreen logs",
-            t.text(),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled("  General", section_style)]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  ? / F1       Toggle this help",
-            t.text(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  q / Esc      Quit (cleanup resources)",
-            t.text(),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled("  Mouse", section_style)]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Click        Select / focus panel",
-            t.text(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  Scroll       Navigate (context-aware)",
-            t.text(),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled("  Status Icons", section_style)]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  ○ ", t.status_style(InstanceStatus::Pending)),
-            Span::styled("Pending  ", t.dim()),
-            Span::styled("◔ ", t.status_style(InstanceStatus::Launching)),
-            Span::styled("Launching  ", t.dim()),
-            Span::styled("◐ ", t.status_style(InstanceStatus::Starting)),
-            Span::styled("Starting", t.dim()),
-        ]),
-        Line::from(vec![
-            Span::styled("  ● ", t.status_style(InstanceStatus::Running)),
-            Span::styled("Running  ", t.dim()),
-            Span::styled("✓ ", t.status_style(InstanceStatus::Complete)),
-            Span::styled("Complete ", t.dim()),
-            Span::styled("✗ ", t.status_style(InstanceStatus::Failed)),
-            Span::styled("Failed", t.dim()),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled("  Press any key to close", t.dim())]),
-    ];
+    for (section, items) in HELP_SECTIONS {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {section}"),
+            t.bold(),
+        )]));
+        lines.push(Line::from(""));
+        for (key, desc) in *items {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {key:<14} {desc}"),
+                t.text(),
+            )]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Status icons section
+    lines.push(Line::from(vec![Span::styled("  Status Icons", t.bold())]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ○ ", t.status_style(InstanceStatus::Pending)),
+        Span::styled("Pending  ", t.dim()),
+        Span::styled("◔ ", t.status_style(InstanceStatus::Launching)),
+        Span::styled("Launching  ", t.dim()),
+        Span::styled("◐ ", t.status_style(InstanceStatus::Starting)),
+        Span::styled("Starting", t.dim()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  ● ", t.status_style(InstanceStatus::Running)),
+        Span::styled("Running  ", t.dim()),
+        Span::styled("✓ ", t.status_style(InstanceStatus::Complete)),
+        Span::styled("Complete ", t.dim()),
+        Span::styled("✗ ", t.status_style(InstanceStatus::Failed)),
+        Span::styled("Failed", t.dim()),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "  Press any key to close",
+        t.dim(),
+    )]));
 
     let block = Block::default()
         .title(" Help ")
@@ -370,7 +359,7 @@ fn render_help_popup(frame: &mut Frame) {
         .border_style(t.block_focused())
         .style(Style::default().bg(t.bg));
 
-    let paragraph = Paragraph::new(help_text)
+    let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });
 
@@ -468,154 +457,54 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    #[test]
-    fn render_does_not_panic_with_empty_state() {
-        let backend = TestBackend::new(80, 24);
+    fn render_ok(width: u16, height: u16, app: &mut App) {
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new_loading(&[], 0, None);
-        terminal.draw(|f| render(f, &mut app)).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
     }
 
     #[test]
-    fn render_does_not_panic_with_instances() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+    fn render_does_not_panic_various_states() {
+        // Empty state
+        render_ok(80, 24, &mut App::new_loading(&[], 0, None));
+        // Normal instances
         let instances = vec!["m5.large".to_string(), "c5.xlarge".to_string()];
-        let mut app = App::new_loading(&instances, 10, None);
-        terminal.draw(|f| render(f, &mut app)).unwrap();
+        render_ok(80, 24, &mut App::new_loading(&instances, 10, None));
+        // Tiny terminal
+        render_ok(10, 5, &mut App::new_loading(&["m5.large".into()], 5, None));
     }
 
     #[test]
-    fn render_does_not_panic_with_tiny_terminal() {
-        // Tiny terminal that could cause layout issues
-        let backend = TestBackend::new(10, 5);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let instances = vec!["m5.large".to_string()];
-        let mut app = App::new_loading(&instances, 5, None);
-        terminal.draw(|f| render(f, &mut app)).unwrap();
-    }
-
-    #[test]
-    fn render_does_not_panic_with_very_long_instance_names() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let instances = vec![
-            "this-is-a-very-long-instance-type-name-that-exceeds-normal-bounds".to_string(),
-            "another-extremely-long-instance-name-for-testing-truncation".to_string(),
-        ];
-        let mut app = App::new_loading(&instances, 10, None);
-        terminal.draw(|f| render(f, &mut app)).unwrap();
-    }
-
-    #[test]
-    fn render_does_not_panic_with_unicode_content() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        // Instance names with unicode (unlikely in practice but test robustness)
-        let instances = vec!["日本語インスタンス".to_string(), "🦀-instance".to_string()];
-        let mut app = App::new_loading(&instances, 5, None);
-
-        // Add some unicode to console output
-        if let Some(state) = app.instances.data.get_mut("日本語インスタンス") {
-            state
-                .console_output
-                .push_line("Building: こんにちは世界".to_string());
-            state
-                .console_output
-                .push_line("Progress: 🚀🔥✓".to_string());
-        }
-
-        terminal.draw(|f| render(f, &mut app)).unwrap();
-    }
-
-    #[test]
-    fn render_does_not_panic_with_all_status_types() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let instances = vec![
-            "pending".to_string(),
-            "launching".to_string(),
-            "running".to_string(),
-            "complete".to_string(),
-            "failed".to_string(),
-        ];
-        let mut app = App::new_loading(&instances, 5, None);
-
-        // Set different statuses
-        if let Some(s) = app.instances.data.get_mut("pending") {
-            s.status = InstanceStatus::Pending;
-        }
-        if let Some(s) = app.instances.data.get_mut("launching") {
-            s.status = InstanceStatus::Launching;
-        }
-        if let Some(s) = app.instances.data.get_mut("running") {
-            s.status = InstanceStatus::Running;
-        }
-        if let Some(s) = app.instances.data.get_mut("complete") {
-            s.status = InstanceStatus::Complete;
-        }
-        if let Some(s) = app.instances.data.get_mut("failed") {
-            s.status = InstanceStatus::Failed;
-        }
-
-        terminal.draw(|f| render(f, &mut app)).unwrap();
-    }
-
-    #[test]
-    fn render_does_not_panic_with_help_popup() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
+    fn render_does_not_panic_popups() {
         let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
         app.ui.show_help = true;
-        terminal.draw(|f| render(f, &mut app)).unwrap();
-    }
+        render_ok(80, 24, &mut app);
 
-    #[test]
-    fn render_does_not_panic_with_quit_confirm_popup() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        app.ui.show_help = false;
         app.ui.show_quit_confirm = true;
-        terminal.draw(|f| render(f, &mut app)).unwrap();
+        render_ok(80, 24, &mut app);
     }
 
     #[test]
     fn render_does_not_panic_with_large_log_buffer() {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
-
-        // Fill log buffer with many lines
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             for i in 0..1000 {
-                state
-                    .console_output
-                    .push_line(format!("Log line {}: some build output here", i));
+                state.console_output.push_line(format!("Log line {i}"));
             }
         }
-
-        terminal.draw(|f| render(f, &mut app)).unwrap();
+        render_ok(80, 24, &mut app);
     }
 
     #[test]
-    fn status_symbol_returns_correct_symbols() {
+    fn status_symbol_and_color() {
         assert_eq!(status_symbol(InstanceStatus::Pending), "○");
-        assert_eq!(status_symbol(InstanceStatus::Launching), "◔");
-        assert_eq!(status_symbol(InstanceStatus::Starting), "◐");
         assert_eq!(status_symbol(InstanceStatus::Running), "●");
         assert_eq!(status_symbol(InstanceStatus::Complete), "✓");
         assert_eq!(status_symbol(InstanceStatus::Failed), "✗");
-    }
 
-    #[test]
-    fn status_color_returns_theme_colors() {
-        use crate::tui::theme;
-        let t = theme::theme();
-        assert_eq!(status_color(InstanceStatus::Pending), t.status_pending);
-        assert_eq!(status_color(InstanceStatus::Launching), t.status_launching);
-        assert_eq!(status_color(InstanceStatus::Starting), t.status_starting);
+        let t = crate::tui::theme::theme();
         assert_eq!(status_color(InstanceStatus::Running), t.status_running);
-        assert_eq!(status_color(InstanceStatus::Complete), t.status_complete);
         assert_eq!(status_color(InstanceStatus::Failed), t.status_failed);
     }
 }

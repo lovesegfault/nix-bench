@@ -639,7 +639,7 @@ fn print_no_tui_progress(
         };
         println!(
             "  {:>10} {}: {}/{}{}",
-            state.status.as_str(),
+            state.status.as_ref(),
             instance_type,
             state.run_progress,
             state.total_runs,

@@ -97,7 +97,7 @@ impl GrpcStatusPoller {
         match client.get_status(nix_bench_proto::StatusRequest {}).await {
             Ok(response) => {
                 let status = response.into_inner();
-                let status_code = StatusCode::from_i32(status.status_code);
+                let status_code = StatusCode::from_repr(status.status_code);
 
                 let run_results: Vec<RunResult> = status
                     .run_results

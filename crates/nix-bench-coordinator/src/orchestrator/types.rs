@@ -69,7 +69,8 @@ impl InstanceState {
 }
 
 /// Status of a benchmark instance
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display, strum::AsRefStr)]
+#[strum(serialize_all = "lowercase")]
 pub enum InstanceStatus {
     /// Instance not yet launched
     #[default]
@@ -86,25 +87,4 @@ pub enum InstanceStatus {
     Failed,
     /// Instance has been terminated
     Terminated,
-}
-
-impl InstanceStatus {
-    /// Get a display string for the status
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Launching => "launching",
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Complete => "complete",
-            Self::Failed => "failed",
-            Self::Terminated => "terminated",
-        }
-    }
-}
-
-impl std::fmt::Display for InstanceStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
 }

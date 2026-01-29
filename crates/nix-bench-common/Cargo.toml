@@ -22,6 +22,10 @@ rand.workspace = true
 # Unique identifiers
 uuid.workspace = true
 
+# Derive macros
+strum.workspace = true
+derive_more.workspace = true
+
 # Optional tonic integration for TlsConfig methods
 tonic = { workspace = true, optional = true }
 

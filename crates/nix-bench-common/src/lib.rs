@@ -35,11 +35,13 @@ use uuid::Uuid;
 /// System architecture for EC2 instances.
 ///
 /// Only two architectures are supported: x86_64 and aarch64 (Graviton).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display)]
 pub enum Architecture {
     #[serde(rename = "x86_64-linux")]
+    #[strum(serialize = "x86_64-linux")]
     X86_64,
     #[serde(rename = "aarch64-linux")]
+    #[strum(serialize = "aarch64-linux")]
     Aarch64,
 }
 
@@ -81,17 +83,21 @@ impl Architecture {
     }
 }
 
-impl std::fmt::Display for Architecture {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// Unique identifier for a benchmark run (UUIDv7).
 ///
 /// Wraps a UUIDv7 string to provide type safety for run identifiers.
 /// Implements `Display`, `AsRef<str>`, and serde traits for ergonomic use.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    derive_more::Display,
+    derive_more::From,
+)]
 #[serde(transparent)]
 pub struct RunId(String);
 
@@ -113,21 +119,9 @@ impl Default for RunId {
     }
 }
 
-impl std::fmt::Display for RunId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 impl AsRef<str> for RunId {
     fn as_ref(&self) -> &str {
         &self.0
-    }
-}
-
-impl From<String> for RunId {
-    fn from(s: String) -> Self {
-        Self(s)
     }
 }
 

@@ -60,6 +60,9 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# Derive macros
+strum.workspace = true
+
 # Utilities
 chrono.workspace = true
 uuid.workspace = true

@@ -117,7 +117,7 @@ pub fn print_results_summary(instances: &HashMap<String, InstanceState>) {
     });
 
     for (instance_type, state) in sorted {
-        let status = state.status.as_str();
+        let status = state.status.as_ref();
         let runs = format!("{}/{}", state.run_progress, state.total_runs);
 
         let durations = state.durations();

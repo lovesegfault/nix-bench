@@ -97,3 +97,29 @@ pub struct RunConfig {
     #[command(flatten)]
     pub flags: RuntimeFlags,
 }
+
+/// Build an AgentConfig from RunConfig for a specific instance type.
+pub fn agent_config_for(
+    config: &RunConfig,
+    run_id: &str,
+    bucket: &str,
+    instance_type: &str,
+    certs: (Option<String>, Option<String>, Option<String>),
+) -> AgentConfig {
+    AgentConfig {
+        run_id: run_id.to_string(),
+        bucket: bucket.to_string(),
+        region: config.aws.region.clone(),
+        attr: config.benchmark.attr.clone(),
+        runs: config.benchmark.runs,
+        instance_type: instance_type.to_string(),
+        system: Architecture::from_instance_type(instance_type),
+        flake_ref: config.benchmark.flake_ref.clone(),
+        build_timeout: config.benchmark.build_timeout,
+        max_failures: config.benchmark.max_failures,
+        gc_between_runs: config.benchmark.gc_between_runs,
+        ca_cert_pem: certs.0,
+        agent_cert_pem: certs.1,
+        agent_key_pem: certs.2,
+    }
+}

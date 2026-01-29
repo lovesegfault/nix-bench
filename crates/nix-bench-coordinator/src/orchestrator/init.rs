@@ -18,7 +18,7 @@ use crate::aws::{
     AccountId, Ec2Client, IamClient, S3Client, classify_anyhow_error, get_coordinator_public_ip,
     get_current_account_id,
 };
-use crate::config::{AgentConfig, Architecture, RunConfig};
+use crate::config::{Architecture, RunConfig};
 use crate::log_buffer::LogBuffer;
 use crate::tui::InitPhase;
 use anyhow::{Context, Result};
@@ -427,28 +427,18 @@ impl<'a> BenchmarkInitializer<'a> {
         agent_certs: &HashMap<String, (String, String, String)>,
     ) -> Result<()> {
         for instance_type in &self.config.instances.instance_types {
-            let system = Architecture::from_instance_type(instance_type);
-            let (ca_cert_pem, agent_cert_pem, agent_key_pem) = agent_certs
+            let certs = agent_certs
                 .get(instance_type)
                 .map(|(ca, cert, key)| (Some(ca.clone()), Some(cert.clone()), Some(key.clone())))
                 .unwrap_or((None, None, None));
 
-            let agent_config = AgentConfig {
-                run_id: self.run_id.to_string(),
-                bucket: self.bucket_name.clone(),
-                region: self.config.aws.region.clone(),
-                attr: self.config.benchmark.attr.clone(),
-                runs: self.config.benchmark.runs,
-                instance_type: instance_type.clone(),
-                system,
-                flake_ref: self.config.benchmark.flake_ref.clone(),
-                build_timeout: self.config.benchmark.build_timeout,
-                max_failures: self.config.benchmark.max_failures,
-                gc_between_runs: self.config.benchmark.gc_between_runs,
-                ca_cert_pem,
-                agent_cert_pem,
-                agent_key_pem,
-            };
+            let agent_config = crate::config::agent_config_for(
+                &self.config,
+                self.run_id.as_str(),
+                &self.bucket_name,
+                instance_type,
+                certs,
+            );
             let config_json = serde_json::to_string_pretty(&agent_config)?;
             s3.upload_bytes(
                 &self.bucket_name,

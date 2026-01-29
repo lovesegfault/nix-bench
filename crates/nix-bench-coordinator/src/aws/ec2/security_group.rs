@@ -2,12 +2,11 @@
 
 use super::Ec2Client;
 use crate::aws::error::{classify_anyhow_error, classify_aws_error};
-use crate::aws::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use crate::aws::tags;
 use anyhow::{Context, Result};
 use aws_sdk_ec2::error::ProvideErrorMetadata;
-use aws_sdk_ec2::types::{Filter, IpPermission, IpRange, ResourceType, Tag, TagSpecification};
+use aws_sdk_ec2::types::{Filter, IpPermission, IpRange, ResourceType};
 use backon::{ExponentialBuilder, Retryable};
-use chrono::Utc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -57,33 +56,17 @@ impl Ec2Client {
         };
 
         // Create the security group
-        let created_at = tags::format_created_at(Utc::now());
         let create_response = self
             .client
             .create_security_group()
             .group_name(&sg_name)
             .description(format!("nix-bench security group for run {}", run_id))
             .vpc_id(&vpc_id)
-            .tag_specifications(
-                TagSpecification::builder()
-                    .resource_type(ResourceType::SecurityGroup)
-                    .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
-                    .tags(Tag::builder().key(TAG_RUN_ID).value(run_id).build())
-                    .tags(
-                        Tag::builder()
-                            .key(TAG_CREATED_AT)
-                            .value(&created_at)
-                            .build(),
-                    )
-                    .tags(
-                        Tag::builder()
-                            .key(TAG_STATUS)
-                            .value(tags::status::CREATING)
-                            .build(),
-                    )
-                    .tags(Tag::builder().key("Name").value(&sg_name).build())
-                    .build(),
-            )
+            .tag_specifications(tags::ec2_tag_spec(
+                ResourceType::SecurityGroup,
+                run_id,
+                &[("Name", &sg_name)],
+            ))
             .send()
             .await
             .context("Failed to create security group")?;

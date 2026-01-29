@@ -1,13 +1,12 @@
 //! S3 bucket and object management
 
-use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use super::tags;
 use crate::aws::context::AwsContext;
 use crate::aws::error::classify_aws_error;
 use anyhow::{Context, Result};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::{Client, primitives::ByteStream};
 use backon::{ExponentialBuilder, Retryable};
-use chrono::Utc;
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -82,39 +81,10 @@ impl S3Client {
     pub async fn tag_bucket(&self, bucket_name: &str, run_id: &str) -> Result<()> {
         debug!(bucket = %bucket_name, run_id = %run_id, "Tagging S3 bucket");
 
-        let created_at = tags::format_created_at(Utc::now());
-
-        let tagging = aws_sdk_s3::types::Tagging::builder()
-            .tag_set(
-                aws_sdk_s3::types::Tag::builder()
-                    .key(TAG_TOOL)
-                    .value(TAG_TOOL_VALUE)
-                    .build()?,
-            )
-            .tag_set(
-                aws_sdk_s3::types::Tag::builder()
-                    .key(TAG_RUN_ID)
-                    .value(run_id)
-                    .build()?,
-            )
-            .tag_set(
-                aws_sdk_s3::types::Tag::builder()
-                    .key(TAG_CREATED_AT)
-                    .value(&created_at)
-                    .build()?,
-            )
-            .tag_set(
-                aws_sdk_s3::types::Tag::builder()
-                    .key(TAG_STATUS)
-                    .value(tags::status::CREATING)
-                    .build()?,
-            )
-            .build()?;
-
         self.client
             .put_bucket_tagging()
             .bucket(bucket_name)
-            .tagging(tagging)
+            .tagging(tags::s3_tagging(run_id)?)
             .send()
             .await
             .context("Failed to tag bucket")?;

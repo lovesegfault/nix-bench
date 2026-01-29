@@ -3,13 +3,12 @@
 use super::Ec2Client;
 use super::types::{LaunchInstanceConfig, LaunchedInstance};
 use crate::aws::error::{AwsError, classify_anyhow_error, classify_aws_error};
-use crate::aws::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use crate::aws::tags;
 use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
 use aws_sdk_ec2::error::ProvideErrorMetadata;
-use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification};
+use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType};
 use backon::{ExponentialBuilder, Retryable};
-use chrono::Utc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -124,7 +123,7 @@ impl Ec2Client {
         use aws_sdk_ec2::types::{BlockDeviceMapping, EbsBlockDevice, VolumeType};
         use nix_bench_common::defaults::DEFAULT_ROOT_VOLUME_SIZE_GIB;
 
-        let created_at = tags::format_created_at(Utc::now());
+        let instance_name = format!("nix-bench-{}-{}", params.run_id, params.instance_type);
         let mut request = self
             .client
             .run_instances()
@@ -145,40 +144,14 @@ impl Ec2Client {
                     )
                     .build(),
             )
-            .tag_specifications(
-                TagSpecification::builder()
-                    .resource_type(ResourceType::Instance)
-                    .tags(Tag::builder().key(TAG_TOOL).value(TAG_TOOL_VALUE).build())
-                    .tags(Tag::builder().key(TAG_RUN_ID).value(params.run_id).build())
-                    .tags(
-                        Tag::builder()
-                            .key(TAG_CREATED_AT)
-                            .value(&created_at)
-                            .build(),
-                    )
-                    .tags(
-                        Tag::builder()
-                            .key(TAG_STATUS)
-                            .value(tags::status::CREATING)
-                            .build(),
-                    )
-                    .tags(
-                        Tag::builder()
-                            .key("Name")
-                            .value(format!(
-                                "nix-bench-{}-{}",
-                                params.run_id, params.instance_type
-                            ))
-                            .build(),
-                    )
-                    .tags(
-                        Tag::builder()
-                            .key(tags::TAG_INSTANCE_TYPE)
-                            .value(params.instance_type)
-                            .build(),
-                    )
-                    .build(),
-            );
+            .tag_specifications(tags::ec2_tag_spec(
+                ResourceType::Instance,
+                params.run_id,
+                &[
+                    ("Name", &instance_name),
+                    (tags::TAG_INSTANCE_TYPE, params.instance_type),
+                ],
+            ));
 
         if let Some(subnet) = params.subnet_id {
             request = request.subnet_id(subnet);

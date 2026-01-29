@@ -173,59 +173,12 @@ impl GrpcLogClient {
         .await
     }
 
-    /// Full RPC health check
-    pub async fn wait_for_grpc_ready(&self, timeout: Duration) -> Result<()> {
-        let start = std::time::Instant::now();
-        let builder = self.channel_builder();
-        let endpoint = builder.endpoint().to_string();
-
-        debug!(
-            instance_type = %self.instance_type,
-            endpoint = %endpoint,
-            timeout_secs = timeout.as_secs(),
-            "Performing gRPC health check"
-        );
-
-        let channel = builder
-            .with_options(ChannelOptions {
-                connect_timeout: timeout,
-                request_timeout: timeout,
-            })
-            .connect()
-            .await?;
-
-        let mut client = LogStreamClient::new(channel);
-
-        let remaining = timeout.saturating_sub(start.elapsed());
-        let result = tokio::time::timeout(remaining, client.get_status(StatusRequest {}))
-            .await
-            .context("GetStatus RPC timed out")?
-            .context("GetStatus RPC failed")?;
-
-        let status = result.into_inner();
-        debug!(
-            instance_type = %self.instance_type,
-            status_code = status.status_code,
-            run_progress = status.run_progress,
-            total_runs = status.total_runs,
-            elapsed_ms = start.elapsed().as_millis(),
-            "gRPC health check passed"
-        );
-
-        Ok(())
-    }
-
     /// Stream logs from the agent and forward them to the TUI channel
     pub async fn stream_to_channel(&self, tx: mpsc::Sender<TuiMessage>) -> Result<()> {
         self.wait_for_ready(Duration::from_secs(300), Duration::from_secs(30))
             .await
             .context("Agent not ready for streaming")?;
 
-        self.stream_to_channel_inner(tx).await
-    }
-
-    /// Inner streaming logic without wait_for_ready - used for testing
-    pub async fn stream_to_channel_inner(&self, tx: mpsc::Sender<TuiMessage>) -> Result<()> {
         self.stream_logs_with(|log_entry| {
             let msg = TuiMessage::ConsoleOutputAppend {
                 instance_type: self.instance_type.clone(),
@@ -235,11 +188,6 @@ impl GrpcLogClient {
             async move { tx.send(msg).await.is_ok() }
         })
         .await
-    }
-
-    /// Spawn the log streaming task in the background
-    pub fn spawn_stream(self, tx: mpsc::Sender<TuiMessage>) -> tokio::task::JoinHandle<Result<()>> {
-        tokio::spawn(async move { self.stream_to_channel(tx).await })
     }
 
     /// Stream logs from the agent and print to stdout (for no-TUI mode)
@@ -254,11 +202,6 @@ impl GrpcLogClient {
             async { true }
         })
         .await
-    }
-
-    /// Spawn the stdout streaming task in the background
-    pub fn spawn_stream_stdout(self) -> tokio::task::JoinHandle<Result<()>> {
-        tokio::spawn(async move { self.stream_to_stdout().await })
     }
 
     /// Shared log streaming implementation.

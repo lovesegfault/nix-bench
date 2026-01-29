@@ -59,7 +59,7 @@ async fn test_stream_to_channel_receives_logs() {
     // Spawn streaming task (use inner method to skip wait_for_ready)
     let stream_handle = tokio::spawn({
         let client = client.clone();
-        async move { client.stream_to_channel_inner(tx).await }
+        async move { client.stream_to_channel(tx).await }
     });
 
     // Give time for connection to establish
@@ -127,7 +127,7 @@ async fn test_stream_to_channel_exits_gracefully_on_channel_close() {
     // Spawn streaming task
     let stream_handle = tokio::spawn({
         let client = client.clone();
-        async move { client.stream_to_channel_inner(tx).await }
+        async move { client.stream_to_channel(tx).await }
     });
 
     // Give time for connection to establish
@@ -269,7 +269,7 @@ async fn test_bootstrap_streaming_integration() {
     // Start streaming in background
     let stream_handle = tokio::spawn({
         let client = client.clone();
-        async move { client.stream_to_channel_inner(tx).await }
+        async move { client.stream_to_channel(tx).await }
     });
 
     // Wait for connection to establish

@@ -73,8 +73,11 @@ pub fn start_log_streaming_unified(
         );
 
         let handle = match &options.output {
-            LogOutput::Channel(tx) => client.spawn_stream(tx.clone()),
-            LogOutput::Stdout => client.spawn_stream_stdout(),
+            LogOutput::Channel(tx) => {
+                let tx = tx.clone();
+                tokio::spawn(async move { client.stream_to_channel(tx).await })
+            }
+            LogOutput::Stdout => tokio::spawn(async move { client.stream_to_stdout().await }),
         };
 
         handles.push(handle);

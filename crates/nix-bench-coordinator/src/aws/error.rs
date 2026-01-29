@@ -61,6 +61,14 @@ impl AwsError {
     pub fn is_already_exists(&self) -> bool {
         matches!(self, AwsError::AlreadyExists)
     }
+
+    /// Get a user-friendly suggestion for resolving this error, if available.
+    pub fn suggestion(&self) -> Option<String> {
+        match self {
+            AwsError::Sdk { code: Some(c), .. } => suggestion_for_code(c),
+            _ => None,
+        }
+    }
 }
 
 /// Known AWS error codes for "not found" conditions
@@ -204,38 +212,6 @@ pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
     AwsError::Sdk {
         code: None,
         message: error.to_string(),
-    }
-}
-
-/// Structured error details for user-friendly display
-#[derive(Debug)]
-pub struct AwsErrorDetails {
-    /// AWS error code if available (e.g., "InsufficientInstanceCapacity")
-    pub code: Option<String>,
-    /// Human-readable error message
-    pub message: String,
-    /// Optional suggestion for resolving the error
-    pub suggestion: Option<String>,
-}
-
-/// Extract detailed error information from an anyhow::Error.
-///
-/// This parses the error to extract AWS error codes and provides
-/// user-friendly suggestions for common issues.
-pub fn extract_error_details(error: &anyhow::Error) -> AwsErrorDetails {
-    let error_debug = format!("{:?}", error);
-    let error_display = error.to_string();
-
-    // Try to extract the error code from the debug representation
-    let code = extract_error_code(&error_debug);
-
-    // Get suggestion based on the error code
-    let suggestion = code.as_ref().and_then(|c| suggestion_for_code(c));
-
-    AwsErrorDetails {
-        code,
-        message: error_display,
-        suggestion,
     }
 }
 
@@ -484,47 +460,5 @@ mod tests {
             }
             .is_retryable()
         );
-    }
-}
-
-#[cfg(test)]
-mod proptests {
-    use super::*;
-    use proptest::prelude::*;
-
-    proptest! {
-        /// extract_error_code never panics on arbitrary input
-        #[test]
-        fn extract_error_code_never_panics(input in ".*") {
-            let _ = extract_error_code(&input);
-        }
-
-        /// classify_aws_error never panics on arbitrary input
-        #[test]
-        fn classify_aws_error_never_panics(
-            code in proptest::option::of("[A-Za-z.]{0,50}"),
-            message in proptest::option::of(".{0,200}"),
-        ) {
-            let _ = classify_aws_error(code.as_deref(), message.as_deref());
-        }
-
-        /// Known codes are always correctly extracted from debug strings
-        #[test]
-        fn known_codes_always_found(
-            prefix in ".{0,100}",
-            suffix in ".{0,100}",
-            code_idx in 0..NOT_FOUND_CODES.len(),
-        ) {
-            let code = NOT_FOUND_CODES[code_idx];
-            let debug_str = format!("{}{}{}", prefix, code, suffix);
-            let extracted = extract_error_code(&debug_str);
-            prop_assert!(extracted.is_some(), "Failed to extract known code: {}", code);
-        }
-
-        /// suggestion_for_code never panics
-        #[test]
-        fn suggestion_never_panics(code in ".{0,50}") {
-            let _ = suggestion_for_code(&code);
-        }
     }
 }

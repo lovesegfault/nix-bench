@@ -15,7 +15,7 @@ use crate::aws::resource_guard::{
     SecurityGroupRuleGuard, create_cleanup_system,
 };
 use crate::aws::{
-    AccountId, Ec2Client, IamClient, S3Client, extract_error_details, get_coordinator_public_ip,
+    AccountId, Ec2Client, IamClient, S3Client, classify_anyhow_error, get_coordinator_public_ip,
     get_current_account_id,
 };
 use crate::config::{AgentConfig, Architecture, RunConfig};
@@ -533,9 +533,9 @@ fn format_instance_error(
     instance_id: &str,
     error: &anyhow::Error,
 ) -> String {
-    let details = extract_error_details(error);
-    let suggestion_line = details
-        .suggestion
+    let classified = classify_anyhow_error(error);
+    let suggestion_line = classified
+        .suggestion()
         .map(|s| format!("Suggestion: {}\n\n", s))
         .unwrap_or_default();
     let id_line = if instance_id.is_empty() {
@@ -547,15 +547,9 @@ fn format_instance_error(
         "=== {} ===\n\n\
          Instance type: {}\n\
          {}\
-         Error code: {}\n\
          Error: {}\n\n\
          {}",
-        context,
-        instance_type,
-        id_line,
-        details.code.as_deref().unwrap_or("N/A"),
-        details.message,
-        suggestion_line,
+        context, instance_type, id_line, error, suggestion_line,
     )
 }
 

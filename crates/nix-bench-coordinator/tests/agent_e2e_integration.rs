@@ -18,7 +18,6 @@
 //! ```
 
 mod aws_test_helpers;
-mod test_utils;
 
 use aws_test_helpers::*;
 use nix_bench_common::tls::{
@@ -31,7 +30,18 @@ use nix_bench_coordinator::aws::{Ec2Client, IamClient, S3Client, get_coordinator
 use nix_bench_coordinator::config::AgentConfig;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Once;
 use std::time::Duration;
+
+static INIT: Once = Once::new();
+
+fn init_crypto() {
+    INIT.call_once(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install rustls crypto provider");
+    });
+}
 
 /// Instance types to test (instance_type, arch, system)
 const TEST_INSTANCES: &[(&str, &str, &str)] = &[
@@ -111,7 +121,7 @@ exec /usr/local/bin/nix-bench-agent \
 #[ignore]
 async fn test_full_benchmark_with_agent() {
     // Initialize crypto for TLS
-    test_utils::init_crypto();
+    init_crypto();
 
     let region = get_test_region();
     cleanup_stale_test_resources(&region).await;
@@ -240,7 +250,7 @@ async fn test_full_benchmark_with_agent() {
             key_pem: coordinator_cert.key_pem,
         };
 
-        for (instance_type, _arch, system) in &available_instances {
+        for (instance_type, _arch, _system) in &available_instances {
             let public_ip = instance_ips.get(*instance_type).unwrap();
             let agent_cert =
                 generate_agent_cert(&ca.cert_pem, &ca.key_pem, instance_type, Some(public_ip))?;
@@ -370,7 +380,7 @@ async fn test_full_benchmark_with_agent() {
 #[tokio::test]
 #[ignore]
 async fn test_infrastructure_setup_only() {
-    test_utils::init_crypto();
+    init_crypto();
 
     let region = get_test_region();
     cleanup_stale_test_resources(&region).await;

@@ -6,7 +6,7 @@
 
 use super::resource_kind::ResourceKind;
 use super::scanner::{DiscoveredResource, ResourceScanner, ScanConfig};
-use crate::aws::context::{AwsContext, FromAwsContext};
+use crate::aws::context::AwsContext;
 use crate::aws::{Ec2Client, IamClient, S3Client};
 use anyhow::Result;
 use chrono::Duration;
@@ -74,9 +74,9 @@ impl TagBasedCleanup {
     pub fn from_context(ctx: &AwsContext) -> Result<Self> {
         Ok(Self {
             scanner: ResourceScanner::from_context(ctx),
-            ec2: FromAwsContext::from_context(ctx),
-            s3: FromAwsContext::from_context(ctx),
-            iam: FromAwsContext::from_context(ctx),
+            ec2: Ec2Client::from_context(ctx),
+            s3: S3Client::from_context(ctx),
+            iam: IamClient::from_context(ctx),
             region: ctx.region().to_string(),
         })
     }

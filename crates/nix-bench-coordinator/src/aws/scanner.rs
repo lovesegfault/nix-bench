@@ -5,7 +5,7 @@
 
 pub use super::resource_kind::ResourceKind;
 use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
-use crate::aws::context::{AwsContext, FromAwsContext};
+use crate::aws::context::AwsContext;
 use anyhow::Result;
 use aws_sdk_ec2::types::Filter;
 use chrono::{DateTime, Duration, Utc};
@@ -79,16 +79,19 @@ pub struct ResourceScanner {
     region: String,
 }
 
-impl FromAwsContext for ResourceScanner {
-    fn from_context(ctx: &AwsContext) -> Self {
+impl ResourceScanner {
+    pub fn from_context(ctx: &AwsContext) -> Self {
         Self {
             ctx: ctx.clone(),
             region: ctx.region().to_string(),
         }
     }
-}
 
-impl ResourceScanner {
+    pub async fn new(region: &str) -> Result<Self> {
+        let ctx = AwsContext::new(region).await;
+        Ok(Self::from_context(&ctx))
+    }
+
     /// Scan all resource types and return discovered nix-bench resources
     pub async fn scan_all(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
         let mut resources = Vec::new();

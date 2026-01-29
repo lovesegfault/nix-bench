@@ -15,9 +15,7 @@ use tracing::{debug, info, warn};
 
 use super::progress::{ChannelReporter, LogReporter, ProgressReporter};
 use super::types::{InstanceState, InstanceStatus};
-use crate::aws::{
-    Ec2Client, FromAwsContext, IamClient, S3Client, classify_anyhow_error, send_ack_complete,
-};
+use crate::aws::{Ec2Client, IamClient, S3Client, classify_anyhow_error, send_ack_complete};
 use crate::tui::{CleanupProgress, TuiMessage};
 use nix_bench_common::RunId;
 use nix_bench_common::defaults::DEFAULT_GRPC_PORT;

@@ -13,8 +13,8 @@
 mod aws_test_helpers;
 
 use aws_test_helpers::*;
+use nix_bench_coordinator::aws::Ec2Client;
 use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
-use nix_bench_coordinator::aws::{Ec2Client, FromAwsContext};
 
 /// Instance type to use for integration tests
 const TEST_INSTANCE_TYPE: &str = "c7a.medium";

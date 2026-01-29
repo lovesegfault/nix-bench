@@ -2,7 +2,7 @@
 
 use super::registry::{CleanupMessage, ResourceRegistry};
 use super::types::{ResourceId, ResourceMeta};
-use crate::aws::{Ec2Client, FromAwsContext, IamClient, S3Client};
+use crate::aws::{Ec2Client, IamClient, S3Client};
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};

@@ -25,9 +25,7 @@ use nix_bench_common::tls::{
 };
 use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
 use nix_bench_coordinator::aws::grpc_client::wait_for_tcp_ready;
-use nix_bench_coordinator::aws::{
-    Ec2Client, FromAwsContext, IamClient, S3Client, get_coordinator_public_ip,
-};
+use nix_bench_coordinator::aws::{Ec2Client, IamClient, S3Client, get_coordinator_public_ip};
 use nix_bench_coordinator::config::AgentConfig;
 use std::collections::HashMap;
 use std::path::Path;

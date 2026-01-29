@@ -5,7 +5,7 @@
 pub use nix_bench_test_utils::aws::{get_test_region, test_run_id};
 
 use nix_bench_coordinator::aws::cleanup::{CleanupConfig, TagBasedCleanup};
-use nix_bench_coordinator::aws::{Ec2Client, FromAwsContext, IamClient, S3Client};
+use nix_bench_coordinator::aws::{Ec2Client, IamClient, S3Client};
 use std::time::Duration;
 use tracing::warn;
 

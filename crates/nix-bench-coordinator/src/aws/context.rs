@@ -84,21 +84,6 @@ impl AwsContext {
     }
 }
 
-/// Trait for types that can be constructed from an `AwsContext`.
-///
-/// Provides a blanket `new(region)` method so each client doesn't
-/// need to duplicate the async config loading boilerplate.
-#[allow(async_fn_in_trait)]
-pub trait FromAwsContext: Sized {
-    fn from_context(ctx: &AwsContext) -> Self;
-
-    /// Create a new instance by loading AWS config for the given region.
-    async fn new(region: &str) -> anyhow::Result<Self> {
-        let ctx = AwsContext::new(region).await;
-        Ok(Self::from_context(&ctx))
-    }
-}
-
 impl std::fmt::Debug for AwsContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AwsContext")

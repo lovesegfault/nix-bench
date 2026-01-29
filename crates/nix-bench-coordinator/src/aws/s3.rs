@@ -1,7 +1,7 @@
 //! S3 bucket and object management
 
 use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
-use crate::aws::context::{AwsContext, FromAwsContext};
+use crate::aws::context::AwsContext;
 use crate::aws::error::classify_aws_error;
 use anyhow::{Context, Result};
 use aws_sdk_s3::error::ProvideErrorMetadata;
@@ -18,16 +18,19 @@ pub struct S3Client {
     region: String,
 }
 
-impl FromAwsContext for S3Client {
-    fn from_context(ctx: &AwsContext) -> Self {
+impl S3Client {
+    pub fn from_context(ctx: &AwsContext) -> Self {
         Self {
             client: ctx.s3_client(),
             region: ctx.region().to_string(),
         }
     }
-}
 
-impl S3Client {
+    pub async fn new(region: &str) -> Result<Self> {
+        let ctx = AwsContext::new(region).await;
+        Ok(Self::from_context(&ctx))
+    }
+
     /// Create a bucket for this run
     ///
     /// This is idempotent - if the bucket already exists and is owned by you,

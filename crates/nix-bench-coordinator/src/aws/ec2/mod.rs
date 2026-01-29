@@ -6,7 +6,7 @@ mod types;
 
 pub use types::{LaunchInstanceConfig, LaunchedInstance};
 
-use crate::aws::context::{AwsContext, FromAwsContext};
+use crate::aws::context::AwsContext;
 use anyhow::{Context, Result};
 use aws_sdk_ec2::{Client, types::Filter};
 use std::collections::HashMap;
@@ -21,12 +21,17 @@ pub struct Ec2Client {
     ami_cache: Mutex<HashMap<String, String>>,
 }
 
-impl FromAwsContext for Ec2Client {
-    fn from_context(ctx: &AwsContext) -> Self {
+impl Ec2Client {
+    pub fn from_context(ctx: &AwsContext) -> Self {
         Self {
             client: ctx.ec2_client(),
             ami_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub async fn new(region: &str) -> Result<Self> {
+        let ctx = AwsContext::new(region).await;
+        Ok(Self::from_context(&ctx))
     }
 }
 

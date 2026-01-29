@@ -15,8 +15,8 @@ use crate::aws::resource_guard::{
     SecurityGroupRuleGuard, create_cleanup_system,
 };
 use crate::aws::{
-    AccountId, Ec2Client, FromAwsContext, IamClient, S3Client, extract_error_details,
-    get_coordinator_public_ip, get_current_account_id,
+    AccountId, Ec2Client, IamClient, S3Client, extract_error_details, get_coordinator_public_ip,
+    get_current_account_id,
 };
 use crate::config::{AgentConfig, Architecture, RunConfig};
 use crate::log_buffer::LogBuffer;

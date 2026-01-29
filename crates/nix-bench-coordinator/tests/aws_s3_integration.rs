@@ -8,7 +8,7 @@
 mod aws_test_helpers;
 
 use aws_test_helpers::*;
-use nix_bench_coordinator::aws::{FromAwsContext, S3Client};
+use nix_bench_coordinator::aws::S3Client;
 use std::io::Write;
 use tempfile::NamedTempFile;
 

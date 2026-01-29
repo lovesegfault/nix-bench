@@ -8,7 +8,6 @@ use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::{Client, primitives::ByteStream};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
-use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -240,66 +239,5 @@ impl S3Client {
                 }
             }
         }
-    }
-}
-
-/// Trait for S3 operations that can be mocked in tests.
-pub trait S3Operations: Send + Sync {
-    /// Create a bucket
-    fn create_bucket(&self, bucket_name: &str) -> impl Future<Output = Result<()>> + Send;
-
-    /// Apply standard nix-bench tags to a bucket
-    fn tag_bucket(
-        &self,
-        bucket_name: &str,
-        run_id: &str,
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    /// Upload a file to S3
-    fn upload_file(
-        &self,
-        bucket: &str,
-        key: &str,
-        path: &Path,
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    /// Upload bytes to S3
-    fn upload_bytes(
-        &self,
-        bucket: &str,
-        key: &str,
-        data: Vec<u8>,
-        content_type: &str,
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    /// Delete a bucket and all its objects
-    fn delete_bucket(&self, bucket: &str) -> impl Future<Output = Result<()>> + Send;
-}
-
-impl S3Operations for S3Client {
-    async fn create_bucket(&self, bucket_name: &str) -> Result<()> {
-        S3Client::create_bucket(self, bucket_name).await
-    }
-
-    async fn tag_bucket(&self, bucket_name: &str, run_id: &str) -> Result<()> {
-        S3Client::tag_bucket(self, bucket_name, run_id).await
-    }
-
-    async fn upload_file(&self, bucket: &str, key: &str, path: &std::path::Path) -> Result<()> {
-        S3Client::upload_file(self, bucket, key, path).await
-    }
-
-    async fn upload_bytes(
-        &self,
-        bucket: &str,
-        key: &str,
-        data: Vec<u8>,
-        content_type: &str,
-    ) -> Result<()> {
-        S3Client::upload_bytes(self, bucket, key, data, content_type).await
-    }
-
-    async fn delete_bucket(&self, bucket: &str) -> Result<()> {
-        S3Client::delete_bucket(self, bucket).await
     }
 }

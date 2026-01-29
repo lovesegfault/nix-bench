@@ -1,11 +1,9 @@
 //! EC2 instance management
 
 mod instance;
-mod operations;
 mod security_group;
 mod types;
 
-pub use operations::Ec2Operations;
 pub use types::{LaunchInstanceConfig, LaunchedInstance};
 
 use crate::aws::context::{AwsContext, FromAwsContext};

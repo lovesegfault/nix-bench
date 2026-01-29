@@ -24,11 +24,9 @@ pub mod tags;
 // Core clients
 pub use account::{AccountId, get_current_account_id};
 pub use context::FromAwsContext;
-pub use ec2::{
-    Ec2Client, Ec2Operations, LaunchInstanceConfig, LaunchedInstance, get_coordinator_public_ip,
-};
-pub use iam::{IamClient, IamOperations};
-pub use s3::{S3Client, S3Operations};
+pub use ec2::{Ec2Client, LaunchInstanceConfig, LaunchedInstance, get_coordinator_public_ip};
+pub use iam::IamClient;
+pub use s3::S3Client;
 
 // Error handling
 pub use error::{

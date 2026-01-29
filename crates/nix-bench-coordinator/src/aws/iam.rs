@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use aws_sdk_iam::Client;
 use aws_sdk_iam::error::ProvideErrorMetadata;
 use chrono::Utc;
-use std::future::Future;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -351,52 +350,5 @@ impl IamClient {
                 }
             }
         }
-    }
-}
-
-/// Trait for IAM operations.
-pub trait IamOperations: Send + Sync {
-    /// Create a role and instance profile for a benchmark run.
-    /// Pass `cancel.clone()` if you have a token reference.
-    fn create_benchmark_role(
-        &self,
-        run_id: &str,
-        bucket_name: &str,
-        cancel: Option<CancellationToken>,
-    ) -> impl Future<Output = Result<(String, String)>> + Send;
-
-    /// Delete a role and its instance profile
-    fn delete_benchmark_role(&self, role_name: &str) -> impl Future<Output = Result<()>> + Send;
-
-    /// Delete an orphaned instance profile (without its role)
-    fn delete_instance_profile(
-        &self,
-        profile_name: &str,
-    ) -> impl Future<Output = Result<()>> + Send;
-
-    /// Check if an instance profile exists
-    fn instance_profile_exists(&self, profile_name: &str) -> impl Future<Output = bool> + Send;
-}
-
-impl IamOperations for IamClient {
-    async fn create_benchmark_role(
-        &self,
-        run_id: &str,
-        bucket_name: &str,
-        cancel: Option<CancellationToken>,
-    ) -> Result<(String, String)> {
-        IamClient::create_benchmark_role(self, run_id, bucket_name, cancel.as_ref()).await
-    }
-
-    async fn delete_benchmark_role(&self, role_name: &str) -> Result<()> {
-        IamClient::delete_benchmark_role(self, role_name).await
-    }
-
-    async fn delete_instance_profile(&self, profile_name: &str) -> Result<()> {
-        IamClient::delete_instance_profile(self, profile_name).await
-    }
-
-    async fn instance_profile_exists(&self, profile_name: &str) -> bool {
-        IamClient::instance_profile_exists(self, profile_name).await
     }
 }

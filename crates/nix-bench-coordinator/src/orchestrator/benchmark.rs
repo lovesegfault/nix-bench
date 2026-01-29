@@ -608,15 +608,6 @@ pub async fn run_benchmarks_no_tui(
         );
 
         for (instance_type, state) in instances.iter() {
-            let status_str = match state.status {
-                InstanceStatus::Pending => "  pending",
-                InstanceStatus::Launching => "  launching",
-                InstanceStatus::Starting => "  starting",
-                InstanceStatus::Running => "  running",
-                InstanceStatus::Complete => "  complete",
-                InstanceStatus::Failed => "  failed",
-                InstanceStatus::Terminated => "  terminated",
-            };
             let durations = state.durations();
             let avg = if !durations.is_empty() {
                 format!(
@@ -627,8 +618,12 @@ pub async fn run_benchmarks_no_tui(
                 String::new()
             };
             println!(
-                "  {} {}: {}/{}{}",
-                status_str, instance_type, state.run_progress, state.total_runs, avg
+                "  {:>10} {}: {}/{}{}",
+                state.status.as_str(),
+                instance_type,
+                state.run_progress,
+                state.total_runs,
+                avg
             );
         }
         println!();

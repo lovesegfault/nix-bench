@@ -2,10 +2,11 @@
 
 use super::Ec2Client;
 use super::types::{LaunchInstanceConfig, LaunchedInstance};
-use crate::aws::error::{AwsError, classify_anyhow_error};
+use crate::aws::error::{AwsError, classify_anyhow_error, classify_aws_error};
 use crate::aws::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
+use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
@@ -492,9 +493,7 @@ impl Ec2Client {
                 Ok(())
             }
             Err(e) => {
-                // Handle "not found" gracefully
-                let error_str = format!("{:?}", e);
-                if error_str.contains("InvalidAllocationID.NotFound") {
+                if classify_aws_error(e.code(), e.message()).is_not_found() {
                     info!(allocation_id = %allocation_id, "Elastic IP already released");
                     Ok(())
                 } else {

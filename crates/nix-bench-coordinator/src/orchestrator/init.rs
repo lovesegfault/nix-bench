@@ -356,27 +356,10 @@ impl<'a> BenchmarkInitializer<'a> {
                         public_ip: None,
                     });
 
-                    // Extract detailed error information for display
-                    let details = extract_error_details(&e);
-                    let suggestion_line = details
-                        .suggestion
-                        .map(|s| format!("Suggestion: {}\n\n", s))
-                        .unwrap_or_default();
-
-                    // Send error to TUI console output
-                    let error_msg = format!(
-                        "=== Instance Launch Failed ===\n\n\
-                         Instance type: {}\n\
-                         Error code: {}\n\
-                         Error: {}\n\n\
-                         {}\
-                         This instance will not be available for benchmarking.",
+                    reporter.report_console_output(
                         instance_type,
-                        details.code.as_deref().unwrap_or("N/A"),
-                        details.message,
-                        suggestion_line
+                        format_instance_error("Instance Launch Failed", instance_type, "", &e),
                     );
-                    reporter.report_console_output(instance_type, error_msg);
                 }
             }
         }
@@ -524,30 +507,15 @@ impl<'a> BenchmarkInitializer<'a> {
                             public_ip: None,
                         });
 
-                        // Extract detailed error information for display
-                        // Note: The error message now includes StateReason from AWS
-                        let details = extract_error_details(&e);
-                        let suggestion_line = details
-                            .suggestion
-                            .map(|s| format!("Suggestion: {}\n\n", s))
-                            .unwrap_or_default();
-
-                        // Send error to TUI console output
-                        let error_msg = format!(
-                            "=== Instance Failed to Start ===\n\n\
-                             Instance type: {}\n\
-                             Instance ID: {}\n\
-                             Error code: {}\n\
-                             Error: {}\n\n\
-                             {}\
-                             The instance did not reach 'running' state.",
-                            instance_type,
-                            instance_id,
-                            details.code.as_deref().unwrap_or("N/A"),
-                            details.message,
-                            suggestion_line
+                        reporter.report_console_output(
+                            &instance_type,
+                            format_instance_error(
+                                "Instance Failed to Start",
+                                &instance_type,
+                                &instance_id,
+                                &e,
+                            ),
                         );
-                        reporter.report_console_output(&instance_type, error_msg);
                     }
                 }
             }
@@ -555,6 +523,39 @@ impl<'a> BenchmarkInitializer<'a> {
 
         Ok(instances)
     }
+}
+
+/// Format a user-friendly error message for instance failures.
+fn format_instance_error(
+    context: &str,
+    instance_type: &str,
+    instance_id: &str,
+    error: &anyhow::Error,
+) -> String {
+    let details = extract_error_details(error);
+    let suggestion_line = details
+        .suggestion
+        .map(|s| format!("Suggestion: {}\n\n", s))
+        .unwrap_or_default();
+    let id_line = if instance_id.is_empty() {
+        String::new()
+    } else {
+        format!("Instance ID: {}\n", instance_id)
+    };
+    format!(
+        "=== {} ===\n\n\
+         Instance type: {}\n\
+         {}\
+         Error code: {}\n\
+         Error: {}\n\n\
+         {}",
+        context,
+        instance_type,
+        id_line,
+        details.code.as_deref().unwrap_or("N/A"),
+        details.message,
+        suggestion_line,
+    )
 }
 
 /// Container for all resource guards created during initialization

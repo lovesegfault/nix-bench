@@ -55,6 +55,16 @@ impl Default for ScanConfig {
     }
 }
 
+/// Candidate resource for `build_discovered_resource`.
+struct ResourceCandidate<'a> {
+    resource_type: ResourceKind,
+    resource_id: &'a str,
+    tags: HashMap<String, String>,
+    is_untagged_orphan: bool,
+    fallback_created_at: Option<DateTime<Utc>>,
+    name_prefix: &'a str,
+}
+
 /// Scanner for finding nix-bench resources in AWS
 pub struct ResourceScanner {
     ctx: AwsContext,
@@ -250,66 +260,29 @@ impl ResourceScanner {
             let (tags, is_untagged_orphan) = match tags_result {
                 Ok(resp) => (extract_s3_tags(resp.tag_set()), false),
                 Err(_) => {
-                    // Bucket has nix-bench- prefix but no tags = likely orphaned
-                    // Include it so it can be cleaned up
                     debug!(bucket = %bucket_name, "Found untagged bucket with nix-bench- prefix");
                     (HashMap::new(), true)
                 }
             };
 
-            // For tagged buckets, verify the tool tag
-            if !is_untagged_orphan && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
-                continue;
+            let fallback_created_at = bucket
+                .creation_date()
+                .and_then(|dt| DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()));
+
+            if let Some(resource) = self.build_discovered_resource(
+                ResourceCandidate {
+                    resource_type: ResourceKind::S3Bucket,
+                    resource_id: bucket_name,
+                    tags,
+                    is_untagged_orphan,
+                    fallback_created_at,
+                    name_prefix: "nix-bench-",
+                },
+                config,
+                now,
+            ) {
+                resources.push(resource);
             }
-
-            // For age filtering on untagged buckets, use the bucket creation date
-            let created_at = if is_untagged_orphan {
-                bucket
-                    .creation_date()
-                    .and_then(|dt| DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
-                    .unwrap_or_else(Utc::now)
-            } else {
-                parse_created_at(&tags)
-            };
-
-            // Apply age filter for untagged buckets
-            if is_untagged_orphan {
-                let age = now - created_at;
-                if age < config.min_age {
-                    debug!(bucket = %bucket_name, age_mins = age.num_minutes(), "Skipping untagged bucket in grace period");
-                    continue;
-                }
-            } else if !self.should_include(&tags, config, now) {
-                continue;
-            }
-
-            // Extract run_id: from tags if available, otherwise from bucket name
-            // Bucket name format: nix-bench-{run_id}
-            let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
-                rid.clone()
-            } else {
-                // Extract run_id from bucket name: "nix-bench-{run_id}" -> "{run_id}"
-                bucket_name
-                    .strip_prefix("nix-bench-")
-                    .unwrap_or("unknown")
-                    .to_string()
-            };
-
-            let status = if is_untagged_orphan {
-                "orphaned".to_string()
-            } else {
-                tags.get(TAG_STATUS).cloned().unwrap_or_default()
-            };
-
-            resources.push(DiscoveredResource {
-                resource_type: ResourceKind::S3Bucket,
-                resource_id: bucket_name.to_string(),
-                region: self.region.clone(),
-                run_id,
-                created_at,
-                status,
-                tags,
-            });
         }
 
         debug!(count = resources.len(), "Found S3 buckets");
@@ -347,60 +320,30 @@ impl ResourceScanner {
                 let (tags, is_untagged) = match tags_result {
                     Ok(resp) => (extract_iam_tags(resp.tags()), false),
                     Err(_) => {
-                        // Role has prefix but no tags or access denied
                         debug!(role = %role_name, "Found role with prefix but couldn't get tags");
                         (HashMap::new(), true)
                     }
                 };
 
-                // For tagged roles, verify the tool tag
-                if !is_untagged && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
-                    continue;
-                }
-
-                // For untagged roles with the prefix, include them as orphans
-                let created_at = if is_untagged {
+                let fallback_created_at = {
                     let dt = role.create_date();
-                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()).unwrap_or_else(Utc::now)
-                } else {
-                    parse_created_at(&tags)
+                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
                 };
 
-                if is_untagged {
-                    let age = now - created_at;
-                    if age < config.min_age {
-                        continue;
-                    }
-                } else if !self.should_include(&tags, config, now) {
-                    continue;
+                if let Some(resource) = self.build_discovered_resource(
+                    ResourceCandidate {
+                        resource_type: ResourceKind::IamRole,
+                        resource_id: role_name,
+                        tags,
+                        is_untagged_orphan: is_untagged,
+                        fallback_created_at,
+                        name_prefix: "nix-bench-agent-",
+                    },
+                    config,
+                    now,
+                ) {
+                    resources.push(resource);
                 }
-
-                // Extract run_id from tags or role name
-                // Role name format: nix-bench-agent-{truncated_run_id}
-                let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
-                    rid.clone()
-                } else {
-                    role_name
-                        .strip_prefix("nix-bench-agent-")
-                        .unwrap_or("unknown")
-                        .to_string()
-                };
-
-                let status = if is_untagged {
-                    "orphaned".to_string()
-                } else {
-                    tags.get(TAG_STATUS).cloned().unwrap_or_default()
-                };
-
-                resources.push(DiscoveredResource {
-                    resource_type: ResourceKind::IamRole,
-                    resource_id: role_name.to_string(),
-                    region: self.region.clone(),
-                    run_id,
-                    created_at,
-                    status,
-                    tags,
-                });
             }
 
             // Handle pagination
@@ -460,52 +403,25 @@ impl ResourceScanner {
                     }
                 };
 
-                // For tagged profiles, verify the tool tag
-                if !is_untagged && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
-                    continue;
-                }
-
-                let created_at = if is_untagged {
+                let fallback_created_at = {
                     let dt = profile.create_date();
-                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()).unwrap_or_else(Utc::now)
-                } else {
-                    parse_created_at(&tags)
+                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
                 };
 
-                if is_untagged {
-                    let age = now - created_at;
-                    if age < config.min_age {
-                        continue;
-                    }
-                } else if !self.should_include(&tags, config, now) {
-                    continue;
+                if let Some(resource) = self.build_discovered_resource(
+                    ResourceCandidate {
+                        resource_type: ResourceKind::IamInstanceProfile,
+                        resource_id: profile_name,
+                        tags,
+                        is_untagged_orphan: is_untagged,
+                        fallback_created_at,
+                        name_prefix: "nix-bench-agent-",
+                    },
+                    config,
+                    now,
+                ) {
+                    resources.push(resource);
                 }
-
-                // Extract run_id from tags or profile name
-                let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
-                    rid.clone()
-                } else {
-                    profile_name
-                        .strip_prefix("nix-bench-agent-")
-                        .unwrap_or("unknown")
-                        .to_string()
-                };
-
-                let status = if is_untagged {
-                    "orphaned".to_string()
-                } else {
-                    tags.get(TAG_STATUS).cloned().unwrap_or_default()
-                };
-
-                resources.push(DiscoveredResource {
-                    resource_type: ResourceKind::IamInstanceProfile,
-                    resource_id: profile_name.to_string(),
-                    region: self.region.clone(),
-                    run_id,
-                    created_at,
-                    status,
-                    tags,
-                });
             }
 
             // Handle pagination
@@ -518,6 +434,72 @@ impl ResourceScanner {
 
         debug!(count = resources.len(), "Found IAM instance profiles");
         Ok(resources)
+    }
+
+    /// Build a `DiscoveredResource` from tags and metadata, applying config filters.
+    ///
+    /// Handles both properly tagged and untagged orphan resources. Returns `None`
+    /// if the resource should be filtered out based on age, status, or run_id.
+    fn build_discovered_resource(
+        &self,
+        params: ResourceCandidate<'_>,
+        config: &ScanConfig,
+        now: DateTime<Utc>,
+    ) -> Option<DiscoveredResource> {
+        let ResourceCandidate {
+            resource_type,
+            resource_id,
+            tags,
+            is_untagged_orphan,
+            fallback_created_at,
+            name_prefix,
+        } = params;
+        // For tagged resources, verify the tool tag
+        if !is_untagged_orphan && tags.get(TAG_TOOL) != Some(&TAG_TOOL_VALUE.to_string()) {
+            return None;
+        }
+
+        let created_at = if is_untagged_orphan {
+            fallback_created_at.unwrap_or_else(Utc::now)
+        } else {
+            parse_created_at(&tags)
+        };
+
+        // Apply age/status/run_id filters
+        if is_untagged_orphan {
+            let age = now - created_at;
+            if age < config.min_age {
+                return None;
+            }
+        } else if !self.should_include(&tags, config, now) {
+            return None;
+        }
+
+        // Extract run_id: from tags if available, otherwise from resource name
+        let run_id = if let Some(rid) = tags.get(TAG_RUN_ID) {
+            rid.clone()
+        } else {
+            resource_id
+                .strip_prefix(name_prefix)
+                .unwrap_or("unknown")
+                .to_string()
+        };
+
+        let status = if is_untagged_orphan {
+            "orphaned".to_string()
+        } else {
+            tags.get(TAG_STATUS).cloned().unwrap_or_default()
+        };
+
+        Some(DiscoveredResource {
+            resource_type,
+            resource_id: resource_id.to_string(),
+            region: self.region.clone(),
+            run_id,
+            created_at,
+            status,
+            tags,
+        })
     }
 
     /// Check if a resource should be included based on config

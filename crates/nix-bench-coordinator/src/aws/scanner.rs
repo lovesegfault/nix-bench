@@ -65,6 +65,14 @@ struct ResourceCandidate<'a> {
     name_prefix: &'a str,
 }
 
+/// IAM resource item used by `scan_iam_paginated`.
+struct IamItem {
+    name: String,
+    created_at: Option<DateTime<Utc>>,
+    tags: HashMap<String, String>,
+    is_untagged: bool,
+}
+
 /// Scanner for finding nix-bench resources in AWS
 pub struct ResourceScanner {
     ctx: AwsContext,
@@ -288,69 +296,45 @@ impl ResourceScanner {
     pub async fn scan_iam_roles(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
         let client = self.ctx.iam_client();
 
-        // List roles - handle pagination for large accounts
-        let mut resources = Vec::new();
-        let now = Utc::now();
-        let mut marker: Option<String> = None;
-
-        loop {
-            let mut request = client.list_roles();
-            if let Some(m) = &marker {
-                request = request.marker(m);
-            }
-
-            let roles_response = request.send().await?;
-
-            for role in roles_response.roles() {
-                let role_name = role.role_name();
-
-                // Quick filter: nix-bench roles start with "nix-bench-agent-"
-                if !role_name.starts_with("nix-bench-agent-") {
-                    continue;
+        self.scan_iam_paginated(config, ResourceKind::IamRole, "IAM roles", |marker| {
+            let c = client.clone();
+            async move {
+                let mut req = c.list_roles();
+                if let Some(m) = &marker {
+                    req = req.marker(m);
                 }
-
-                // Get role tags
-                let tags_result = client.list_role_tags().role_name(role_name).send().await;
-
-                let (tags, is_untagged) = match tags_result {
-                    Ok(resp) => (extract_iam_tags(resp.tags()), false),
-                    Err(_) => {
-                        debug!(role = %role_name, "Found role with prefix but couldn't get tags");
-                        (HashMap::new(), true)
-                    }
-                };
-
-                let fallback_created_at = {
-                    let dt = role.create_date();
-                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
-                };
-
-                if let Some(resource) = self.build_discovered_resource(
-                    ResourceCandidate {
-                        resource_type: ResourceKind::IamRole,
-                        resource_id: role_name,
+                let resp = req.send().await?;
+                let mut items = Vec::new();
+                for r in resp.roles() {
+                    let name = r.role_name().to_string();
+                    let created_at = DateTime::from_timestamp(
+                        r.create_date().secs(),
+                        r.create_date().subsec_nanos(),
+                    );
+                    let tags_result = c.list_role_tags().role_name(&name).send().await;
+                    let (tags, is_untagged) = match tags_result {
+                        Ok(t) => (extract_iam_tags(t.tags()), false),
+                        Err(_) => {
+                            debug!(name = %name, "Couldn't get tags");
+                            (HashMap::new(), true)
+                        }
+                    };
+                    items.push(IamItem {
+                        name,
+                        created_at,
                         tags,
-                        is_untagged_orphan: is_untagged,
-                        fallback_created_at,
-                        name_prefix: "nix-bench-agent-",
-                    },
-                    config,
-                    now,
-                ) {
-                    resources.push(resource);
+                        is_untagged,
+                    });
                 }
+                let next = if resp.is_truncated() {
+                    resp.marker().map(|s| s.to_string())
+                } else {
+                    None
+                };
+                Ok((items, next))
             }
-
-            // Handle pagination
-            if roles_response.is_truncated() {
-                marker = roles_response.marker().map(|s| s.to_string());
-            } else {
-                break;
-            }
-        }
-
-        debug!(count = resources.len(), "Found IAM roles");
-        Ok(resources)
+        })
+        .await
     }
 
     /// Scan IAM instance profiles by tag
@@ -363,53 +347,88 @@ impl ResourceScanner {
     ) -> Result<Vec<DiscoveredResource>> {
         let client = self.ctx.iam_client();
 
+        self.scan_iam_paginated(
+            config,
+            ResourceKind::IamInstanceProfile,
+            "IAM instance profiles",
+            |marker| {
+                let c = client.clone();
+                async move {
+                    let mut req = c.list_instance_profiles();
+                    if let Some(m) = &marker {
+                        req = req.marker(m);
+                    }
+                    let resp = req.send().await?;
+                    let mut items = Vec::new();
+                    for p in resp.instance_profiles() {
+                        let name = p.instance_profile_name().to_string();
+                        let created_at = DateTime::from_timestamp(
+                            p.create_date().secs(),
+                            p.create_date().subsec_nanos(),
+                        );
+                        let tags_result = c
+                            .list_instance_profile_tags()
+                            .instance_profile_name(&name)
+                            .send()
+                            .await;
+                        let (tags, is_untagged) = match tags_result {
+                            Ok(t) => (extract_iam_tags(t.tags()), false),
+                            Err(_) => {
+                                debug!(name = %name, "Couldn't get tags");
+                                (HashMap::new(), true)
+                            }
+                        };
+                        items.push(IamItem {
+                            name,
+                            created_at,
+                            tags,
+                            is_untagged,
+                        });
+                    }
+                    let next = if resp.is_truncated() {
+                        resp.marker().map(|s| s.to_string())
+                    } else {
+                        None
+                    };
+                    Ok((items, next))
+                }
+            },
+        )
+        .await
+    }
+
+    /// Generic paginated IAM scanner that handles the shared pagination,
+    /// name-prefix filtering, tag extraction, and resource building logic.
+    async fn scan_iam_paginated<F, Fut>(
+        &self,
+        config: &ScanConfig,
+        resource_type: ResourceKind,
+        label: &str,
+        list_page: F,
+    ) -> Result<Vec<DiscoveredResource>>
+    where
+        F: Fn(Option<String>) -> Fut,
+        Fut: std::future::Future<Output = Result<(Vec<IamItem>, Option<String>)>>,
+    {
         let mut resources = Vec::new();
         let now = Utc::now();
         let mut marker: Option<String> = None;
 
         loop {
-            let mut request = client.list_instance_profiles();
-            if let Some(m) = &marker {
-                request = request.marker(m);
-            }
+            let (items, next_marker) = list_page(marker).await?;
 
-            let profiles_response = request.send().await?;
-
-            for profile in profiles_response.instance_profiles() {
-                let profile_name = profile.instance_profile_name();
-
-                // Quick filter: nix-bench profiles start with "nix-bench-agent-"
-                if !profile_name.starts_with("nix-bench-agent-") {
+            for item in items {
+                if !item.name.starts_with("nix-bench-agent-") {
                     continue;
                 }
 
-                // Get profile tags
-                let tags_result = client
-                    .list_instance_profile_tags()
-                    .instance_profile_name(profile_name)
-                    .send()
-                    .await;
-
-                let (tags, is_untagged) = match tags_result {
-                    Ok(resp) => (extract_iam_tags(resp.tags()), false),
-                    Err(_) => {
-                        debug!(profile = %profile_name, "Found profile with prefix but couldn't get tags");
-                        (HashMap::new(), true)
-                    }
-                };
-
-                let fallback_created_at = {
-                    let dt = profile.create_date();
-                    DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
-                };
-
                 if let Some(resource) = self.build_discovered_resource(
                     ResourceCandidate {
-                        resource_type: ResourceKind::IamInstanceProfile,
-                        resource_id: profile_name,
-                        tags,
-                        is_untagged_orphan: is_untagged,
-                        fallback_created_at,
+                        resource_type,
+                        resource_id: &item.name,
+                        tags: item.tags,
+                        is_untagged_orphan: item.is_untagged,
+                        fallback_created_at: item.created_at,
                         name_prefix: "nix-bench-agent-",
                     },
                     config,
@@ -419,15 +438,13 @@ impl ResourceScanner {
                 }
             }
 
-            // Handle pagination
-            if profiles_response.is_truncated() {
-                marker = profiles_response.marker().map(|s| s.to_string());
-            } else {
-                break;
+            match next_marker {
+                Some(m) => marker = Some(m),
+                None => break,
             }
         }
 
-        debug!(count = resources.len(), "Found IAM instance profiles");
+        debug!(count = resources.len(), "Found {}", label);
         Ok(resources)
     }
 

@@ -4,6 +4,7 @@ use super::Ec2Client;
 use super::types::{LaunchInstanceConfig, LaunchedInstance};
 use crate::aws::error::{AwsError, classify_anyhow_error};
 use crate::aws::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
+use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
 use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType, Tag, TagSpecification};
 use backon::{ExponentialBuilder, Retryable};
@@ -253,65 +254,81 @@ impl Ec2Client {
 
     /// Inner wait loop without timeout, using exponential backoff (2-15s).
     ///
-    /// Note: this is wrapped in `tokio::time::timeout` by `wait_for_running`,
-    /// so cancellation happens via the timeout future being dropped when
-    /// the parent `FuturesUnordered` is dropped on Ctrl+C / cancel.
+    /// Uses `wait_for_resource` for backoff. The result cell captures the
+    /// public IP from the successful check. The outer `wait_for_running`
+    /// wraps this in `tokio::time::timeout`.
     async fn wait_for_running_inner(&self, instance_id: &str) -> Result<Option<String>> {
-        let mut delay = Duration::from_secs(2);
-        let max_delay = Duration::from_secs(15);
+        use std::sync::Mutex;
 
-        loop {
-            let response = self
-                .client
-                .describe_instances()
-                .instance_ids(instance_id)
-                .send()
-                .await
-                .context("Failed to describe instance")?;
+        let result_ip: Mutex<Option<String>> = Mutex::new(None);
 
-            let instance = response
-                .reservations()
-                .first()
-                .and_then(|r| r.instances().first())
-                .context("Instance not found")?;
+        wait_for_resource(
+            WaitConfig {
+                initial_delay: Duration::from_secs(2),
+                max_delay: Duration::from_secs(15),
+                timeout: Duration::from_secs(Self::DEFAULT_WAIT_TIMEOUT_SECS),
+                jitter: 0.25,
+            },
+            None,
+            || {
+                let result_ip = &result_ip;
+                async move {
+                    let response = self
+                        .client
+                        .describe_instances()
+                        .instance_ids(instance_id)
+                        .send()
+                        .await
+                        .context("Failed to describe instance")?;
 
-            let state = instance
-                .state()
-                .and_then(|s| s.name())
-                .unwrap_or(&InstanceStateName::Pending);
+                    let instance = response
+                        .reservations()
+                        .first()
+                        .and_then(|r| r.instances().first())
+                        .context("Instance not found")?;
 
-            match state {
-                InstanceStateName::Running => {
-                    let public_ip = instance.public_ip_address().map(|s| s.to_string());
-                    info!(instance_id = %instance_id, public_ip = ?public_ip, "Instance is running");
-                    return Ok(public_ip);
+                    let state = instance
+                        .state()
+                        .and_then(|s| s.name())
+                        .unwrap_or(&InstanceStateName::Pending);
+
+                    match state {
+                        InstanceStateName::Running => {
+                            let public_ip = instance.public_ip_address().map(|s| s.to_string());
+                            info!(instance_id = %instance_id, public_ip = ?public_ip, "Instance is running");
+                            *result_ip.lock().unwrap() = public_ip;
+                            Ok(true)
+                        }
+                        InstanceStateName::Pending => Ok(false),
+                        _ => {
+                            let state_reason = instance
+                                .state_reason()
+                                .map(|r| {
+                                    format!(
+                                        "Reason code: {}\nReason: {}",
+                                        r.code().unwrap_or("unknown"),
+                                        r.message().unwrap_or("no message provided")
+                                    )
+                                })
+                                .unwrap_or_else(|| {
+                                    "No state reason provided by AWS".to_string()
+                                });
+
+                            anyhow::bail!(
+                                "Instance {} entered unexpected state: {:?}\n{}",
+                                instance_id,
+                                state,
+                                state_reason
+                            );
+                        }
+                    }
                 }
-                InstanceStateName::Pending => {
-                    debug!(instance_id = %instance_id, delay_secs = delay.as_secs(), "Instance still pending");
-                    tokio::time::sleep(nix_bench_common::jittered_delay_25(delay)).await;
-                    delay = (delay * 2).min(max_delay);
-                }
-                _ => {
-                    let state_reason = instance
-                        .state_reason()
-                        .map(|r| {
-                            format!(
-                                "Reason code: {}\nReason: {}",
-                                r.code().unwrap_or("unknown"),
-                                r.message().unwrap_or("no message provided")
-                            )
-                        })
-                        .unwrap_or_else(|| "No state reason provided by AWS".to_string());
+            },
+            &format!("EC2 instance {} running", instance_id),
+        )
+        .await?;
 
-                    anyhow::bail!(
-                        "Instance {} entered unexpected state: {:?}\n{}",
-                        instance_id,
-                        state,
-                        state_reason
-                    );
-                }
-            }
-        }
+        Ok(result_ip.into_inner().unwrap())
     }
 
     /// Terminate an instance
@@ -332,58 +349,64 @@ impl Ec2Client {
     pub async fn wait_for_terminated(&self, instance_id: &str) -> Result<()> {
         use nix_bench_common::defaults::DEFAULT_TERMINATION_WAIT_TIMEOUT_SECS;
 
-        let start = std::time::Instant::now();
-        let mut delay = Duration::from_secs(2);
-        let max_delay = Duration::from_secs(15);
+        let result = wait_for_resource(
+            WaitConfig {
+                initial_delay: Duration::from_secs(2),
+                max_delay: Duration::from_secs(15),
+                timeout: Duration::from_secs(DEFAULT_TERMINATION_WAIT_TIMEOUT_SECS),
+                jitter: 0.25,
+            },
+            None,
+            || async {
+                let response = self
+                    .client
+                    .describe_instances()
+                    .instance_ids(instance_id)
+                    .send()
+                    .await;
 
-        loop {
-            if start.elapsed().as_secs() > DEFAULT_TERMINATION_WAIT_TIMEOUT_SECS {
+                match response {
+                    Ok(resp) => {
+                        let state = resp
+                            .reservations()
+                            .first()
+                            .and_then(|r| r.instances().first())
+                            .and_then(|i| i.state())
+                            .and_then(|s| s.name());
+
+                        match state {
+                            Some(InstanceStateName::Terminated) => {
+                                debug!(instance_id = %instance_id, "Instance terminated");
+                                Ok(true)
+                            }
+                            None => Ok(true), // No state info = gone
+                            _ => Ok(false),   // Still shutting down or other state
+                        }
+                    }
+                    Err(e) => {
+                        let err = anyhow::Error::from(e);
+                        if classify_anyhow_error(&err).is_not_found() {
+                            Ok(true) // Already gone
+                        } else {
+                            warn!(instance_id = %instance_id, error = ?err, "Error checking instance state");
+                            Ok(false) // Transient error, retry
+                        }
+                    }
+                }
+            },
+            &format!("EC2 instance {} terminated", instance_id),
+        )
+        .await;
+
+        // Timeout on termination wait is not an error — best-effort
+        if let Err(e) = &result {
+            if e.to_string().contains("Timeout") {
                 warn!(instance_id = %instance_id, "Timeout waiting for instance to terminate");
                 return Ok(());
             }
-
-            let response = self
-                .client
-                .describe_instances()
-                .instance_ids(instance_id)
-                .send()
-                .await;
-
-            match response {
-                Ok(resp) => {
-                    let state = resp
-                        .reservations()
-                        .first()
-                        .and_then(|r| r.instances().first())
-                        .and_then(|i| i.state())
-                        .and_then(|s| s.name());
-
-                    match state {
-                        Some(InstanceStateName::Terminated) => {
-                            debug!(instance_id = %instance_id, "Instance terminated");
-                            return Ok(());
-                        }
-                        Some(InstanceStateName::ShuttingDown) => {
-                            debug!(instance_id = %instance_id, "Instance still shutting down");
-                        }
-                        Some(other) => {
-                            debug!(instance_id = %instance_id, state = ?other, "Unexpected state");
-                        }
-                        None => return Ok(()),
-                    }
-                }
-                Err(e) => {
-                    let err = anyhow::Error::from(e);
-                    if classify_anyhow_error(&err).is_not_found() {
-                        return Ok(());
-                    }
-                    warn!(instance_id = %instance_id, error = ?err, "Error checking instance state");
-                }
-            }
-
-            tokio::time::sleep(nix_bench_common::jittered_delay_25(delay)).await;
-            delay = (delay * 2).min(max_delay);
         }
+
+        result
     }
 
     /// Terminate multiple instances in a single API call

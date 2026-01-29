@@ -38,8 +38,6 @@ futures.workspace = true
 tui-logger.workspace = true
 throbber-widgets-tui.workspace = true
 tui-scrollview.workspace = true
-unicode-width.workspace = true
-unicode-truncate.workspace = true
 log.workspace = true
 
 # CLI

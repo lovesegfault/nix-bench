@@ -69,9 +69,6 @@ futures = "0.3"
 tui-logger = { version = "0.18", features = ["tracing-support"] }
 throbber-widgets-tui = "0.10"
 tui-scrollview = "0.6"
-unicode-width = "0.2"
-unicode-truncate = "2"
-
 # State management (coordinator-only)
 comfy-table = "7"
 

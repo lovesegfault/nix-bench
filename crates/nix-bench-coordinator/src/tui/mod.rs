@@ -15,23 +15,21 @@ pub use input::{KeyHandler, KeyResult};
 pub use log_capture::{LogCapture, LogCaptureLayer};
 
 /// Truncate a string to fit within a maximum display width, adding ellipsis if needed.
-/// This is unicode-safe and won't panic on multibyte characters.
 pub fn truncate_str(s: &str, max_width: usize) -> String {
-    use unicode_truncate::UnicodeTruncateStr;
-    use unicode_width::UnicodeWidthStr;
-
     if max_width == 0 {
         return String::new();
     }
-
-    // Use width() directly instead of unicode_truncate(usize::MAX) for efficiency
-    if s.width() <= max_width {
+    if s.len() <= max_width {
         return s.to_string();
     }
-
-    // Need to truncate: leave room for ellipsis
-    let (truncated, _) = s.unicode_truncate(max_width.saturating_sub(1));
-    format!("{}…", truncated)
+    // Truncate at a char boundary, leaving room for ellipsis
+    let end = s
+        .char_indices()
+        .take_while(|&(i, _)| i < max_width.saturating_sub(1))
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    format!("{}…", &s[..end])
 }
 
 /// Message sent to TUI to update state

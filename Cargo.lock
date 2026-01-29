@@ -2331,8 +2331,6 @@ dependencies = [
  "tracing-subscriber",
  "tui-logger",
  "tui-scrollview",
- "unicode-truncate",
- "unicode-width",
  "uuid",
 ]
 

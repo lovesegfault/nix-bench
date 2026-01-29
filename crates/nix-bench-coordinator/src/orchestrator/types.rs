@@ -3,8 +3,10 @@
 //! Contains `InstanceState` and `InstanceStatus` types used to track
 //! the state of benchmark instances during a run.
 
+use std::collections::HashMap;
+
 use crate::log_buffer::LogBuffer;
-use nix_bench_common::{Architecture, RunResult};
+use nix_bench_common::{Architecture, RunResult, StatusCode};
 
 /// Instance state during a benchmark run
 #[derive(Debug, Clone)]
@@ -68,6 +70,21 @@ impl InstanceState {
     }
 }
 
+/// Collect instance types paired with their public IPs.
+///
+/// Filters to only instances that have a public IP assigned.
+pub fn instances_with_ips(instances: &HashMap<String, InstanceState>) -> Vec<(String, String)> {
+    instances
+        .iter()
+        .filter_map(|(instance_type, state)| {
+            state
+                .public_ip
+                .as_ref()
+                .map(|ip| (instance_type.clone(), ip.clone()))
+        })
+        .collect()
+}
+
 /// Status of a benchmark instance
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display, strum::AsRefStr)]
 #[strum(serialize_all = "lowercase")]
@@ -87,4 +104,16 @@ pub enum InstanceStatus {
     Failed,
     /// Instance has been terminated
     Terminated,
+}
+
+impl InstanceStatus {
+    /// Map a gRPC `StatusCode` to an `InstanceStatus`.
+    pub fn from_status_code(code: StatusCode) -> Self {
+        match code {
+            StatusCode::Complete => Self::Complete,
+            StatusCode::Failed => Self::Failed,
+            StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => Self::Running,
+            StatusCode::Pending => Self::Pending,
+        }
+    }
 }

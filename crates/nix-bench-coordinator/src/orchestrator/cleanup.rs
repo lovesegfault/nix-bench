@@ -131,7 +131,7 @@ pub async fn cleanup_executor(
 
                 let reporter =
                     Reporter::channel(tx.clone(), tokio_util::sync::CancellationToken::new());
-                if let Err(e) = do_full_cleanup(FullCleanupConfig {
+                if let Err(e) = full_cleanup(FullCleanupConfig {
                     region: &cleanup_region,
                     keep,
                     bucket_name: &bucket_name,
@@ -155,22 +155,22 @@ pub async fn cleanup_executor(
     debug!("Cleanup executor channel closed");
 }
 
-/// Perform full cleanup of all resources for a run
-///
-/// Uses in-memory resource tracking (no database) to determine what to clean up.
 /// Parameters for a full cleanup operation.
-struct FullCleanupConfig<'a> {
-    region: &'a str,
-    keep: bool,
-    bucket_name: &'a str,
-    instances: &'a HashMap<String, InstanceState>,
-    security_group_id: Option<&'a str>,
-    iam_role_name: Option<&'a str>,
-    sg_rules: &'a [String],
-    reporter: &'a Reporter,
+pub struct FullCleanupConfig<'a> {
+    pub region: &'a str,
+    pub keep: bool,
+    pub bucket_name: &'a str,
+    pub instances: &'a HashMap<String, InstanceState>,
+    pub security_group_id: Option<&'a str>,
+    pub iam_role_name: Option<&'a str>,
+    pub sg_rules: &'a [String],
+    pub reporter: &'a Reporter,
 }
 
-async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
+/// Perform full cleanup of all resources for a run.
+///
+/// Uses in-memory resource tracking (no database) to determine what to clean up.
+pub async fn full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
     let FullCleanupConfig {
         region,
         keep,
@@ -285,31 +285,4 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Direct cleanup function for non-TUI mode.
-///
-/// Progress updates are logged via tracing instead of sent to a TUI channel.
-pub async fn cleanup_resources_no_tui(
-    config: &crate::config::RunConfig,
-    _run_id: &str,
-    bucket_name: &str,
-    instances: &HashMap<String, InstanceState>,
-    security_group_id: Option<&str>,
-    iam_role_name: Option<&str>,
-    sg_rules: &[String],
-) -> Result<()> {
-    let reporter = Reporter::Log;
-
-    do_full_cleanup(FullCleanupConfig {
-        region: &config.aws.region,
-        keep: config.flags.keep,
-        bucket_name,
-        instances,
-        security_group_id,
-        iam_role_name,
-        sg_rules,
-        reporter: &reporter,
-    })
-    .await
 }

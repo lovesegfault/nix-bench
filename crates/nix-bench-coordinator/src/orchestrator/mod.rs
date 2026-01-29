@@ -16,7 +16,7 @@ pub mod progress;
 pub mod types;
 
 // Re-export core types
-pub use cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
+pub use cleanup::{CleanupRequest, FullCleanupConfig, cleanup_executor, full_cleanup};
 pub use init::BenchmarkInitializer;
 pub use progress::{InstanceUpdate, Reporter};
 pub use types::{InstanceState, InstanceStatus};

@@ -70,18 +70,6 @@ pub struct InitContext {
 }
 
 impl InitContext {
-    pub fn instances_with_ips(&self) -> Vec<(String, String)> {
-        self.instances
-            .iter()
-            .filter_map(|(instance_type, state)| {
-                state
-                    .public_ip
-                    .as_ref()
-                    .map(|ip| (instance_type.clone(), ip.clone()))
-            })
-            .collect()
-    }
-
     pub fn has_instances(&self) -> bool {
         !self.instances.is_empty()
     }

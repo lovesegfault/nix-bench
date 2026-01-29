@@ -2,6 +2,7 @@
 
 use super::App;
 use crate::aws::{GrpcInstanceStatus, GrpcStatusPoller};
+use crate::orchestrator::types::instances_with_ips;
 use crate::orchestrator::{CleanupRequest, InstanceStatus};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -17,7 +18,6 @@ impl App {
         &mut self,
         status_map: &HashMap<String, GrpcInstanceStatus>,
     ) -> Vec<CleanupRequest> {
-        use nix_bench_common::StatusCode;
         let mut to_cleanup = Vec::new();
 
         for (instance_type, status) in status_map {
@@ -28,14 +28,7 @@ impl App {
                 // Skip status updates for terminated instances (terminal state)
                 if let Some(status_code) = status.status {
                     if state.status != InstanceStatus::Terminated {
-                        state.status = match status_code {
-                            StatusCode::Complete => InstanceStatus::Complete,
-                            StatusCode::Failed => InstanceStatus::Failed,
-                            StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
-                                InstanceStatus::Running
-                            }
-                            StatusCode::Pending => InstanceStatus::Pending,
-                        };
+                        state.status = InstanceStatus::from_status_code(status_code);
                     }
                 }
                 if let Some(progress) = status.run_progress {
@@ -75,20 +68,6 @@ impl App {
         to_cleanup
     }
 
-    /// Get instances that have public IPs (for gRPC polling)
-    pub(super) fn get_instances_with_ips(&self) -> Vec<(String, String)> {
-        self.instances
-            .data
-            .iter()
-            .filter_map(|(instance_type, state)| {
-                state
-                    .public_ip
-                    .as_ref()
-                    .map(|ip| (instance_type.clone(), ip.clone()))
-            })
-            .collect()
-    }
-
     /// Spawn background gRPC status polling
     ///
     /// This spawns the polling as a background task and sends results via channel,
@@ -97,7 +76,7 @@ impl App {
         &self,
         tx: tokio::sync::mpsc::Sender<HashMap<String, GrpcInstanceStatus>>,
     ) {
-        let instances_with_ips = self.get_instances_with_ips();
+        let instances_with_ips = instances_with_ips(&self.instances.data);
         if instances_with_ips.is_empty() {
             return;
         }

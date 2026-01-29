@@ -13,19 +13,19 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::GRPC_PORT;
-use super::cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
+use super::cleanup::{CleanupRequest, FullCleanupConfig, cleanup_executor, full_cleanup};
 use super::init::BenchmarkInitializer;
 use super::monitoring::poll_bootstrap_status;
 use super::progress::Reporter;
 use super::results::{print_results_summary, write_results};
-use super::types::{InstanceState, InstanceStatus};
+use super::types::{InstanceState, InstanceStatus, instances_with_ips};
 use super::user_data::detect_bootstrap_failure;
 use crate::aws::{
     GrpcStatusPoller, LogStreamingOptions, send_ack_complete, start_log_streaming_unified,
 };
 use crate::config::RunConfig;
 use crate::tui::{self, InitPhase, LogCapture, TuiMessage};
-use nix_bench_common::{RunId, StatusCode, TlsConfig};
+use nix_bench_common::{RunId, TlsConfig};
 
 // ─── Shared Infrastructure ──────────────────────────────────────────────────
 
@@ -118,30 +118,6 @@ impl<'a> BenchmarkInitializer<'a> {
     }
 }
 
-/// Poll gRPC status for all instances with public IPs.
-async fn poll_grpc_status(
-    instances: &HashMap<String, InstanceState>,
-    tls_config: &TlsConfig,
-) -> HashMap<String, crate::aws::GrpcInstanceStatus> {
-    let poll_ips: Vec<(String, String)> = instances
-        .iter()
-        .filter_map(|(instance_type, state)| {
-            state
-                .public_ip
-                .as_ref()
-                .map(|ip| (instance_type.clone(), ip.clone()))
-        })
-        .collect();
-
-    if poll_ips.is_empty() {
-        return HashMap::new();
-    }
-
-    GrpcStatusPoller::new(&poll_ips, GRPC_PORT, tls_config.clone())
-        .poll_status()
-        .await
-}
-
 /// Result from a single status poll cycle.
 struct PollResult {
     all_complete: bool,
@@ -173,14 +149,7 @@ async fn apply_status_updates(
             let was_failed = state.status == InstanceStatus::Failed;
 
             if let Some(status_code) = grpc_status.status {
-                state.status = match status_code {
-                    StatusCode::Complete => InstanceStatus::Complete,
-                    StatusCode::Failed => InstanceStatus::Failed,
-                    StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
-                        InstanceStatus::Running
-                    }
-                    StatusCode::Pending => InstanceStatus::Pending,
-                };
+                state.status = InstanceStatus::from_status_code(status_code);
             }
             if let Some(progress) = grpc_status.run_progress {
                 state.run_progress = progress;
@@ -432,9 +401,8 @@ pub async fn run_init_task(params: InitTaskConfig) -> Result<InitResult> {
 
     let ctx = runner.initialize(&reporter).await?;
 
-    // Extract IP pairs before moving fields out of ctx
-    let instances_with_ips = ctx.instances_with_ips();
     let instances = ctx.instances;
+    let init_ips = instances_with_ips(&instances);
     let coordinator_tls_config = ctx.coordinator_tls_config;
 
     // Send TLS config to TUI for status polling
@@ -451,11 +419,7 @@ pub async fn run_init_task(params: InitTaskConfig) -> Result<InitResult> {
     let tls_for_cleanup = Some(coordinator_tls_config.clone());
 
     // Start gRPC log streaming via shared runner
-    runner.start_streaming(
-        &instances_with_ips,
-        coordinator_tls_config,
-        Some(tx.clone()),
-    );
+    runner.start_streaming(&init_ips, coordinator_tls_config, Some(tx.clone()));
 
     // Start bootstrap failure monitoring via shared runner
     runner.start_bootstrap_monitoring(&instances, tx.clone(), cancel_for_monitoring);
@@ -499,9 +463,6 @@ pub async fn run_benchmarks_no_tui(
 
     let ctx = runner.initialize(&reporter).await?;
 
-    // Extract IP pairs before moving fields out of ctx
-    let instances_with_ips = ctx.instances_with_ips();
-
     // Extract what we need from the context
     let mut instances = ctx.instances;
     let coordinator_tls_config = ctx.coordinator_tls_config;
@@ -509,8 +470,9 @@ pub async fn run_benchmarks_no_tui(
     let security_group_id = ctx.security_group_id;
     let iam_role_name = ctx.iam_role_name;
     let sg_rules = ctx.sg_rules;
-    let has_streaming = !instances_with_ips.is_empty();
-    runner.start_streaming(&instances_with_ips, coordinator_tls_config.clone(), None);
+    let init_ips = instances_with_ips(&instances);
+    let has_streaming = !init_ips.is_empty();
+    runner.start_streaming(&init_ips, coordinator_tls_config.clone(), None);
 
     // Track start time for reporting and timeout
     let start_time = chrono::Utc::now();
@@ -541,7 +503,14 @@ pub async fn run_benchmarks_no_tui(
             break;
         }
 
-        let status_map = poll_grpc_status(&instances, &coordinator_tls_config).await;
+        let poll_ips = instances_with_ips(&instances);
+        let status_map = if poll_ips.is_empty() {
+            HashMap::new()
+        } else {
+            GrpcStatusPoller::new(&poll_ips, GRPC_PORT, coordinator_tls_config.clone())
+                .poll_status()
+                .await
+        };
         let result = apply_status_updates(
             &mut instances,
             &status_map,
@@ -562,15 +531,16 @@ pub async fn run_benchmarks_no_tui(
     }
 
     // Cleanup
-    cleanup_resources_no_tui(
-        &config,
-        run_id.as_str(),
-        &bucket_name,
-        &instances,
-        security_group_id.as_deref(),
-        iam_role_name.as_deref(),
-        &sg_rules,
-    )
+    full_cleanup(FullCleanupConfig {
+        region: &config.aws.region,
+        keep: config.flags.keep,
+        bucket_name: &bucket_name,
+        instances: &instances,
+        security_group_id: security_group_id.as_deref(),
+        iam_role_name: iam_role_name.as_deref(),
+        sg_rules: &sg_rules,
+        reporter: &reporter,
+    })
     .await?;
 
     // Print results and write output

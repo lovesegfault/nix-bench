@@ -13,6 +13,7 @@ use tracing::{error, warn};
 use super::types::{InstanceState, InstanceStatus};
 use super::user_data::detect_bootstrap_failure;
 use crate::aws::Ec2Client;
+use crate::aws::context::AwsContext;
 use crate::tui::TuiMessage;
 
 /// Poll EC2 console output for bootstrap failure detection
@@ -27,10 +28,8 @@ pub async fn poll_bootstrap_status(
     start_time: Instant,
     cancel: CancellationToken,
 ) {
-    let ec2 = match Ec2Client::new(&region).await {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+    let ctx = AwsContext::new(&region).await;
+    let ec2 = Ec2Client::from_context(&ctx);
 
     // Track which instances have already been marked as failed
     let mut failed_instances: HashSet<String> = HashSet::new();

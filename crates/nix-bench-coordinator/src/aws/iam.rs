@@ -82,11 +82,6 @@ impl IamClient {
         }
     }
 
-    pub async fn new(region: &str) -> Result<Self> {
-        let ctx = AwsContext::new(region).await;
-        Ok(Self::from_context(&ctx))
-    }
-
     /// Create a role and instance profile for a benchmark run
     ///
     /// Returns (role_name, instance_profile_name)

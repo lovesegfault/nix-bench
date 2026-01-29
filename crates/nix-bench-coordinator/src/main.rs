@@ -350,7 +350,8 @@ async fn handle_scan(
 ) -> Result<()> {
     info!(region = %region, min_age_hours, run_id = ?run_id, "Scanning for nix-bench resources");
 
-    let scanner = ResourceScanner::new(&region).await?;
+    let ctx = nix_bench_coordinator::aws::context::AwsContext::new(&region).await;
+    let scanner = ResourceScanner::from_context(&ctx);
     let config = ScanConfig {
         min_age: Duration::hours(min_age_hours as i64),
         run_id,

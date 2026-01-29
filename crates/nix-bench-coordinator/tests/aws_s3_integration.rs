@@ -9,6 +9,7 @@ mod aws_test_helpers;
 
 use aws_test_helpers::*;
 use nix_bench_coordinator::aws::S3Client;
+use nix_bench_coordinator::aws::context::AwsContext;
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -17,9 +18,8 @@ use tempfile::NamedTempFile;
 #[ignore]
 async fn test_bucket_lifecycle() {
     let region = get_test_region();
-    let client = S3Client::new(&region)
-        .await
-        .expect("AWS credentials required - set AWS_PROFILE or AWS_ACCESS_KEY_ID");
+    let ctx = AwsContext::new(&region).await;
+    let client = S3Client::from_context(&ctx);
 
     let run_id = test_run_id();
     let bucket_name = format!("nix-bench-{}", run_id);
@@ -53,9 +53,8 @@ async fn test_bucket_lifecycle() {
 #[ignore]
 async fn test_upload_bytes() {
     let region = get_test_region();
-    let client = S3Client::new(&region)
-        .await
-        .expect("AWS credentials required");
+    let ctx = AwsContext::new(&region).await;
+    let client = S3Client::from_context(&ctx);
 
     let run_id = test_run_id();
     let bucket_name = format!("nix-bench-{}", run_id);

@@ -26,11 +26,6 @@ impl S3Client {
         }
     }
 
-    pub async fn new(region: &str) -> Result<Self> {
-        let ctx = AwsContext::new(region).await;
-        Ok(Self::from_context(&ctx))
-    }
-
     /// Create a bucket for this run
     ///
     /// This is idempotent - if the bucket already exists and is owned by you,

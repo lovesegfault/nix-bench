@@ -5,9 +5,9 @@
 pub use nix_bench_test_utils::aws::{get_test_region, test_run_id};
 
 use nix_bench_coordinator::aws::cleanup::{CleanupConfig, TagBasedCleanup};
+use nix_bench_coordinator::aws::context::AwsContext;
 use nix_bench_coordinator::aws::{Ec2Client, IamClient, S3Client};
 use std::time::Duration;
-use tracing::warn;
 
 /// Clean up stale nix-bench resources from previous failed test runs.
 ///
@@ -84,27 +84,10 @@ impl TestResourceTracker {
 
     /// Run async cleanup. Called from Drop via tokio runtime.
     async fn cleanup_async(&self) {
-        let ec2 = match Ec2Client::new(&self.region).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("TestResourceTracker: failed to create EC2 client: {}", e);
-                return;
-            }
-        };
-        let s3 = match S3Client::new(&self.region).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("TestResourceTracker: failed to create S3 client: {}", e);
-                return;
-            }
-        };
-        let iam = match IamClient::new(&self.region).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("TestResourceTracker: failed to create IAM client: {}", e);
-                return;
-            }
-        };
+        let ctx = AwsContext::new(&self.region).await;
+        let ec2 = Ec2Client::from_context(&ctx);
+        let s3 = S3Client::from_context(&ctx);
+        let iam = IamClient::from_context(&ctx);
 
         // 1. Terminate instances first
         for instance_id in &self.instance_ids {

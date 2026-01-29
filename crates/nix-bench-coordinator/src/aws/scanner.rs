@@ -85,11 +85,6 @@ impl ResourceScanner {
         }
     }
 
-    pub async fn new(region: &str) -> Result<Self> {
-        let ctx = AwsContext::new(region).await;
-        Ok(Self::from_context(&ctx))
-    }
-
     /// Scan all resource types and return discovered nix-bench resources
     pub async fn scan_all(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
         let mut resources = Vec::new();

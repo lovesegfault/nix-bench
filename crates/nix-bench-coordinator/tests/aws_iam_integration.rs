@@ -9,6 +9,7 @@ mod aws_test_helpers;
 
 use aws_test_helpers::*;
 use nix_bench_coordinator::aws::IamClient;
+use nix_bench_coordinator::aws::context::AwsContext;
 
 /// Test IAM role and instance profile create/delete lifecycle
 ///
@@ -23,9 +24,8 @@ use nix_bench_coordinator::aws::IamClient;
 #[ignore]
 async fn test_create_and_delete_role() {
     let region = get_test_region();
-    let client = IamClient::new(&region)
-        .await
-        .expect("AWS credentials required - set AWS_PROFILE or AWS_ACCESS_KEY_ID");
+    let ctx = AwsContext::new(&region).await;
+    let client = IamClient::from_context(&ctx);
 
     let run_id = test_run_id();
     let bucket_name = format!("nix-bench-{}", run_id);

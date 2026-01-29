@@ -28,11 +28,6 @@ impl Ec2Client {
             ami_cache: Mutex::new(HashMap::new()),
         }
     }
-
-    pub async fn new(region: &str) -> Result<Self> {
-        let ctx = AwsContext::new(region).await;
-        Ok(Self::from_context(&ctx))
-    }
 }
 
 impl Ec2Client {

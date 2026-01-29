@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 
 use super::progress::Reporter;
 use super::types::{InstanceState, InstanceStatus};
+use crate::aws::context::AwsContext;
 use crate::aws::{Ec2Client, IamClient, S3Client, classify_anyhow_error, send_ack_complete};
 use crate::tui::{CleanupProgress, TuiMessage};
 use nix_bench_common::RunId;
@@ -61,13 +62,8 @@ pub async fn cleanup_executor(
     run_id: RunId,
     tls_config: Option<nix_bench_common::TlsConfig>,
 ) {
-    let ec2 = match Ec2Client::new(&region).await {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(error = ?e, "Failed to create EC2 client for cleanup executor");
-            return;
-        }
-    };
+    let ctx = AwsContext::new(&region).await;
+    let ec2 = Ec2Client::from_context(&ctx);
 
     while let Some(request) = rx.recv().await {
         match request {
@@ -186,8 +182,9 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
         reporter,
     } = params;
 
-    let ec2 = Ec2Client::new(region).await?;
-    let s3 = S3Client::new(region).await?;
+    let ctx = AwsContext::new(region).await;
+    let ec2 = Ec2Client::from_context(&ctx);
+    let s3 = S3Client::from_context(&ctx);
 
     if !keep {
         // Collect instance IDs to terminate
@@ -235,7 +232,7 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
             progress.current_step = "Deleting IAM role...".to_string();
             reporter.report_cleanup(&progress);
 
-            let iam = IamClient::new(region).await?;
+            let iam = IamClient::from_context(&ctx);
             if let Err(e) = iam.delete_benchmark_role(role_name).await {
                 warn!(role = %role_name, error = ?e, "Failed to delete IAM role");
             }

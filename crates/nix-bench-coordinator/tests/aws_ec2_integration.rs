@@ -14,6 +14,7 @@ mod aws_test_helpers;
 
 use aws_test_helpers::*;
 use nix_bench_coordinator::aws::Ec2Client;
+use nix_bench_coordinator::aws::context::AwsContext;
 use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
 
 /// Instance type to use for integration tests
@@ -27,9 +28,8 @@ const INSTANCE_TIMEOUT_SECS: u64 = 300;
 #[ignore]
 async fn test_get_al2023_ami() {
     let region = get_test_region();
-    let client = Ec2Client::new(&region)
-        .await
-        .expect("AWS credentials required - set AWS_PROFILE or AWS_ACCESS_KEY_ID");
+    let ctx = AwsContext::new(&region).await;
+    let client = Ec2Client::from_context(&ctx);
 
     // Test x86_64
     let ami_x86 = client
@@ -64,9 +64,8 @@ async fn test_security_group_lifecycle() {
     let region = get_test_region();
     cleanup_stale_test_resources(&region).await;
 
-    let client = Ec2Client::new(&region)
-        .await
-        .expect("AWS credentials required");
+    let ctx = AwsContext::new(&region).await;
+    let client = Ec2Client::from_context(&ctx);
 
     let run_id = test_run_id();
     let mut tracker = TestResourceTracker::new(&region);
@@ -112,9 +111,8 @@ async fn test_launch_and_terminate_instance() {
     let region = get_test_region();
     cleanup_stale_test_resources(&region).await;
 
-    let client = Ec2Client::new(&region)
-        .await
-        .expect("AWS credentials required");
+    let ctx = AwsContext::new(&region).await;
+    let client = Ec2Client::from_context(&ctx);
 
     let run_id = test_run_id();
     let mut tracker = TestResourceTracker::new(&region);

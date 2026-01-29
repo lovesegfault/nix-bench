@@ -17,6 +17,7 @@
 mod aws_test_helpers;
 
 use aws_test_helpers::*;
+use nix_bench_coordinator::aws::context::AwsContext;
 use nix_bench_coordinator::aws::ec2::LaunchInstanceConfig;
 use nix_bench_coordinator::aws::{Ec2Client, IamClient, S3Client, get_coordinator_public_ip};
 use std::time::Duration;
@@ -41,15 +42,10 @@ async fn test_minimal_benchmark_run() {
     let bucket_name = format!("nix-bench-{}", run_id);
 
     // Create clients
-    let ec2 = Ec2Client::new(&region)
-        .await
-        .expect("AWS credentials required - set AWS_PROFILE or AWS_ACCESS_KEY_ID");
-    let s3 = S3Client::new(&region)
-        .await
-        .expect("AWS credentials required");
-    let iam = IamClient::new(&region)
-        .await
-        .expect("AWS credentials required");
+    let ctx = AwsContext::new(&region).await;
+    let ec2 = Ec2Client::from_context(&ctx);
+    let s3 = S3Client::from_context(&ctx);
+    let iam = IamClient::from_context(&ctx);
 
     // Set up resource tracker for cleanup-on-failure
     let mut tracker = TestResourceTracker::new(&region);

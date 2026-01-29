@@ -9,7 +9,7 @@ use aws_sdk_iam::error::ProvideErrorMetadata;
 use chrono::Utc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// IAM client for managing roles and instance profiles
 pub struct IamClient {
@@ -221,67 +221,63 @@ impl IamClient {
     /// Delete a role and its instance profile
     pub async fn delete_benchmark_role(&self, role_name: &str) -> Result<()> {
         let profile_name = role_name; // They have the same name
-        let policy_name = "nix-bench-agent-policy";
 
         info!(role_name = %role_name, "Deleting IAM role and instance profile");
 
-        // Remove role from instance profile (ignore errors - might already be removed)
-        if let Err(e) = self
-            .client
-            .remove_role_from_instance_profile()
-            .instance_profile_name(profile_name)
-            .role_name(role_name)
-            .send()
-            .await
-        {
-            debug!(error = ?e, "Failed to remove role from instance profile (may already be removed)");
-        }
+        self.try_iam(
+            "remove role from instance profile",
+            self.client
+                .remove_role_from_instance_profile()
+                .instance_profile_name(profile_name)
+                .role_name(role_name)
+                .send(),
+        )
+        .await;
+        self.try_iam(
+            "delete instance profile",
+            self.client
+                .delete_instance_profile()
+                .instance_profile_name(profile_name)
+                .send(),
+        )
+        .await;
+        self.try_iam(
+            "delete role policy",
+            self.client
+                .delete_role_policy()
+                .role_name(role_name)
+                .policy_name("nix-bench-agent-policy")
+                .send(),
+        )
+        .await;
+        self.try_iam(
+            "detach SSM managed policy",
+            self.client
+                .detach_role_policy()
+                .role_name(role_name)
+                .policy_arn("arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
+                .send(),
+        )
+        .await;
+        self.try_iam(
+            "delete role",
+            self.client.delete_role().role_name(role_name).send(),
+        )
+        .await;
 
-        // Delete instance profile
-        if let Err(e) = self
-            .client
-            .delete_instance_profile()
-            .instance_profile_name(profile_name)
-            .send()
-            .await
-        {
-            warn!(error = ?e, profile_name = %profile_name, "Failed to delete instance profile");
-        } else {
-            debug!(profile_name = %profile_name, "Instance profile deleted");
-        }
-
-        // Delete inline policy from role
-        if let Err(e) = self
-            .client
-            .delete_role_policy()
-            .role_name(role_name)
-            .policy_name(policy_name)
-            .send()
-            .await
-        {
-            debug!(error = ?e, "Failed to delete role policy (may already be deleted)");
-        }
-
-        // Detach SSM managed policy
-        if let Err(e) = self
-            .client
-            .detach_role_policy()
-            .role_name(role_name)
-            .policy_arn("arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
-            .send()
-            .await
-        {
-            debug!(error = ?e, "Failed to detach SSM managed policy (may already be detached)");
-        }
-
-        // Delete role
-        if let Err(e) = self.client.delete_role().role_name(role_name).send().await {
-            warn!(error = ?e, role_name = %role_name, "Failed to delete IAM role");
-        } else {
-            info!(role_name = %role_name, "IAM role deleted");
-        }
-
+        info!(role_name = %role_name, "IAM role cleanup complete");
         Ok(())
+    }
+
+    /// Execute an IAM operation, logging warnings on failure.
+    async fn try_iam<T, E: std::fmt::Debug>(
+        &self,
+        label: &str,
+        fut: impl std::future::Future<Output = Result<T, E>>,
+    ) {
+        if let Err(e) = fut.await {
+            debug!(error = ?e, "Failed to {label} (may already be done)");
+        }
     }
 
     /// Check if an instance profile exists

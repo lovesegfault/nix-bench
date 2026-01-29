@@ -132,7 +132,7 @@ impl ResourceScanner {
             .reservations()
             .iter()
             .flat_map(|r| r.instances())
-            .filter_map(|i| Some((extract_ec2_tags(i.tags()), i.instance_id()?.to_string())))
+            .filter_map(|i| Some((extract_tags(i.tags()), i.instance_id()?.to_string())))
             .collect();
 
         let resources = self.collect_tagged_resources(&items, ResourceId::Ec2Instance, config);
@@ -156,7 +156,7 @@ impl ResourceScanner {
         let items: Vec<_> = response
             .security_groups()
             .iter()
-            .filter_map(|sg| Some((extract_ec2_tags(sg.tags()), sg.group_id()?.to_string())))
+            .filter_map(|sg| Some((extract_tags(sg.tags()), sg.group_id()?.to_string())))
             .collect();
 
         let resources = self.collect_tagged_resources(&items, ResourceId::SecurityGroup, config);
@@ -219,7 +219,7 @@ impl ResourceScanner {
             let tags_result = client.get_bucket_tagging().bucket(bucket_name).send().await;
 
             let (tags, is_untagged_orphan) = match tags_result {
-                Ok(resp) => (extract_s3_tags(resp.tag_set()), false),
+                Ok(resp) => (extract_tags(resp.tag_set()), false),
                 Err(_) => {
                     debug!(bucket = %bucket_name, "Found untagged bucket with nix-bench- prefix");
                     (HashMap::new(), true)
@@ -271,7 +271,7 @@ impl ResourceScanner {
                     );
                     let tags_result = c.list_role_tags().role_name(&name).send().await;
                     let (tags, is_untagged) = match tags_result {
-                        Ok(t) => (extract_iam_tags(t.tags()), false),
+                        Ok(t) => (extract_tags(t.tags()), false),
                         Err(_) => {
                             debug!(name = %name, "Couldn't get tags");
                             (HashMap::new(), true)
@@ -330,7 +330,7 @@ impl ResourceScanner {
                             .send()
                             .await;
                         let (tags, is_untagged) = match tags_result {
-                            Ok(t) => (extract_iam_tags(t.tags()), false),
+                            Ok(t) => (extract_tags(t.tags()), false),
                             Err(_) => {
                                 debug!(name = %name, "Couldn't get tags");
                                 (HashMap::new(), true)
@@ -503,34 +503,46 @@ fn build_tag_filters(config: &ScanConfig, extra: Vec<Filter>) -> Vec<Filter> {
     filters
 }
 
-/// Extract tags from any AWS tag type into a HashMap.
+/// Trait for extracting key/value pairs from AWS tag types.
 ///
 /// Different AWS SDKs use different tag types (ec2::Tag, s3::Tag, iam::Tag)
-/// but they all have key/value string fields. This generic function handles
-/// them all via closures.
-fn extract_tags<T>(
-    tags: &[T],
-    key: impl Fn(&T) -> Option<&str>,
-    value: impl Fn(&T) -> Option<&str>,
-) -> HashMap<String, String> {
+/// but they all have key/value string fields.
+trait TagLike {
+    fn tag_key(&self) -> Option<&str>;
+    fn tag_value(&self) -> Option<&str>;
+}
+
+impl TagLike for aws_sdk_ec2::types::Tag {
+    fn tag_key(&self) -> Option<&str> {
+        self.key()
+    }
+    fn tag_value(&self) -> Option<&str> {
+        self.value()
+    }
+}
+
+impl TagLike for aws_sdk_s3::types::Tag {
+    fn tag_key(&self) -> Option<&str> {
+        Some(self.key())
+    }
+    fn tag_value(&self) -> Option<&str> {
+        Some(self.value())
+    }
+}
+
+impl TagLike for aws_sdk_iam::types::Tag {
+    fn tag_key(&self) -> Option<&str> {
+        Some(self.key())
+    }
+    fn tag_value(&self) -> Option<&str> {
+        Some(self.value())
+    }
+}
+
+fn extract_tags<T: TagLike>(tags: &[T]) -> HashMap<String, String> {
     tags.iter()
-        .filter_map(|t| match (key(t), value(t)) {
-            (Some(k), Some(v)) => Some((k.to_string(), v.to_string())),
-            _ => None,
-        })
+        .filter_map(|t| Some((t.tag_key()?.to_string(), t.tag_value()?.to_string())))
         .collect()
-}
-
-fn extract_ec2_tags(tags: &[aws_sdk_ec2::types::Tag]) -> HashMap<String, String> {
-    extract_tags(tags, |t| t.key(), |t| t.value())
-}
-
-fn extract_s3_tags(tags: &[aws_sdk_s3::types::Tag]) -> HashMap<String, String> {
-    extract_tags(tags, |t| Some(t.key()), |t| Some(t.value()))
-}
-
-fn extract_iam_tags(tags: &[aws_sdk_iam::types::Tag]) -> HashMap<String, String> {
-    extract_tags(tags, |t| Some(t.key()), |t| Some(t.value()))
 }
 
 fn parse_created_at(tags: &HashMap<String, String>) -> DateTime<Utc> {

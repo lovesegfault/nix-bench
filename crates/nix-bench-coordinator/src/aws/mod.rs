@@ -23,6 +23,7 @@ pub mod tags;
 
 // Core clients
 pub use account::{AccountId, get_current_account_id};
+pub use context::FromAwsContext;
 pub use ec2::{
     Ec2Client, Ec2Operations, LaunchInstanceConfig, LaunchedInstance, get_coordinator_public_ip,
 };

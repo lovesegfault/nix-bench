@@ -8,7 +8,7 @@ mod types;
 pub use operations::Ec2Operations;
 pub use types::{LaunchInstanceConfig, LaunchedInstance};
 
-use crate::aws::context::AwsContext;
+use crate::aws::context::{AwsContext, FromAwsContext};
 use anyhow::{Context, Result};
 use aws_sdk_ec2::{Client, types::Filter};
 use std::collections::HashMap;
@@ -23,21 +23,16 @@ pub struct Ec2Client {
     ami_cache: Mutex<HashMap<String, String>>,
 }
 
-impl Ec2Client {
-    /// Create a new EC2 client (loads AWS config from environment)
-    pub async fn new(region: &str) -> Result<Self> {
-        let ctx = AwsContext::new(region).await;
-        Ok(Self::from_context(&ctx))
-    }
-
-    /// Create an EC2 client from a pre-loaded AWS context
-    pub fn from_context(ctx: &AwsContext) -> Self {
+impl FromAwsContext for Ec2Client {
+    fn from_context(ctx: &AwsContext) -> Self {
         Self {
             client: ctx.ec2_client(),
             ami_cache: Mutex::new(HashMap::new()),
         }
     }
+}
 
+impl Ec2Client {
     /// Get the latest AL2023 AMI for the given architecture (cached)
     pub async fn get_al2023_ami(&self, arch: &str) -> Result<String> {
         let arch_filter = if arch == "aarch64-linux" {

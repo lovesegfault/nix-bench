@@ -1,7 +1,7 @@
 //! IAM role and instance profile management for nix-bench agents
 
 use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
-use crate::aws::context::AwsContext;
+use crate::aws::context::{AwsContext, FromAwsContext};
 use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
 use aws_sdk_iam::Client;
@@ -57,20 +57,15 @@ fn generate_agent_policy(bucket_name: &str) -> String {
     .to_string()
 }
 
-impl IamClient {
-    /// Create a new IAM client
-    pub async fn new(region: &str) -> Result<Self> {
-        let ctx = AwsContext::new(region).await;
-        Ok(Self::from_context(&ctx))
-    }
-
-    /// Create an IAM client from a pre-loaded AWS context
-    pub fn from_context(ctx: &AwsContext) -> Self {
+impl FromAwsContext for IamClient {
+    fn from_context(ctx: &AwsContext) -> Self {
         Self {
             client: ctx.iam_client(),
         }
     }
+}
 
+impl IamClient {
     /// Create a role and instance profile for a benchmark run
     ///
     /// Returns (role_name, instance_profile_name)

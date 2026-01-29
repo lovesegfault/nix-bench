@@ -7,6 +7,7 @@ use anyhow::Result;
 use chrono::Duration;
 use clap::{Parser, Subcommand};
 use nix_bench_common::defaults::{DEFAULT_BUILD_TIMEOUT, DEFAULT_FLAKE_REF, DEFAULT_MAX_FAILURES};
+use nix_bench_coordinator::aws::FromAwsContext;
 use nix_bench_coordinator::aws::cleanup::{CleanupConfig, TagBasedCleanup};
 use nix_bench_coordinator::aws::scanner::{ResourceScanner, ScanConfig};
 use nix_bench_coordinator::tui::{LogCapture, LogCaptureLayer};
@@ -295,7 +296,7 @@ async fn run() -> Result<()> {
             // Validate instance types before launching TUI
             let instance_types = run_args.parse_instance_types();
             {
-                use nix_bench_coordinator::aws::{Ec2Client, context::AwsContext};
+                use nix_bench_coordinator::aws::{Ec2Client, FromAwsContext, context::AwsContext};
                 let aws =
                     AwsContext::with_profile(&run_args.region, run_args.aws_profile.as_deref())
                         .await;

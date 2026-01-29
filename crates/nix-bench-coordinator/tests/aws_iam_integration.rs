@@ -8,7 +8,7 @@
 mod aws_test_helpers;
 
 use aws_test_helpers::*;
-use nix_bench_coordinator::aws::IamClient;
+use nix_bench_coordinator::aws::{FromAwsContext, IamClient};
 
 /// Test IAM role and instance profile create/delete lifecycle
 ///

@@ -1,12 +1,12 @@
 //! Benchmark initialization logic
 //!
 //! Provides `BenchmarkInitializer` for setting up AWS resources needed for
-//! benchmark runs, with progress reporting through the `InitProgressReporter` trait.
+//! benchmark runs, with progress reporting through the `Reporter` trait.
 //!
 //! Resources are recorded to the database immediately after creation to minimize
 //! the window where orphaned resources could exist.
 
-use super::progress::{InitProgressReporter, InstanceUpdate};
+use super::progress::{InstanceUpdate, Reporter};
 use super::types::{InstanceState, InstanceStatus};
 use crate::aws::context::AwsContext;
 use crate::aws::ec2::LaunchInstanceConfig;
@@ -114,7 +114,7 @@ impl<'a> BenchmarkInitializer<'a> {
     }
 
     #[instrument(skip_all, fields(run_id = %self.run_id, bucket = %self.bucket_name))]
-    pub async fn initialize<R: InitProgressReporter>(&self, reporter: &R) -> Result<InitContext> {
+    pub async fn initialize(&self, reporter: &Reporter) -> Result<InitContext> {
         reporter.report_phase(InitPhase::Starting);
         reporter.report_run_info(self.run_id.as_str(), &self.bucket_name);
         info!(run_id = %self.run_id, bucket = %self.bucket_name, "Starting benchmark run");
@@ -287,12 +287,12 @@ impl<'a> BenchmarkInitializer<'a> {
     }
 
     /// Launch instances
-    async fn launch_instances<R: InitProgressReporter>(
+    async fn launch_instances(
         &self,
         svc: &mut InitServices<'_>,
         security_group_id: Option<&str>,
         instance_profile_name: Option<&str>,
-        reporter: &R,
+        reporter: &Reporter,
     ) -> Result<HashMap<String, InstanceState>> {
         let mut instances = HashMap::new();
         for (i, instance_type) in self.config.instances.instance_types.iter().enumerate() {
@@ -464,11 +464,11 @@ impl<'a> BenchmarkInitializer<'a> {
     ///
     /// Instances are waited on concurrently and TUI updates happen as each
     /// instance becomes ready, rather than waiting for all to complete.
-    async fn wait_for_instances<R: InitProgressReporter>(
+    async fn wait_for_instances(
         &self,
         mut instances: HashMap<String, InstanceState>,
         ec2: &Ec2Client,
-        reporter: &R,
+        reporter: &Reporter,
     ) -> Result<HashMap<String, InstanceState>> {
         // Create futures for all instances to wait in parallel
         let mut futures: FuturesUnordered<_> = instances

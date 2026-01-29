@@ -16,7 +16,7 @@ use super::GRPC_PORT;
 use super::cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
 use super::init::{BenchmarkInitializer, InitContext};
 use super::monitoring::poll_bootstrap_status;
-use super::progress::{ChannelReporter, InitProgressReporter, LogReporter};
+use super::progress::Reporter;
 use super::results::{print_results_summary, write_results};
 use super::types::{InstanceState, InstanceStatus};
 use super::user_data::detect_bootstrap_failure;
@@ -59,7 +59,7 @@ impl<'a> BenchmarkRunner<'a> {
     }
 
     /// Run initialization using the given progress reporter.
-    pub async fn initialize<R: InitProgressReporter>(&self, reporter: &R) -> Result<InitContext> {
+    pub async fn initialize(&self, reporter: &Reporter) -> Result<InitContext> {
         let initializer = BenchmarkInitializer::new(
             self.config,
             self.run_id.clone(),
@@ -348,7 +348,7 @@ pub async fn run_init_task(params: InitTaskConfig) -> Result<InitResult> {
     } = params;
 
     let cancel_for_monitoring = cancel.clone();
-    let reporter = ChannelReporter::new(tx.clone(), cancel);
+    let reporter = Reporter::channel(tx.clone(), cancel);
     let runner = BenchmarkRunner::new(
         &config,
         run_id.clone(),
@@ -415,7 +415,7 @@ pub async fn run_benchmarks_no_tui(
     agent_x86_64: Option<String>,
     agent_aarch64: Option<String>,
 ) -> Result<()> {
-    let reporter = LogReporter::new();
+    let reporter = Reporter::Log;
     let runner = BenchmarkRunner::new(
         &config,
         run_id.clone(),

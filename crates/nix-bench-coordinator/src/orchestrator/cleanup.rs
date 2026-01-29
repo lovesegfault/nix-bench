@@ -13,7 +13,7 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use super::progress::{ChannelReporter, LogReporter, ProgressReporter};
+use super::progress::Reporter;
 use super::types::{InstanceState, InstanceStatus};
 use crate::aws::{Ec2Client, IamClient, S3Client, classify_anyhow_error, send_ack_complete};
 use crate::tui::{CleanupProgress, TuiMessage};
@@ -134,7 +134,7 @@ pub async fn cleanup_executor(
                 info!("Starting full cleanup");
 
                 let reporter =
-                    ChannelReporter::new(tx.clone(), tokio_util::sync::CancellationToken::new());
+                    Reporter::channel(tx.clone(), tokio_util::sync::CancellationToken::new());
                 if let Err(e) = do_full_cleanup(FullCleanupConfig {
                     region: &cleanup_region,
                     keep,
@@ -171,7 +171,7 @@ struct FullCleanupConfig<'a> {
     security_group_id: Option<&'a str>,
     iam_role_name: Option<&'a str>,
     sg_rules: &'a [String],
-    reporter: &'a dyn ProgressReporter<CleanupProgress>,
+    reporter: &'a Reporter,
 }
 
 async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
@@ -208,7 +208,7 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
         // Terminate EC2 instances in batch
         info!(count = instance_ids.len(), "Terminating instances...");
         progress.current_step = format!("Terminating {} EC2 instances...", instance_ids.len());
-        reporter.report(&progress);
+        reporter.report_cleanup(&progress);
 
         if !instance_ids.is_empty() {
             if let Err(e) = ec2.terminate_instances(&instance_ids).await {
@@ -216,38 +216,38 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
             }
         }
         progress.ec2_instances.0 = instance_ids.len();
-        reporter.report(&progress);
+        reporter.report_cleanup(&progress);
 
         // Delete S3 bucket
         info!("Deleting S3 bucket...");
         progress.current_step = "Deleting S3 bucket...".to_string();
-        reporter.report(&progress);
+        reporter.report_cleanup(&progress);
 
         if let Err(e) = s3.delete_bucket(bucket_name).await {
             warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
         }
         progress.s3_bucket = true;
-        reporter.report(&progress);
+        reporter.report_cleanup(&progress);
 
         // Delete IAM resources
         if let Some(role_name) = iam_role_name {
             info!("Deleting IAM resources...");
             progress.current_step = "Deleting IAM role...".to_string();
-            reporter.report(&progress);
+            reporter.report_cleanup(&progress);
 
             let iam = IamClient::new(region).await?;
             if let Err(e) = iam.delete_benchmark_role(role_name).await {
                 warn!(role = %role_name, error = ?e, "Failed to delete IAM role");
             }
             progress.iam_roles.0 += 1;
-            reporter.report(&progress);
+            reporter.report_cleanup(&progress);
         }
 
         // Delete security group rules (for user-provided security groups)
         if !sg_rules.is_empty() {
             info!(count = sg_rules.len(), "Removing security group rules...");
             progress.current_step = format!("Removing {} security group rules...", sg_rules.len());
-            reporter.report(&progress);
+            reporter.report_cleanup(&progress);
 
             for rule in sg_rules {
                 if let Some((sg_id, cidr_ip)) = rule.split_once(':') {
@@ -256,7 +256,7 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
                     }
                 }
                 progress.security_rules.0 += 1;
-                reporter.report(&progress);
+                reporter.report_cleanup(&progress);
             }
         }
 
@@ -266,14 +266,14 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
             if !instance_ids.is_empty() {
                 info!("Waiting for instances to fully terminate before deleting security group...");
                 progress.current_step = "Waiting for instances to terminate...".to_string();
-                reporter.report(&progress);
+                reporter.report_cleanup(&progress);
 
                 ec2.wait_for_all_terminated(&instance_ids).await?;
             }
 
             info!("Deleting security group...");
             progress.current_step = "Deleting security group...".to_string();
-            reporter.report(&progress);
+            reporter.report_cleanup(&progress);
 
             if let Err(e) = ec2.delete_security_group(sg_id).await {
                 warn!(sg_id = %sg_id, error = ?e, "Failed to delete security group");
@@ -282,7 +282,7 @@ async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
 
         // Final progress update
         progress.current_step = "Cleanup complete".to_string();
-        reporter.report(&progress);
+        reporter.report_cleanup(&progress);
     } else {
         info!("Keeping instances, bucket, and IAM resources (--keep specified)");
     }
@@ -302,7 +302,7 @@ pub async fn cleanup_resources_no_tui(
     iam_role_name: Option<&str>,
     sg_rules: &[String],
 ) -> Result<()> {
-    let reporter = LogReporter::new();
+    let reporter = Reporter::Log;
 
     do_full_cleanup(FullCleanupConfig {
         region: &config.aws.region,

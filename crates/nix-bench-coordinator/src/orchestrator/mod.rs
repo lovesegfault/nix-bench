@@ -18,9 +18,7 @@ pub mod types;
 // Re-export core types
 pub use cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
 pub use init::{BenchmarkInitializer, InitContext};
-pub use progress::{
-    ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter, ProgressReporter,
-};
+pub use progress::{InstanceUpdate, Reporter};
 pub use types::{InstanceState, InstanceStatus};
 
 use crate::config::RunConfig;

@@ -6,8 +6,8 @@
 use anyhow::Result;
 use chrono::Duration;
 use clap::{Parser, Subcommand};
-use nix_bench_common::defaults::{DEFAULT_BUILD_TIMEOUT, DEFAULT_FLAKE_REF, DEFAULT_MAX_FAILURES};
 use nix_bench_coordinator::aws::cleanup::{CleanupConfig, TagBasedCleanup};
+use nix_bench_coordinator::aws::context::AwsContext;
 use nix_bench_coordinator::aws::scanner::{ResourceScanner, ScanConfig};
 use nix_bench_coordinator::tui::{LogCapture, LogCaptureLayer};
 use nix_bench_coordinator::{config, orchestrator};
@@ -22,139 +22,10 @@ struct Args {
     command: Command,
 }
 
-/// Arguments for the run command (extracted to reduce enum size)
-#[derive(clap::Args, Debug)]
-struct RunArgs {
-    /// Comma-separated EC2 instance types to benchmark
-    #[arg(short, long)]
-    instances: String,
-
-    /// nix-bench attribute to build (e.g., "large-deep")
-    #[arg(short, long, default_value = "large-deep")]
-    attr: String,
-
-    /// Number of benchmark runs per instance
-    #[arg(short, long, default_value = "10")]
-    runs: u32,
-
-    /// AWS region
-    #[arg(long, default_value = "us-east-2")]
-    region: String,
-
-    /// AWS profile to use (overrides AWS_PROFILE env var)
-    #[arg(long)]
-    aws_profile: Option<String>,
-
-    /// Output JSON file for results
-    #[arg(short, long)]
-    output: Option<String>,
-
-    /// Don't terminate instances after benchmark
-    #[arg(long)]
-    keep: bool,
-
-    /// Per-run timeout in seconds
-    #[arg(long, default_value = "7200")]
-    timeout: u64,
-
-    /// Disable TUI, print progress to stdout
-    #[arg(long)]
-    no_tui: bool,
-
-    /// Path to pre-built agent binary for x86_64-linux
-    /// (default: $NIX_BENCH_AGENT_X86_64)
-    #[arg(long, env = "NIX_BENCH_AGENT_X86_64")]
-    agent_x86_64: Option<String>,
-
-    /// Path to pre-built agent binary for aarch64-linux
-    /// (default: $NIX_BENCH_AGENT_AARCH64)
-    #[arg(long, env = "NIX_BENCH_AGENT_AARCH64")]
-    agent_aarch64: Option<String>,
-
-    /// VPC subnet ID for launching instances (uses default VPC if not specified)
-    #[arg(long)]
-    subnet_id: Option<String>,
-
-    /// Security group ID for instances
-    #[arg(long)]
-    security_group_id: Option<String>,
-
-    /// IAM instance profile name for EC2 instances
-    #[arg(long)]
-    instance_profile: Option<String>,
-
-    /// Validate configuration without launching instances
-    #[arg(long)]
-    dry_run: bool,
-
-    /// Flake reference base (e.g., "github:lovesegfault/nix-bench")
-    #[arg(long, default_value = DEFAULT_FLAKE_REF)]
-    flake_ref: String,
-
-    /// Build timeout in seconds per run
-    #[arg(long, default_value_t = DEFAULT_BUILD_TIMEOUT)]
-    build_timeout: u64,
-
-    /// Maximum number of build failures before giving up
-    #[arg(long, default_value_t = DEFAULT_MAX_FAILURES)]
-    max_failures: u32,
-
-    /// Run garbage collection between benchmark runs
-    /// Preserves fixed-output derivations (fetched sources) but removes build outputs
-    #[arg(long)]
-    gc_between_runs: bool,
-}
-
-impl RunArgs {
-    /// Parse instance types from the comma-separated string
-    fn parse_instance_types(&self) -> Vec<String> {
-        self.instances
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    }
-}
-
-impl From<RunArgs> for config::RunConfig {
-    fn from(args: RunArgs) -> Self {
-        let instance_types = args.parse_instance_types();
-        Self {
-            benchmark: config::BenchmarkConfig {
-                attr: args.attr,
-                runs: args.runs,
-                flake_ref: args.flake_ref,
-                build_timeout: args.build_timeout,
-                max_failures: args.max_failures,
-                gc_between_runs: args.gc_between_runs,
-            },
-            aws: config::AwsConfig {
-                region: args.region,
-                aws_profile: args.aws_profile,
-                subnet_id: args.subnet_id,
-                security_group_id: args.security_group_id,
-                instance_profile: args.instance_profile,
-            },
-            instances: config::InstanceConfig {
-                instance_types,
-                agent_x86_64: args.agent_x86_64,
-                agent_aarch64: args.agent_aarch64,
-            },
-            flags: config::RuntimeFlags {
-                keep: args.keep,
-                timeout: args.timeout,
-                no_tui: args.no_tui,
-                dry_run: args.dry_run,
-                output: args.output,
-            },
-        }
-    }
-}
-
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Run benchmarks on EC2 instances
-    Run(Box<RunArgs>),
+    Run(Box<config::RunConfig>),
 
     /// Scan AWS for nix-bench resources using tags
     Scan {
@@ -246,7 +117,7 @@ async fn run() -> Result<()> {
     let args = Args::parse_from(filtered_args);
 
     // Check if we're in TUI mode (run command without --no-tui)
-    let use_tui = matches!(&args.command, Command::Run(run_args) if !run_args.no_tui);
+    let use_tui = matches!(&args.command, Command::Run(config) if !config.flags.no_tui);
 
     // Create log capture for TUI mode (to print errors/warnings after exit)
     let log_capture = if use_tui {
@@ -287,17 +158,17 @@ async fn run() -> Result<()> {
     }
 
     match args.command {
-        Command::Run(run_args) => {
-            if let Some(profile) = &run_args.aws_profile {
+        Command::Run(config) => {
+            if let Some(profile) = &config.aws.aws_profile {
                 info!(profile = %profile, "Using AWS profile");
             }
 
             // Validate instance types before launching TUI
-            let instance_types = run_args.parse_instance_types();
+            let instance_types = config.instances.instance_types.clone();
             {
-                use nix_bench_coordinator::aws::{Ec2Client, context::AwsContext};
+                use nix_bench_coordinator::aws::Ec2Client;
                 let aws =
-                    AwsContext::with_profile(&run_args.region, run_args.aws_profile.as_deref())
+                    AwsContext::with_profile(&config.aws.region, config.aws.aws_profile.as_deref())
                         .await;
                 let ec2 = Ec2Client::from_context(&aws);
                 ec2.validate_instance_types(&instance_types).await?;
@@ -305,17 +176,16 @@ async fn run() -> Result<()> {
 
             info!(
                 instances = ?instance_types,
-                attr = %run_args.attr,
-                runs = run_args.runs,
-                region = %run_args.region,
-                flake_ref = %run_args.flake_ref,
-                build_timeout = run_args.build_timeout,
-                max_failures = run_args.max_failures,
+                attr = %config.benchmark.attr,
+                runs = config.benchmark.runs,
+                region = %config.aws.region,
+                flake_ref = %config.benchmark.flake_ref,
+                build_timeout = config.benchmark.build_timeout,
+                max_failures = config.benchmark.max_failures,
                 "Starting benchmark run"
             );
 
-            let config: config::RunConfig = (*run_args).into();
-            orchestrator::run_benchmarks(config, log_capture).await?;
+            orchestrator::run_benchmarks(*config, log_capture).await?;
         }
 
         Command::Scan {
@@ -350,7 +220,7 @@ async fn handle_scan(
 ) -> Result<()> {
     info!(region = %region, min_age_hours, run_id = ?run_id, "Scanning for nix-bench resources");
 
-    let ctx = nix_bench_coordinator::aws::context::AwsContext::new(&region).await;
+    let ctx = AwsContext::new(&region).await;
     let scanner = ResourceScanner::from_context(&ctx);
     let config = ScanConfig {
         min_age: Duration::hours(min_age_hours as i64),

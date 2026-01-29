@@ -57,6 +57,25 @@ fn generate_agent_policy(bucket_name: &str) -> String {
     .to_string()
 }
 
+/// Build a single IAM tag, mapping the builder error to anyhow.
+fn iam_tag(key: &str, value: &str) -> Result<aws_sdk_iam::types::Tag> {
+    aws_sdk_iam::types::Tag::builder()
+        .key(key)
+        .value(value)
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))
+}
+
+/// Build the standard set of nix-bench IAM tags (tool, run_id, created_at, status).
+fn standard_iam_tags(run_id: &str, created_at: &str) -> Result<Vec<aws_sdk_iam::types::Tag>> {
+    Ok(vec![
+        iam_tag(TAG_TOOL, TAG_TOOL_VALUE)?,
+        iam_tag(TAG_RUN_ID, run_id)?,
+        iam_tag(TAG_CREATED_AT, created_at)?,
+        iam_tag(TAG_STATUS, tags::status::CREATING)?,
+    ])
+}
+
 impl FromAwsContext for IamClient {
     fn from_context(ctx: &AwsContext) -> Self {
         Self {
@@ -92,39 +111,13 @@ impl IamClient {
 
         // Create the role with standard nix-bench tags
         let created_at = tags::format_created_at(Utc::now());
+        let iam_tags = standard_iam_tags(run_id, &created_at)?;
         self.client
             .create_role()
             .role_name(&role_name)
             .assume_role_policy_document(EC2_ASSUME_ROLE_POLICY)
             .description(format!("nix-bench agent role for run {}", run_id))
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_TOOL)
-                    .value(TAG_TOOL_VALUE)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_RUN_ID)
-                    .value(run_id)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_CREATED_AT)
-                    .value(&created_at)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_STATUS)
-                    .value(tags::status::CREATING)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
+            .set_tags(Some(iam_tags.clone()))
             .send()
             .await
             .context("Failed to create IAM role")?;
@@ -159,34 +152,7 @@ impl IamClient {
         self.client
             .create_instance_profile()
             .instance_profile_name(&profile_name)
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_TOOL)
-                    .value(TAG_TOOL_VALUE)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_RUN_ID)
-                    .value(run_id)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_CREATED_AT)
-                    .value(&created_at)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
-            .tags(
-                aws_sdk_iam::types::Tag::builder()
-                    .key(TAG_STATUS)
-                    .value(tags::status::CREATING)
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to build IAM tag: {}", e))?,
-            )
+            .set_tags(Some(iam_tags))
             .send()
             .await
             .context("Failed to create instance profile")?;

@@ -5,8 +5,7 @@ use crate::aws::cleanup::{CleanupResult, delete_resource};
 use crate::aws::context::AwsContext;
 use crate::aws::{Ec2Client, IamClient, S3Client};
 use anyhow::Result;
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
@@ -259,27 +258,6 @@ struct CleanupItem {
     meta: ResourceMeta,
 }
 
-impl Eq for CleanupItem {}
-impl PartialEq for CleanupItem {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-impl PartialOrd for CleanupItem {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for CleanupItem {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse ordering for BinaryHeap (lowest priority first)
-        other
-            .resource
-            .cleanup_priority()
-            .cmp(&self.resource.cleanup_priority())
-    }
-}
-
 /// Background task that handles async cleanup of dropped resources
 pub struct CleanupExecutor {
     rx: mpsc::UnboundedReceiver<CleanupMessage>,
@@ -291,7 +269,7 @@ impl CleanupExecutor {
     }
 
     pub async fn run(mut self) {
-        let mut pending: BinaryHeap<CleanupItem> = BinaryHeap::new();
+        let mut pending: Vec<CleanupItem> = Vec::new();
 
         loop {
             tokio::select! {
@@ -319,9 +297,9 @@ impl CleanupExecutor {
         }
     }
 
-    async fn process_pending(&self, pending: &mut BinaryHeap<CleanupItem>) {
+    async fn process_pending(&self, pending: &mut Vec<CleanupItem>) {
         let mut by_region: HashMap<String, Vec<CleanupItem>> = HashMap::new();
-        while let Some(item) = pending.pop() {
+        for item in pending.drain(..) {
             by_region
                 .entry(item.meta.region.clone())
                 .or_default()

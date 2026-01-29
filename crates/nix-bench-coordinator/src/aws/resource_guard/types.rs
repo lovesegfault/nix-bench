@@ -29,81 +29,44 @@ pub enum ResourceId {
     ElasticIp(String),
 }
 
-/// Per-variant metadata for ResourceId
-struct ResourceInfo {
-    priority: u8,
-    kind: &'static str,
-    label: &'static str,
-}
-
 impl ResourceId {
-    /// Get per-variant metadata (priority, kind string, human-readable label prefix)
-    fn info(&self) -> ResourceInfo {
-        match self {
-            ResourceId::Ec2Instance(_) => ResourceInfo {
-                priority: 0,
-                kind: "ec2_instance",
-                label: "EC2 instance",
-            },
-            ResourceId::ElasticIp(_) => ResourceInfo {
-                priority: 0,
-                kind: "elastic_ip",
-                label: "Elastic IP",
-            },
-            ResourceId::S3Object(_) => ResourceInfo {
-                priority: 1,
-                kind: "s3_object",
-                label: "S3 object",
-            },
-            ResourceId::S3Bucket(_) => ResourceInfo {
-                priority: 2,
-                kind: "s3_bucket",
-                label: "S3 bucket",
-            },
-            ResourceId::IamRole(_) => ResourceInfo {
-                priority: 3,
-                kind: "iam_role",
-                label: "IAM role",
-            },
-            ResourceId::IamInstanceProfile(_) => ResourceInfo {
-                priority: 3,
-                kind: "iam_instance_profile",
-                label: "Instance profile",
-            },
-            ResourceId::SecurityGroupRule { .. } => ResourceInfo {
-                priority: 4,
-                kind: "security_group_rule",
-                label: "SG rule",
-            },
-            ResourceId::SecurityGroup(_) => ResourceInfo {
-                priority: 5,
-                kind: "security_group",
-                label: "Security group",
-            },
-        }
-    }
-
     /// Get cleanup priority (lower number = cleanup first)
     pub fn cleanup_priority(&self) -> u8 {
-        self.info().priority
+        match self {
+            Self::Ec2Instance(_) | Self::ElasticIp(_) => 0,
+            Self::S3Object(_) => 1,
+            Self::S3Bucket(_) => 2,
+            Self::IamRole(_) | Self::IamInstanceProfile(_) => 3,
+            Self::SecurityGroupRule { .. } => 4,
+            Self::SecurityGroup(_) => 5,
+        }
     }
 
     /// Get string representation of the resource kind
     pub fn as_str(&self) -> &'static str {
-        self.info().kind
+        match self {
+            Self::Ec2Instance(_) => "ec2_instance",
+            Self::ElasticIp(_) => "elastic_ip",
+            Self::S3Object(_) => "s3_object",
+            Self::S3Bucket(_) => "s3_bucket",
+            Self::IamRole(_) => "iam_role",
+            Self::IamInstanceProfile(_) => "iam_instance_profile",
+            Self::SecurityGroupRule { .. } => "security_group_rule",
+            Self::SecurityGroup(_) => "security_group",
+        }
     }
 
     /// Get the raw identifier string
     pub fn raw_id(&self) -> String {
         match self {
-            ResourceId::Ec2Instance(id)
-            | ResourceId::SecurityGroup(id)
-            | ResourceId::S3Bucket(id)
-            | ResourceId::S3Object(id)
-            | ResourceId::IamRole(id)
-            | ResourceId::IamInstanceProfile(id)
-            | ResourceId::ElasticIp(id) => id.clone(),
-            ResourceId::SecurityGroupRule {
+            Self::Ec2Instance(id)
+            | Self::SecurityGroup(id)
+            | Self::S3Bucket(id)
+            | Self::S3Object(id)
+            | Self::IamRole(id)
+            | Self::IamInstanceProfile(id)
+            | Self::ElasticIp(id) => id.clone(),
+            Self::SecurityGroupRule {
                 security_group_id,
                 cidr_ip,
             } => format!("{}:{}", security_group_id, cidr_ip),
@@ -112,7 +75,17 @@ impl ResourceId {
 
     /// Get a human-readable description for logging
     pub fn description(&self) -> String {
-        format!("{} {}", self.info().label, self.raw_id())
+        let label = match self {
+            Self::Ec2Instance(_) => "EC2 instance",
+            Self::ElasticIp(_) => "Elastic IP",
+            Self::S3Object(_) => "S3 object",
+            Self::S3Bucket(_) => "S3 bucket",
+            Self::IamRole(_) => "IAM role",
+            Self::IamInstanceProfile(_) => "Instance profile",
+            Self::SecurityGroupRule { .. } => "SG rule",
+            Self::SecurityGroup(_) => "Security group",
+        };
+        format!("{} {}", label, self.raw_id())
     }
 }
 

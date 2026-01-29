@@ -4,7 +4,7 @@
 //! This provides a safety net for resources that were created but never
 //! recorded in the local database (e.g., due to crashes).
 
-use super::resource_kind::ResourceKind;
+use super::resource_guard::types::ResourceId;
 use super::scanner::{DiscoveredResource, ResourceScanner, ScanConfig};
 use crate::aws::context::AwsContext;
 use crate::aws::{Ec2Client, IamClient, S3Client};
@@ -131,25 +131,24 @@ impl TagBasedCleanup {
 
             // Sort by cleanup priority
             let mut sorted_resources = run_resources;
-            sorted_resources.sort_by_key(|r| r.resource_type.cleanup_priority());
+            sorted_resources.sort_by_key(|r| r.resource.cleanup_priority());
 
             // Track instances for wait-before-SG-delete
             let mut terminated_instances: Vec<String> = Vec::new();
 
             for resource in sorted_resources {
                 // Update per-type counters
-                match resource.resource_type {
-                    ResourceKind::Ec2Instance => report.ec2_instances += 1,
-                    ResourceKind::S3Bucket => report.s3_buckets += 1,
-                    ResourceKind::IamRole => report.iam_roles += 1,
-                    ResourceKind::IamInstanceProfile => report.iam_instance_profiles += 1,
-                    ResourceKind::SecurityGroup => report.security_groups += 1,
-                    ResourceKind::S3Object
-                    | ResourceKind::SecurityGroupRule
-                    | ResourceKind::ElasticIp => {
+                match &resource.resource {
+                    ResourceId::Ec2Instance(_) => report.ec2_instances += 1,
+                    ResourceId::S3Bucket(_) => report.s3_buckets += 1,
+                    ResourceId::IamRole(_) => report.iam_roles += 1,
+                    ResourceId::IamInstanceProfile(_) => report.iam_instance_profiles += 1,
+                    ResourceId::SecurityGroup(_) => report.security_groups += 1,
+                    ResourceId::S3Object(_)
+                    | ResourceId::SecurityGroupRule { .. }
+                    | ResourceId::ElasticIp(_) => {
                         debug!(
-                            resource_id = %resource.resource_id,
-                            resource_type = ?resource.resource_type,
+                            resource = %resource.resource.description(),
                             "Skipping (not discoverable)"
                         );
                         continue;
@@ -158,8 +157,7 @@ impl TagBasedCleanup {
 
                 if config.dry_run {
                     info!(
-                        resource_type = %resource.resource_type.as_str(),
-                        resource_id = %resource.resource_id,
+                        resource = %resource.resource,
                         "[DRY RUN] Would delete"
                     );
                     report.skipped += 1;
@@ -167,27 +165,17 @@ impl TagBasedCleanup {
                 }
 
                 // Security groups need instances to terminate first
-                if resource.resource_type == ResourceKind::SecurityGroup
-                    && !terminated_instances.is_empty()
-                {
+                if resource.resource.is_security_group() && !terminated_instances.is_empty() {
                     for instance_id in &terminated_instances {
                         let _ = self.ec2.wait_for_terminated(instance_id).await;
                     }
                     terminated_instances.clear();
                 }
 
-                match delete_resource(
-                    resource.resource_type,
-                    &resource.resource_id,
-                    &self.ec2,
-                    &self.s3,
-                    &self.iam,
-                )
-                .await
-                {
+                match delete_resource(&resource.resource, &self.ec2, &self.s3, &self.iam).await {
                     CleanupResult::Deleted => {
-                        if resource.resource_type == ResourceKind::Ec2Instance {
-                            terminated_instances.push(resource.resource_id.clone());
+                        if resource.resource.is_ec2_instance() {
+                            terminated_instances.push(resource.resource.raw_id());
                         }
                         report.deleted += 1;
                     }
@@ -219,64 +207,40 @@ pub enum CleanupResult {
 
 /// Delete a single resource and handle "not found" errors gracefully.
 pub async fn delete_resource(
-    resource_type: ResourceKind,
-    resource_id: &str,
+    resource: &ResourceId,
     ec2: &Ec2Client,
     s3: &S3Client,
     iam: &IamClient,
 ) -> CleanupResult {
-    let result = match resource_type {
-        ResourceKind::Ec2Instance => ec2.terminate_instance(resource_id).await,
-        ResourceKind::ElasticIp => ec2.release_elastic_ip(resource_id).await,
-        ResourceKind::S3Bucket => s3.delete_bucket(resource_id).await,
-        ResourceKind::S3Object => return CleanupResult::Skipped, // Cleaned with bucket
-        ResourceKind::IamRole => iam.delete_benchmark_role(resource_id).await,
-        ResourceKind::IamInstanceProfile => iam.delete_instance_profile(resource_id).await,
-        ResourceKind::SecurityGroup => ec2.delete_security_group(resource_id).await,
-        ResourceKind::SecurityGroupRule => {
-            if let Some((sg_id, cidr_ip)) = resource_id.split_once(':') {
-                ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await
-            } else {
-                warn!(resource_id = %resource_id, "Invalid SecurityGroupRule format");
-                return CleanupResult::Failed;
-            }
+    let result = match resource {
+        ResourceId::Ec2Instance(id) => ec2.terminate_instance(id).await,
+        ResourceId::ElasticIp(id) => ec2.release_elastic_ip(id).await,
+        ResourceId::S3Bucket(name) => s3.delete_bucket(name).await,
+        ResourceId::S3Object(_) => return CleanupResult::Skipped, // Cleaned with bucket
+        ResourceId::IamRole(name) => iam.delete_benchmark_role(name).await,
+        ResourceId::IamInstanceProfile(name) => iam.delete_instance_profile(name).await,
+        ResourceId::SecurityGroup(id) => ec2.delete_security_group(id).await,
+        ResourceId::SecurityGroupRule {
+            security_group_id,
+            cidr_ip,
+        } => {
+            ec2.remove_grpc_ingress_rule(security_group_id, cidr_ip)
+                .await
         }
     };
 
     match result {
         Ok(()) => {
-            info!(resource_type = %resource_type.as_str(), resource_id = %resource_id, "Deleted");
+            info!(resource = %resource, "Deleted");
             CleanupResult::Deleted
         }
         Err(e) => {
             warn!(
-                resource_type = %resource_type.as_str(),
-                resource_id = %resource_id,
+                resource = %resource,
                 error = ?e,
                 "Cleanup failed"
             );
             CleanupResult::Failed
         }
     }
-}
-
-/// Partition resources into cleanup order: instances first, then others, then security groups.
-///
-/// Returns (instances, non_sg_resources, security_groups)
-pub fn partition_resources_for_cleanup<T, F>(
-    resources: Vec<T>,
-    get_type: F,
-) -> (Vec<T>, Vec<T>, Vec<T>)
-where
-    F: Fn(&T) -> ResourceKind,
-{
-    let (instances, rest): (Vec<_>, Vec<_>) = resources
-        .into_iter()
-        .partition(|r| get_type(r) == ResourceKind::Ec2Instance);
-
-    let (security_groups, other): (Vec<_>, Vec<_>) = rest
-        .into_iter()
-        .partition(|r| get_type(r) == ResourceKind::SecurityGroup);
-
-    (instances, other, security_groups)
 }

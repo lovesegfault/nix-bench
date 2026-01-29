@@ -166,7 +166,9 @@ impl CleanupExecutor {
                 terminated_instances.push(id.clone());
                 ec2.terminate_instance(id).await
             }
+            ResourceId::ElasticIp(id) => ec2.release_elastic_ip(id).await,
             ResourceId::S3Bucket(name) => s3.delete_bucket(name).await,
+            ResourceId::S3Object(_) => Ok(()), // Cleaned with bucket
             ResourceId::IamRole(name) => iam.delete_benchmark_role(name).await,
             ResourceId::IamInstanceProfile(_) => {
                 // Deleted as part of role deletion

@@ -63,7 +63,7 @@ mod builder;
 mod executor;
 mod guard;
 mod registry;
-mod types;
+pub mod types;
 
 pub use builder::ResourceGuardBuilder;
 pub use executor::{CleanupExecutor, create_cleanup_system};

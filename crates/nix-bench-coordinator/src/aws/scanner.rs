@@ -3,7 +3,7 @@
 //! Discovers resources directly from AWS APIs, independent of local database.
 //! This enables cleanup of orphaned resources that were never recorded in the DB.
 
-pub use super::resource_kind::ResourceKind;
+use super::resource_guard::types::ResourceId;
 use super::tags::{self, TAG_CREATED_AT, TAG_RUN_ID, TAG_STATUS, TAG_TOOL, TAG_TOOL_VALUE};
 use crate::aws::context::AwsContext;
 use anyhow::Result;
@@ -15,10 +15,8 @@ use tracing::debug;
 /// Discovered AWS resource from scanning
 #[derive(Debug, Clone)]
 pub struct DiscoveredResource {
-    /// Type of resource
-    pub resource_type: ResourceKind,
-    /// AWS resource identifier
-    pub resource_id: String,
+    /// Resource identifier (carries both kind and ID)
+    pub resource: ResourceId,
     /// AWS region
     pub region: String,
     /// Run ID from tag
@@ -57,7 +55,7 @@ impl Default for ScanConfig {
 
 /// Candidate resource for `build_discovered_resource`.
 struct ResourceCandidate<'a> {
-    resource_type: ResourceKind,
+    make_resource: fn(String) -> ResourceId,
     resource_id: &'a str,
     tags: HashMap<String, String>,
     is_untagged_orphan: bool,
@@ -162,8 +160,7 @@ impl ResourceScanner {
                 if let Some(instance_id) = instance.instance_id() {
                     if let Some(run_id) = tags.get(TAG_RUN_ID) {
                         resources.push(DiscoveredResource {
-                            resource_type: ResourceKind::Ec2Instance,
-                            resource_id: instance_id.to_string(),
+                            resource: ResourceId::Ec2Instance(instance_id.to_string()),
                             region: self.region.clone(),
                             run_id: run_id.clone(),
                             created_at: parse_created_at(&tags),
@@ -221,8 +218,7 @@ impl ResourceScanner {
             if let Some(sg_id) = sg.group_id() {
                 if let Some(run_id) = tags.get(TAG_RUN_ID) {
                     resources.push(DiscoveredResource {
-                        resource_type: ResourceKind::SecurityGroup,
-                        resource_id: sg_id.to_string(),
+                        resource: ResourceId::SecurityGroup(sg_id.to_string()),
                         region: self.region.clone(),
                         run_id: run_id.clone(),
                         created_at: parse_created_at(&tags),
@@ -277,7 +273,7 @@ impl ResourceScanner {
 
             if let Some(resource) = self.build_discovered_resource(
                 ResourceCandidate {
-                    resource_type: ResourceKind::S3Bucket,
+                    make_resource: ResourceId::S3Bucket,
                     resource_id: bucket_name,
                     tags,
                     is_untagged_orphan,
@@ -299,7 +295,7 @@ impl ResourceScanner {
     pub async fn scan_iam_roles(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
         let client = self.ctx.iam_client();
 
-        self.scan_iam_paginated(config, ResourceKind::IamRole, "IAM roles", |marker| {
+        self.scan_iam_paginated(config, ResourceId::IamRole, "IAM roles", |marker| {
             let c = client.clone();
             async move {
                 let mut req = c.list_roles();
@@ -352,7 +348,7 @@ impl ResourceScanner {
 
         self.scan_iam_paginated(
             config,
-            ResourceKind::IamInstanceProfile,
+            ResourceId::IamInstanceProfile,
             "IAM instance profiles",
             |marker| {
                 let c = client.clone();
@@ -405,7 +401,7 @@ impl ResourceScanner {
     async fn scan_iam_paginated<F, Fut>(
         &self,
         config: &ScanConfig,
-        resource_type: ResourceKind,
+        make_resource: fn(String) -> ResourceId,
         label: &str,
         list_page: F,
     ) -> Result<Vec<DiscoveredResource>>
@@ -427,7 +423,7 @@ impl ResourceScanner {
 
                 if let Some(resource) = self.build_discovered_resource(
                     ResourceCandidate {
-                        resource_type,
+                        make_resource,
                         resource_id: &item.name,
                         tags: item.tags,
                         is_untagged_orphan: item.is_untagged,
@@ -452,9 +448,6 @@ impl ResourceScanner {
     }
 
     /// Build a `DiscoveredResource` from tags and metadata, applying config filters.
-    ///
-    /// Handles both properly tagged and untagged orphan resources. Returns `None`
-    /// if the resource should be filtered out based on age, status, or run_id.
     fn build_discovered_resource(
         &self,
         params: ResourceCandidate<'_>,
@@ -462,7 +455,7 @@ impl ResourceScanner {
         now: DateTime<Utc>,
     ) -> Option<DiscoveredResource> {
         let ResourceCandidate {
-            resource_type,
+            make_resource,
             resource_id,
             tags,
             is_untagged_orphan,
@@ -507,8 +500,7 @@ impl ResourceScanner {
         };
 
         Some(DiscoveredResource {
-            resource_type,
-            resource_id: resource_id.to_string(),
+            resource: make_resource(resource_id.to_string()),
             region: self.region.clone(),
             run_id,
             created_at,

@@ -16,7 +16,6 @@ pub mod error;
 pub mod grpc_client;
 pub mod iam;
 pub mod resource_guard;
-pub mod resource_kind;
 pub mod s3;
 pub mod scanner;
 pub mod tags;
@@ -33,7 +32,7 @@ pub use error::{
 };
 
 // Cleanup utilities
-pub use cleanup::{CleanupResult, delete_resource, partition_resources_for_cleanup};
+pub use cleanup::{CleanupResult, delete_resource};
 
 // gRPC client
 pub use grpc_client::{

@@ -370,8 +370,8 @@ async fn handle_scan(
             .iter()
             .map(|r| {
                 serde_json::json!({
-                    "type": format!("{:?}", r.resource_type),
-                    "id": r.resource_id,
+                    "type": r.resource.as_str(),
+                    "id": r.resource.raw_id(),
                     "region": r.region,
                     "run_id": r.run_id,
                     "created_at": r.created_at.to_rfc3339(),
@@ -389,11 +389,14 @@ async fn handle_scan(
         for r in &resources {
             println!(
                 "{:<15} {:<25} {:<15} {:<20} {:<10}",
-                format!("{:?}", r.resource_type),
-                if r.resource_id.len() > 24 {
-                    format!("{}...", &r.resource_id[..21])
-                } else {
-                    r.resource_id.clone()
+                r.resource.as_str(),
+                {
+                    let id = r.resource.raw_id();
+                    if id.len() > 24 {
+                        format!("{}...", &id[..21])
+                    } else {
+                        id
+                    }
                 },
                 if r.run_id.len() > 14 {
                     format!("{}...", &r.run_id[..11])

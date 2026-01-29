@@ -5,7 +5,6 @@ members = [
     "crates/nix-bench-common",
     "crates/nix-bench-agent",
     "crates/nix-bench-coordinator",
-    "crates/nix-bench-test-utils",
 ]
 
 [workspace.package]

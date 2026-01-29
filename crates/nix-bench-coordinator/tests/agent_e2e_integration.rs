@@ -18,6 +18,7 @@
 //! ```
 
 mod aws_test_helpers;
+mod test_utils;
 
 use aws_test_helpers::*;
 use nix_bench_common::tls::{
@@ -110,7 +111,7 @@ exec /usr/local/bin/nix-bench-agent \
 #[ignore]
 async fn test_full_benchmark_with_agent() {
     // Initialize crypto for TLS
-    nix_bench_test_utils::init_crypto();
+    test_utils::init_crypto();
 
     let region = get_test_region();
     cleanup_stale_test_resources(&region).await;
@@ -369,7 +370,7 @@ async fn test_full_benchmark_with_agent() {
 #[tokio::test]
 #[ignore]
 async fn test_infrastructure_setup_only() {
-    nix_bench_test_utils::init_crypto();
+    test_utils::init_crypto();
 
     let region = get_test_region();
     cleanup_stale_test_resources(&region).await;

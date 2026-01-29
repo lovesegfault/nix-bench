@@ -2,7 +2,21 @@
 
 #![allow(dead_code)]
 
-pub use nix_bench_test_utils::aws::{get_test_region, test_run_id};
+use chrono::Utc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+pub fn get_test_region() -> String {
+    std::env::var("AWS_REGION")
+        .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|_| "us-east-2".to_string())
+}
+
+pub fn test_run_id() -> String {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let ts = Utc::now().timestamp_millis();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("test-{}-{}", ts, counter)
+}
 
 use nix_bench_coordinator::aws::cleanup::{CleanupConfig, TagBasedCleanup};
 use nix_bench_coordinator::aws::context::AwsContext;

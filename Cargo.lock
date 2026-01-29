@@ -2313,7 +2313,6 @@ dependencies = [
  "nix-bench-agent",
  "nix-bench-common",
  "nix-bench-proto",
- "nix-bench-test-utils",
  "rand 0.9.2",
  "ratatui",
  "reqwest",
@@ -2346,17 +2345,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
-]
-
-[[package]]
-name = "nix-bench-test-utils"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "nix-bench-common",
- "rustls 0.23.36",
- "tokio",
 ]
 
 [[package]]

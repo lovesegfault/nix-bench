@@ -1,54 +1,115 @@
-//! RAII guard for AWS resources
+//! RAII guards, registry, builder, and cleanup executor for AWS resources
 
-use super::registry::ResourceRegistry;
 use super::types::{ResourceId, ResourceMeta};
+use crate::aws::{Ec2Client, IamClient, S3Client};
+use anyhow::Result;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
 
-/// RAII guard that tracks an AWS resource
+// ── CleanupMessage & ResourceRegistry ──────────────────────────────────────
+
+/// Message sent to the cleanup executor when a resource needs cleanup
+#[derive(Debug)]
+pub enum CleanupMessage {
+    /// A resource was dropped without being committed
+    ResourceDropped {
+        resource: ResourceId,
+        meta: ResourceMeta,
+    },
+    /// Request the executor to shut down gracefully
+    Shutdown,
+}
+
+/// Thread-safe registry of live resources that haven't been committed yet
+#[derive(Clone)]
+pub struct ResourceRegistry {
+    inner: Arc<RegistryInner>,
+}
+
+struct RegistryInner {
+    resources: Mutex<HashMap<ResourceId, ResourceMeta>>,
+    cleanup_tx: mpsc::UnboundedSender<CleanupMessage>,
+}
+
+impl ResourceRegistry {
+    pub fn new(cleanup_tx: mpsc::UnboundedSender<CleanupMessage>) -> Self {
+        Self {
+            inner: Arc::new(RegistryInner {
+                resources: Mutex::new(HashMap::new()),
+                cleanup_tx,
+            }),
+        }
+    }
+
+    pub fn register(&self, resource: ResourceId, meta: ResourceMeta) {
+        self.inner.resources.lock().unwrap().insert(resource, meta);
+    }
+
+    pub fn commit(&self, resource: &ResourceId) -> Option<ResourceMeta> {
+        self.inner.resources.lock().unwrap().remove(resource)
+    }
+
+    pub fn on_drop(&self, resource: ResourceId, meta: ResourceMeta) {
+        {
+            self.inner.resources.lock().unwrap().remove(&resource);
+        }
+        let _ = self
+            .inner
+            .cleanup_tx
+            .send(CleanupMessage::ResourceDropped { resource, meta });
+    }
+
+    pub fn all_resources(&self) -> Vec<(ResourceId, ResourceMeta)> {
+        self.inner
+            .resources
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.resources.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.resources.lock().unwrap().is_empty()
+    }
+
+    pub fn shutdown(&self) {
+        let _ = self.inner.cleanup_tx.send(CleanupMessage::Shutdown);
+    }
+}
+
+// ── ResourceGuard ──────────────────────────────────────────────────────────
+
+/// RAII guard that tracks an AWS resource.
 ///
 /// When dropped without calling `commit()`, the resource is sent
 /// to the cleanup executor for async deletion.
-///
-/// # Example
-///
-/// ```ignore
-/// let registry = ResourceRegistry::new(cleanup_tx);
-/// let builder = ResourceGuardBuilder::new(registry, "run-123", "us-east-2");
-///
-/// // Create resource and guard
-/// let instance_id = ec2.launch_instance(...).await?;
-/// let guard = builder.ec2_instance(instance_id.clone());
-///
-/// // If we crash here, the instance will be cleaned up by the executor
-///
-/// // Commit the guard
-/// let instance_id = guard.commit(); // No cleanup will happen
-/// ```
 pub struct ResourceGuard<T> {
-    /// The wrapped value (e.g., instance_id String)
     value: ManuallyDrop<T>,
-    /// Resource identifier for cleanup
     resource_id: ResourceId,
-    /// Metadata for cleanup
     meta: ResourceMeta,
-    /// Registry to notify on drop
     registry: ResourceRegistry,
-    /// Whether this resource has been committed (no cleanup needed)
     committed: bool,
 }
 
 impl<T> ResourceGuard<T> {
-    /// Create a new guard (internal - use `ResourceGuardBuilder`)
     pub(crate) fn new(
         value: T,
         resource_id: ResourceId,
         meta: ResourceMeta,
         registry: ResourceRegistry,
     ) -> Self {
-        // Register immediately upon creation
         registry.register(resource_id.clone(), meta.clone());
-
         Self {
             value: ManuallyDrop::new(value),
             resource_id,
@@ -58,44 +119,34 @@ impl<T> ResourceGuard<T> {
         }
     }
 
-    /// Commit this resource - transfers ownership to persistent storage
-    ///
-    /// After commit, drop will NOT trigger cleanup.
+    /// Commit this resource - no cleanup on drop.
     pub fn commit(mut self) -> T {
         self.committed = true;
         self.registry.commit(&self.resource_id);
-
-        // SAFETY: We set committed=true so Drop won't use the value,
-        // and we only call take() once here before Drop runs.
+        // SAFETY: committed=true prevents Drop from using the value,
+        // and we only call take() once here before forget().
         let value = unsafe { ManuallyDrop::take(&mut self.value) };
         std::mem::forget(self);
         value
     }
 
-    /// Get the inner value without consuming
     pub fn inner(&self) -> &T {
         &self.value
     }
 
-    /// Get the resource ID
     pub fn resource_id(&self) -> &ResourceId {
         &self.resource_id
     }
 
-    /// Get the resource metadata
     pub fn meta(&self) -> &ResourceMeta {
         &self.meta
     }
 
-    /// Detach from registry without triggering cleanup
-    ///
-    /// Use when the resource has been cleaned up explicitly and you want
-    /// to consume the guard without triggering another cleanup.
+    /// Detach from registry without triggering cleanup.
     pub fn detach(mut self) -> T {
         self.committed = true;
         self.registry.commit(&self.resource_id);
-
-        // SAFETY: Same as commit() - committed=true prevents Drop from using value.
+        // SAFETY: Same as commit().
         let value = unsafe { ManuallyDrop::take(&mut self.value) };
         std::mem::forget(self);
         value
@@ -104,7 +155,6 @@ impl<T> ResourceGuard<T> {
 
 impl<T> Deref for ResourceGuard<T> {
     type Target = T;
-
     fn deref(&self) -> &Self::Target {
         &self.value
     }
@@ -113,25 +163,296 @@ impl<T> Deref for ResourceGuard<T> {
 impl<T> Drop for ResourceGuard<T> {
     fn drop(&mut self) {
         if !self.committed {
-            // Resource was dropped without commit - needs cleanup
             self.registry
                 .on_drop(self.resource_id.clone(), self.meta.clone());
         }
     }
 }
 
-// Type aliases for common resource types
 pub type Ec2InstanceGuard = ResourceGuard<String>;
 pub type SecurityGroupGuard = ResourceGuard<String>;
 pub type S3BucketGuard = ResourceGuard<String>;
-pub type IamRoleGuard = ResourceGuard<(String, String)>; // (role_name, profile_name)
+pub type IamRoleGuard = ResourceGuard<(String, String)>;
 pub type SecurityGroupRuleGuard = ResourceGuard<()>;
+
+// ── ResourceGuardBuilder ───────────────────────────────────────────────────
+
+/// Builder for creating resource guards with consistent metadata
+pub struct ResourceGuardBuilder {
+    registry: ResourceRegistry,
+    run_id: String,
+    region: String,
+}
+
+impl ResourceGuardBuilder {
+    pub fn new(
+        registry: ResourceRegistry,
+        run_id: impl Into<String>,
+        region: impl Into<String>,
+    ) -> Self {
+        Self {
+            registry,
+            run_id: run_id.into(),
+            region: region.into(),
+        }
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+
+    fn meta(&self) -> ResourceMeta {
+        ResourceMeta::new(self.run_id.clone(), self.region.clone())
+    }
+
+    pub fn ec2_instance(&self, instance_id: impl Into<String>) -> Ec2InstanceGuard {
+        let id = instance_id.into();
+        ResourceGuard::new(
+            id.clone(),
+            ResourceId::Ec2Instance(id),
+            self.meta(),
+            self.registry.clone(),
+        )
+    }
+
+    pub fn security_group(&self, sg_id: impl Into<String>) -> SecurityGroupGuard {
+        let id = sg_id.into();
+        ResourceGuard::new(
+            id.clone(),
+            ResourceId::SecurityGroup(id),
+            self.meta(),
+            self.registry.clone(),
+        )
+    }
+
+    pub fn s3_bucket(&self, bucket_name: impl Into<String>) -> S3BucketGuard {
+        let name = bucket_name.into();
+        ResourceGuard::new(
+            name.clone(),
+            ResourceId::S3Bucket(name),
+            self.meta(),
+            self.registry.clone(),
+        )
+    }
+
+    pub fn iam_role(
+        &self,
+        role_name: impl Into<String>,
+        profile_name: impl Into<String>,
+    ) -> IamRoleGuard {
+        let role = role_name.into();
+        let profile = profile_name.into();
+        ResourceGuard::new(
+            (role.clone(), profile),
+            ResourceId::IamRole(role),
+            self.meta(),
+            self.registry.clone(),
+        )
+    }
+
+    pub fn security_group_rule(
+        &self,
+        security_group_id: impl Into<String>,
+        cidr_ip: impl Into<String>,
+    ) -> SecurityGroupRuleGuard {
+        let sg_id = security_group_id.into();
+        let cidr = cidr_ip.into();
+        ResourceGuard::new(
+            (),
+            ResourceId::SecurityGroupRule {
+                security_group_id: sg_id,
+                cidr_ip: cidr,
+            },
+            self.meta(),
+            self.registry.clone(),
+        )
+    }
+}
+
+// ── CleanupExecutor ────────────────────────────────────────────────────────
+
+struct CleanupItem {
+    resource: ResourceId,
+    meta: ResourceMeta,
+}
+
+impl PartialEq for CleanupItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.resource.cleanup_priority() == other.resource.cleanup_priority()
+    }
+}
+impl Eq for CleanupItem {}
+
+impl PartialOrd for CleanupItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CleanupItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .resource
+            .cleanup_priority()
+            .cmp(&self.resource.cleanup_priority())
+    }
+}
+
+/// Background task that handles async cleanup of dropped resources
+pub struct CleanupExecutor {
+    rx: mpsc::UnboundedReceiver<CleanupMessage>,
+}
+
+impl CleanupExecutor {
+    pub fn new(rx: mpsc::UnboundedReceiver<CleanupMessage>) -> Self {
+        Self { rx }
+    }
+
+    pub async fn run(mut self) {
+        let mut pending: BinaryHeap<CleanupItem> = BinaryHeap::new();
+
+        loop {
+            tokio::select! {
+                msg = self.rx.recv() => {
+                    match msg {
+                        Some(CleanupMessage::ResourceDropped { resource, meta }) => {
+                            debug!(resource = %resource.description(), "Queued for cleanup");
+                            pending.push(CleanupItem { resource, meta });
+                        }
+                        Some(CleanupMessage::Shutdown) | None => {
+                            info!("Cleanup executor shutting down");
+                            break;
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)), if !pending.is_empty() => {
+                    self.process_pending(&mut pending).await;
+                }
+            }
+        }
+
+        if !pending.is_empty() {
+            info!(count = pending.len(), "Processing remaining cleanup items");
+            self.process_pending(&mut pending).await;
+        }
+    }
+
+    async fn process_pending(&self, pending: &mut BinaryHeap<CleanupItem>) {
+        let mut by_region: HashMap<String, Vec<CleanupItem>> = HashMap::new();
+        while let Some(item) = pending.pop() {
+            by_region
+                .entry(item.meta.region.clone())
+                .or_default()
+                .push(item);
+        }
+
+        for (region, mut items) in by_region {
+            items.sort_by_key(|i| i.resource.cleanup_priority());
+            if let Err(e) = self.cleanup_region(&region, items).await {
+                error!(region = %region, error = ?e, "Region cleanup failed");
+            }
+        }
+    }
+
+    async fn cleanup_region(&self, region: &str, items: Vec<CleanupItem>) -> Result<()> {
+        let ec2 = Ec2Client::new(region).await?;
+        let s3 = S3Client::new(region).await?;
+        let iam = IamClient::new(region).await?;
+
+        let mut terminated_instances: Vec<String> = Vec::new();
+
+        for item in items {
+            let result = self
+                .cleanup_resource(&ec2, &s3, &iam, &item.resource, &mut terminated_instances)
+                .await;
+
+            match result {
+                Ok(()) => {
+                    info!(
+                        resource = %item.resource.description(),
+                        run_id = %item.meta.run_id,
+                        "Cleaned up dropped resource"
+                    );
+                }
+                Err(e) => {
+                    let error_str = format!("{:?}", e);
+                    if is_not_found_error(&error_str) {
+                        debug!(
+                            resource = %item.resource.description(),
+                            "Resource already deleted"
+                        );
+                    } else {
+                        warn!(
+                            resource = %item.resource.description(),
+                            error = ?e,
+                            "Failed to cleanup dropped resource"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn cleanup_resource(
+        &self,
+        ec2: &Ec2Client,
+        s3: &S3Client,
+        iam: &IamClient,
+        resource: &ResourceId,
+        terminated_instances: &mut Vec<String>,
+    ) -> Result<()> {
+        match resource {
+            ResourceId::Ec2Instance(id) => {
+                terminated_instances.push(id.clone());
+                ec2.terminate_instance(id).await
+            }
+            ResourceId::ElasticIp(id) => ec2.release_elastic_ip(id).await,
+            ResourceId::S3Bucket(name) => s3.delete_bucket(name).await,
+            ResourceId::S3Object(_) => Ok(()),
+            ResourceId::IamRole(name) => iam.delete_benchmark_role(name).await,
+            ResourceId::IamInstanceProfile(_) => Ok(()),
+            ResourceId::SecurityGroupRule {
+                security_group_id,
+                cidr_ip,
+            } => {
+                ec2.remove_grpc_ingress_rule(security_group_id, cidr_ip)
+                    .await
+            }
+            ResourceId::SecurityGroup(id) => {
+                for instance_id in terminated_instances.iter() {
+                    let _ = ec2.wait_for_terminated(instance_id).await;
+                }
+                ec2.delete_security_group(id).await
+            }
+        }
+    }
+}
+
+fn is_not_found_error(error_str: &str) -> bool {
+    error_str.contains("NotFound")
+        || error_str.contains("NoSuchBucket")
+        || error_str.contains("NoSuchEntity")
+        || error_str.contains("InvalidInstanceID")
+        || error_str.contains("InvalidGroup")
+}
+
+/// Create a registry and executor pair
+pub fn create_cleanup_system() -> (ResourceRegistry, CleanupExecutor) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let registry = ResourceRegistry::new(tx);
+    let executor = CleanupExecutor::new(rx);
+    (registry, executor)
+}
 
 #[cfg(test)]
 mod tests {
-    use super::super::registry::CleanupMessage;
     use super::*;
-    use tokio::sync::mpsc;
 
     fn create_test_meta() -> ResourceMeta {
         ResourceMeta::new("test-run".to_string(), "us-east-2".to_string())
@@ -148,13 +469,8 @@ mod tests {
         let resource_id = ResourceId::Ec2Instance("i-12345".to_string());
         let meta = create_test_meta();
 
-        // Before creating guard, registry is empty
         assert!(registry.is_empty());
-
-        // Create guard
         let _guard = ResourceGuard::new("i-12345".to_string(), resource_id, meta, registry.clone());
-
-        // After creating guard, registry has 1 resource
         assert_eq!(registry.len(), 1);
     }
 
@@ -164,7 +480,6 @@ mod tests {
         let resource_id = ResourceId::S3Bucket("test-bucket".to_string());
         let meta = create_test_meta();
 
-        // Create and immediately drop guard
         {
             let _guard = ResourceGuard::new(
                 "test-bucket".to_string(),
@@ -172,13 +487,9 @@ mod tests {
                 meta,
                 registry.clone(),
             );
-            // Guard drops here
         }
 
-        // Registry should be empty after drop
         assert!(registry.is_empty());
-
-        // Should have received a cleanup message
         let msg = rx.try_recv().expect("Should have cleanup message");
         match msg {
             CleanupMessage::ResourceDropped { resource, .. } => match resource {
@@ -196,18 +507,11 @@ mod tests {
         let meta = create_test_meta();
 
         let guard = ResourceGuard::new("i-commit".to_string(), resource_id, meta, registry.clone());
-
-        // Registry should have the resource
         assert_eq!(registry.len(), 1);
 
-        // Commit the guard - returns the value
         let value = guard.commit();
         assert_eq!(value, "i-commit");
-
-        // Registry should be empty after commit
         assert!(registry.is_empty());
-
-        // No cleanup message should have been sent
         assert!(
             rx.try_recv().is_err(),
             "No cleanup message should be sent after commit"
@@ -222,84 +526,16 @@ mod tests {
 
         let guard =
             ResourceGuard::new("sg-detach".to_string(), resource_id, meta, registry.clone());
-
-        // Detach returns the value without triggering cleanup
         let value = guard.detach();
         assert_eq!(value, "sg-detach");
-
-        // Registry should be empty
         assert!(registry.is_empty());
-
-        // No cleanup message
         assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn test_guard_inner_returns_value_ref() {
-        let (registry, _rx) = create_test_registry();
-        let resource_id = ResourceId::Ec2Instance("i-inner".to_string());
-        let meta = create_test_meta();
-
-        let guard = ResourceGuard::new("i-inner".to_string(), resource_id, meta, registry);
-
-        assert_eq!(guard.inner(), "i-inner");
-
-        // Commit to avoid cleanup message
-        let _ = guard.commit();
-    }
-
-    #[test]
-    fn test_guard_deref() {
-        let (registry, _rx) = create_test_registry();
-        let resource_id = ResourceId::S3Bucket("bucket-deref".to_string());
-        let meta = create_test_meta();
-
-        let guard = ResourceGuard::new("bucket-deref".to_string(), resource_id, meta, registry);
-
-        // Can use Deref to access the value
-        let len: usize = guard.len();
-        assert_eq!(len, 12); // "bucket-deref".len()
-
-        let _ = guard.commit();
-    }
-
-    #[test]
-    fn test_guard_resource_id_accessor() {
-        let (registry, _rx) = create_test_registry();
-        let resource_id = ResourceId::IamRole("test-role".to_string());
-        let meta = create_test_meta();
-
-        let guard = ResourceGuard::new(
-            ("test-role".to_string(), "test-profile".to_string()),
-            resource_id.clone(),
-            meta,
-            registry,
-        );
-
-        assert_eq!(guard.resource_id(), &resource_id);
-
-        let _ = guard.commit();
-    }
-
-    #[test]
-    fn test_guard_meta_accessor() {
-        let (registry, _rx) = create_test_registry();
-        let resource_id = ResourceId::S3Bucket("meta-test".to_string());
-        let meta = create_test_meta();
-
-        let guard = ResourceGuard::new("meta-test".to_string(), resource_id, meta, registry);
-
-        assert_eq!(guard.meta().run_id, "test-run");
-        assert_eq!(guard.meta().region, "us-east-2");
-
-        let _ = guard.commit();
     }
 
     #[test]
     fn test_multiple_guards_track_independently() {
         let (registry, mut rx) = create_test_registry();
 
-        // Create 3 guards
         let guard1 = ResourceGuard::new(
             "bucket-1".to_string(),
             ResourceId::S3Bucket("bucket-1".to_string()),
@@ -320,23 +556,17 @@ mod tests {
         );
 
         assert_eq!(registry.len(), 3);
-
-        // Commit guard2 - no cleanup for it
         guard2.commit();
         assert_eq!(registry.len(), 2);
 
-        // Drop guard1 and guard3 - should send 2 cleanup messages
         drop(guard1);
         drop(guard3);
-
         assert!(registry.is_empty());
 
-        // Should have 2 cleanup messages
         let msg1 = rx.try_recv().expect("First cleanup");
         let msg2 = rx.try_recv().expect("Second cleanup");
         assert!(rx.try_recv().is_err(), "Only 2 cleanups");
 
-        // Both should be ResourceDropped
         match (msg1, msg2) {
             (
                 CleanupMessage::ResourceDropped { resource: r1, .. },

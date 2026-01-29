@@ -107,54 +107,40 @@ pub fn generate_ca(run_id: &str) -> Result<CertKeyPair> {
     })
 }
 
-/// Generate a server certificate for an agent, signed by the CA.
-///
-/// # Arguments
-/// * `ca_cert_pem` - The CA certificate PEM
-/// * `ca_key_pem` - The CA private key PEM
-/// * `instance_type` - Instance type for the OU field
-/// * `public_ip` - Optional public IP to add as SAN
-pub fn generate_agent_cert(
+/// Generate a signed certificate with the given parameters.
+fn generate_signed_cert(
     ca_cert_pem: &str,
     ca_key_pem: &str,
-    instance_type: &str,
-    public_ip: Option<&str>,
+    cn: &str,
+    ou: Option<&str>,
+    key_usage: ExtendedKeyUsagePurpose,
+    sans: Vec<SanType>,
 ) -> Result<CertKeyPair> {
     let issuer = parse_ca_for_signing(ca_cert_pem, ca_key_pem)?;
 
-    // Now create the agent certificate
     let mut params = CertificateParams::default();
-    params
-        .distinguished_name
-        .push(DnType::CommonName, "nix-bench-agent");
+    params.distinguished_name.push(DnType::CommonName, cn);
     params
         .distinguished_name
         .push(DnType::OrganizationName, "nix-bench");
-    params.distinguished_name.push(
-        DnType::OrganizationalUnitName,
-        format!("agent-{}", instance_type),
-    );
+    if let Some(ou) = ou {
+        params
+            .distinguished_name
+            .push(DnType::OrganizationalUnitName, ou);
+    }
 
-    // Server certificate settings
     params.is_ca = IsCa::NoCa;
     params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
         KeyUsagePurpose::KeyEncipherment,
     ];
-    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    params.extended_key_usages = vec![key_usage];
+    params.subject_alt_names = sans;
 
-    // Add SANs for connection
-    params.subject_alt_names = vec![SanType::DnsName("nix-bench-agent".try_into().unwrap())];
-    if let Some(ip) = public_ip {
-        if let Ok(ip_addr) = ip.parse() {
-            params.subject_alt_names.push(SanType::IpAddress(ip_addr));
-        }
-    }
-
-    let key_pair = KeyPair::generate().context("Failed to generate agent key pair")?;
+    let key_pair = KeyPair::generate().context("Failed to generate key pair")?;
     let cert = params
         .signed_by(&key_pair, &issuer)
-        .context("Failed to sign agent certificate")?;
+        .context("Failed to sign certificate")?;
 
     Ok(CertKeyPair {
         cert_pem: cert.pem(),
@@ -162,40 +148,40 @@ pub fn generate_agent_cert(
     })
 }
 
+/// Generate a server certificate for an agent, signed by the CA.
+pub fn generate_agent_cert(
+    ca_cert_pem: &str,
+    ca_key_pem: &str,
+    instance_type: &str,
+    public_ip: Option<&str>,
+) -> Result<CertKeyPair> {
+    let mut sans = vec![SanType::DnsName("nix-bench-agent".try_into().unwrap())];
+    if let Some(ip) = public_ip {
+        if let Ok(ip_addr) = ip.parse() {
+            sans.push(SanType::IpAddress(ip_addr));
+        }
+    }
+
+    generate_signed_cert(
+        ca_cert_pem,
+        ca_key_pem,
+        "nix-bench-agent",
+        Some(&format!("agent-{}", instance_type)),
+        ExtendedKeyUsagePurpose::ServerAuth,
+        sans,
+    )
+}
+
 /// Generate a client certificate for the coordinator, signed by the CA.
-///
-/// # Arguments
-/// * `ca_cert_pem` - The CA certificate PEM
-/// * `ca_key_pem` - The CA private key PEM
 pub fn generate_coordinator_cert(ca_cert_pem: &str, ca_key_pem: &str) -> Result<CertKeyPair> {
-    let issuer = parse_ca_for_signing(ca_cert_pem, ca_key_pem)?;
-
-    // Now create the coordinator certificate
-    let mut params = CertificateParams::default();
-    params
-        .distinguished_name
-        .push(DnType::CommonName, "nix-bench-coordinator");
-    params
-        .distinguished_name
-        .push(DnType::OrganizationName, "nix-bench");
-
-    // Client certificate settings
-    params.is_ca = IsCa::NoCa;
-    params.key_usages = vec![
-        KeyUsagePurpose::DigitalSignature,
-        KeyUsagePurpose::KeyEncipherment,
-    ];
-    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-
-    let key_pair = KeyPair::generate().context("Failed to generate coordinator key pair")?;
-    let cert = params
-        .signed_by(&key_pair, &issuer)
-        .context("Failed to sign coordinator certificate")?;
-
-    Ok(CertKeyPair {
-        cert_pem: cert.pem(),
-        key_pem: key_pair.serialize_pem(),
-    })
+    generate_signed_cert(
+        ca_cert_pem,
+        ca_key_pem,
+        "nix-bench-coordinator",
+        None,
+        ExtendedKeyUsagePurpose::ClientAuth,
+        Vec::new(),
+    )
 }
 
 #[cfg(test)]

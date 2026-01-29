@@ -26,6 +26,9 @@ uuid.workspace = true
 strum.workspace = true
 derive_more.workspace = true
 
+# Validation
+garde.workspace = true
+
 # gRPC / proto
 prost.workspace = true
 tonic.workspace = true

@@ -36,7 +36,9 @@ serde_json.workspace = true
 
 # Error handling
 anyhow.workspace = true
-thiserror.workspace = true
+
+# Validation
+garde.workspace = true
 
 # Logging
 tracing.workspace = true

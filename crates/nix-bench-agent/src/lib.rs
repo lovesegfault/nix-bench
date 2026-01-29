@@ -13,7 +13,6 @@ pub mod benchmark;
 pub mod bootstrap;
 pub(crate) mod command;
 pub mod config;
-pub mod error;
 pub mod gc;
 pub mod grpc;
 pub mod logging;

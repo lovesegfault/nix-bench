@@ -1,7 +1,7 @@
-//! Configuration loading from JSON
+//! Configuration loading and validation
 
-use crate::error::ConfigError;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+use garde::Validate;
 use nix_bench_common::TlsConfig;
 use std::fs;
 use std::path::Path;
@@ -17,83 +17,36 @@ pub fn load_config(path: &Path) -> Result<Config> {
     let config: Config = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
-    validate_config(&config)?;
+    config
+        .validate()
+        .map_err(|e| anyhow!("Config validation failed: {e}"))?;
     Ok(config)
 }
 
 /// Validate all configuration values including TLS certificates.
-pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
-    if config.run_id.is_empty() {
-        return Err(ConfigError::EmptyRunId);
-    }
-
-    if config.bucket.is_empty() {
-        return Err(ConfigError::EmptyBucket);
-    }
-
-    if config.region.is_empty() {
-        return Err(ConfigError::EmptyRegion);
-    }
-
-    if config.attr.is_empty() {
-        return Err(ConfigError::EmptyAttr);
-    }
-
-    if config.runs == 0 {
-        return Err(ConfigError::InvalidRuns(config.runs));
-    }
-
-    if config.instance_type.is_empty() {
-        return Err(ConfigError::EmptyInstanceType);
-    }
-
-    // system field is now an Architecture enum, validated at deserialization time
-    let _ = config.system; // no runtime check needed
-
-    if config.flake_ref.is_empty() {
-        return Err(ConfigError::EmptyFlakeRef);
-    }
-
-    if config.build_timeout == 0 {
-        return Err(ConfigError::InvalidBuildTimeout);
-    }
-
-    if config.max_failures == 0 {
-        return Err(ConfigError::InvalidMaxFailures);
-    }
-
-    // TLS certificates are always required for security
-    if config.ca_cert_pem.is_none() {
-        return Err(ConfigError::MissingCaCert);
-    }
-    if config.agent_cert_pem.is_none() {
-        return Err(ConfigError::MissingAgentCert);
-    }
-    if config.agent_key_pem.is_none() {
-        return Err(ConfigError::MissingAgentKey);
-    }
-
-    Ok(())
+pub fn validate_config(config: &Config) -> Result<()> {
+    config
+        .validate()
+        .map_err(|e| anyhow!("Config validation failed: {e}"))
 }
 
 /// Get TLS configuration from config (required)
 ///
 /// # Errors
 /// Returns an error if any TLS certificate is missing.
-/// This should not happen if `validate_config()` was called first.
-pub fn get_tls_config(config: &Config) -> Result<TlsConfig, ConfigError> {
+pub fn get_tls_config(config: &Config) -> Result<TlsConfig> {
     let ca = config
         .ca_cert_pem
         .as_ref()
-        .ok_or(ConfigError::MissingCaCert)?;
+        .ok_or_else(|| anyhow!("TLS is required but ca_cert_pem is not provided"))?;
     let cert = config
         .agent_cert_pem
         .as_ref()
-        .ok_or(ConfigError::MissingAgentCert)?;
+        .ok_or_else(|| anyhow!("TLS is required but agent_cert_pem is not provided"))?;
     let key = config
         .agent_key_pem
         .as_ref()
-        .ok_or(ConfigError::MissingAgentKey)?;
+        .ok_or_else(|| anyhow!("TLS is required but agent_key_pem is not provided"))?;
 
     Ok(TlsConfig {
         ca_cert_pem: ca.clone(),

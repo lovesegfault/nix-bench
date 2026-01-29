@@ -137,140 +137,13 @@ impl TagBasedCleanup {
             let mut terminated_instances: Vec<String> = Vec::new();
 
             for resource in sorted_resources {
+                // Update per-type counters
                 match resource.resource_type {
-                    ResourceKind::Ec2Instance => {
-                        report.ec2_instances += 1;
-                        if config.dry_run {
-                            info!(
-                                instance_id = %resource.resource_id,
-                                "[DRY RUN] Would terminate"
-                            );
-                            report.skipped += 1;
-                        } else {
-                            match self.ec2.terminate_instance(&resource.resource_id).await {
-                                Ok(()) => {
-                                    info!(instance_id = %resource.resource_id, "Terminated");
-                                    terminated_instances.push(resource.resource_id.clone());
-                                    report.deleted += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        instance_id = %resource.resource_id,
-                                        error = ?e,
-                                        "Failed to terminate"
-                                    );
-                                    report.failed += 1;
-                                }
-                            }
-                        }
-                    }
-                    ResourceKind::S3Bucket => {
-                        report.s3_buckets += 1;
-                        if config.dry_run {
-                            info!(bucket = %resource.resource_id, "[DRY RUN] Would delete");
-                            report.skipped += 1;
-                        } else {
-                            match self.s3.delete_bucket(&resource.resource_id).await {
-                                Ok(()) => {
-                                    info!(bucket = %resource.resource_id, "Deleted");
-                                    report.deleted += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        bucket = %resource.resource_id,
-                                        error = ?e,
-                                        "Failed to delete"
-                                    );
-                                    report.failed += 1;
-                                }
-                            }
-                        }
-                    }
-                    ResourceKind::IamRole => {
-                        report.iam_roles += 1;
-                        if config.dry_run {
-                            info!(role = %resource.resource_id, "[DRY RUN] Would delete");
-                            report.skipped += 1;
-                        } else {
-                            match self.iam.delete_benchmark_role(&resource.resource_id).await {
-                                Ok(()) => {
-                                    info!(role = %resource.resource_id, "Deleted");
-                                    report.deleted += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        role = %resource.resource_id,
-                                        error = ?e,
-                                        "Failed to delete"
-                                    );
-                                    report.failed += 1;
-                                }
-                            }
-                        }
-                    }
-                    ResourceKind::IamInstanceProfile => {
-                        report.iam_instance_profiles += 1;
-                        // Instance profiles discovered separately may be orphaned
-                        // (role was deleted but profile wasn't)
-                        if config.dry_run {
-                            info!(
-                                profile = %resource.resource_id,
-                                "[DRY RUN] Would delete orphaned instance profile"
-                            );
-                            report.skipped += 1;
-                        } else {
-                            match self
-                                .iam
-                                .delete_instance_profile(&resource.resource_id)
-                                .await
-                            {
-                                Ok(()) => {
-                                    info!(profile = %resource.resource_id, "Deleted orphaned instance profile");
-                                    report.deleted += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        profile = %resource.resource_id,
-                                        error = ?e,
-                                        "Failed to delete instance profile"
-                                    );
-                                    report.failed += 1;
-                                }
-                            }
-                        }
-                    }
-                    ResourceKind::SecurityGroup => {
-                        report.security_groups += 1;
-
-                        // Wait for instances to terminate before deleting SG
-                        if !config.dry_run && !terminated_instances.is_empty() {
-                            for instance_id in &terminated_instances {
-                                let _ = self.ec2.wait_for_terminated(instance_id).await;
-                            }
-                            terminated_instances.clear();
-                        }
-
-                        if config.dry_run {
-                            info!(sg_id = %resource.resource_id, "[DRY RUN] Would delete");
-                            report.skipped += 1;
-                        } else {
-                            match self.ec2.delete_security_group(&resource.resource_id).await {
-                                Ok(()) => {
-                                    info!(sg_id = %resource.resource_id, "Deleted");
-                                    report.deleted += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        sg_id = %resource.resource_id,
-                                        error = ?e,
-                                        "Failed to delete"
-                                    );
-                                    report.failed += 1;
-                                }
-                            }
-                        }
-                    }
-                    // These variants are tracked but not discovered by the scanner
+                    ResourceKind::Ec2Instance => report.ec2_instances += 1,
+                    ResourceKind::S3Bucket => report.s3_buckets += 1,
+                    ResourceKind::IamRole => report.iam_roles += 1,
+                    ResourceKind::IamInstanceProfile => report.iam_instance_profiles += 1,
+                    ResourceKind::SecurityGroup => report.security_groups += 1,
                     ResourceKind::S3Object
                     | ResourceKind::SecurityGroupRule
                     | ResourceKind::ElasticIp => {
@@ -279,7 +152,48 @@ impl TagBasedCleanup {
                             resource_type = ?resource.resource_type,
                             "Skipping (not discoverable)"
                         );
+                        continue;
                     }
+                }
+
+                if config.dry_run {
+                    info!(
+                        resource_type = %resource.resource_type.as_str(),
+                        resource_id = %resource.resource_id,
+                        "[DRY RUN] Would delete"
+                    );
+                    report.skipped += 1;
+                    continue;
+                }
+
+                // Security groups need instances to terminate first
+                if resource.resource_type == ResourceKind::SecurityGroup
+                    && !terminated_instances.is_empty()
+                {
+                    for instance_id in &terminated_instances {
+                        let _ = self.ec2.wait_for_terminated(instance_id).await;
+                    }
+                    terminated_instances.clear();
+                }
+
+                match delete_resource(
+                    resource.resource_type,
+                    &resource.resource_id,
+                    &self.ec2,
+                    &self.s3,
+                    &self.iam,
+                )
+                .await
+                {
+                    CleanupResult::Deleted => {
+                        if resource.resource_type == ResourceKind::Ec2Instance {
+                            terminated_instances.push(resource.resource_id.clone());
+                        }
+                        report.deleted += 1;
+                    }
+                    CleanupResult::AlreadyDeleted => report.deleted += 1,
+                    CleanupResult::Failed => report.failed += 1,
+                    CleanupResult::Skipped => report.skipped += 1,
                 }
             }
         }

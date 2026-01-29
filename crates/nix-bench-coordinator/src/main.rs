@@ -252,32 +252,22 @@ async fn handle_scan(
             .collect();
         println!("{}", serde_json::to_string_pretty(&json_resources)?);
     } else {
-        println!(
-            "{:<15} {:<25} {:<15} {:<20} {:<10}",
-            "TYPE", "ID", "RUN_ID", "CREATED_AT", "STATUS"
-        );
-        println!("{}", "-".repeat(85));
+        use comfy_table::{Table, presets::UTF8_FULL_CONDENSED};
+
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL_CONDENSED);
+        table.set_header(vec!["Type", "ID", "Run ID", "Created At", "Status"]);
+
         for r in &resources {
-            println!(
-                "{:<15} {:<25} {:<15} {:<20} {:<10}",
-                r.resource.as_str(),
-                {
-                    let id = r.resource.raw_id();
-                    if id.len() > 24 {
-                        format!("{}...", &id[..21])
-                    } else {
-                        id
-                    }
-                },
-                if r.run_id.len() > 14 {
-                    format!("{}...", &r.run_id[..11])
-                } else {
-                    r.run_id.clone()
-                },
-                r.created_at.format("%Y-%m-%d %H:%M:%S"),
-                r.status,
-            );
+            table.add_row(vec![
+                r.resource.as_str().to_string(),
+                r.resource.raw_id(),
+                r.run_id.clone(),
+                r.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+                r.status.clone(),
+            ]);
         }
+        println!("{table}");
         println!("\nTotal: {} resources", resources.len());
     }
 

@@ -87,13 +87,14 @@ impl InitContext {
     }
 }
 
-/// Initializer for benchmark runs
+/// Benchmark runner that handles initialization and provides context
+/// for both TUI and non-TUI execution modes.
 pub struct BenchmarkInitializer<'a> {
-    config: &'a RunConfig,
-    run_id: RunId,
-    bucket_name: String,
-    agent_x86_64: Option<String>,
-    agent_aarch64: Option<String>,
+    pub config: &'a RunConfig,
+    pub run_id: RunId,
+    pub bucket_name: String,
+    pub agent_x86_64: Option<String>,
+    pub agent_aarch64: Option<String>,
 }
 
 impl<'a> BenchmarkInitializer<'a> {

@@ -2,7 +2,7 @@
 //!
 //! This module contains the main benchmark execution logic for both
 //! TUI and non-TUI modes, with shared infrastructure extracted into
-//! `BenchmarkRunner`.
+//! `BenchmarkInitializer`.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 
 use super::GRPC_PORT;
 use super::cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
-use super::init::{BenchmarkInitializer, InitContext};
+use super::init::BenchmarkInitializer;
 use super::monitoring::poll_bootstrap_status;
 use super::progress::Reporter;
 use super::results::{print_results_summary, write_results};
@@ -29,47 +29,7 @@ use nix_bench_common::{RunId, StatusCode, TlsConfig};
 
 // ─── Shared Infrastructure ──────────────────────────────────────────────────
 
-/// Shared benchmark runner that encapsulates common logic between TUI and CLI modes.
-///
-/// Both `run_benchmarks_with_tui` and `run_benchmarks_no_tui` use this struct
-/// for initialization, gRPC streaming setup, and results output.
-pub struct BenchmarkRunner<'a> {
-    pub config: &'a RunConfig,
-    pub run_id: RunId,
-    pub bucket_name: String,
-    pub agent_x86_64: Option<String>,
-    pub agent_aarch64: Option<String>,
-}
-
-impl<'a> BenchmarkRunner<'a> {
-    pub fn new(
-        config: &'a RunConfig,
-        run_id: RunId,
-        bucket_name: String,
-        agent_x86_64: Option<String>,
-        agent_aarch64: Option<String>,
-    ) -> Self {
-        Self {
-            config,
-            run_id,
-            bucket_name,
-            agent_x86_64,
-            agent_aarch64,
-        }
-    }
-
-    /// Run initialization using the given progress reporter.
-    pub async fn initialize(&self, reporter: &Reporter) -> Result<InitContext> {
-        let initializer = BenchmarkInitializer::new(
-            self.config,
-            self.run_id.clone(),
-            self.bucket_name.clone(),
-            self.agent_x86_64.clone(),
-            self.agent_aarch64.clone(),
-        );
-        initializer.initialize(reporter).await
-    }
-
+impl<'a> BenchmarkInitializer<'a> {
     /// Start gRPC log streaming for instances with public IPs.
     ///
     /// If `tui_tx` is provided, logs are forwarded to the TUI channel.
@@ -312,7 +272,7 @@ pub async fn run_benchmarks_with_tui(
     }
 
     // Print results and write output
-    BenchmarkRunner::report_results(&config, run_id.as_str(), &instances).await?;
+    BenchmarkInitializer::report_results(&config, run_id.as_str(), &instances).await?;
 
     tui_result
 }
@@ -349,7 +309,7 @@ pub async fn run_init_task(params: InitTaskConfig) -> Result<InitResult> {
 
     let cancel_for_monitoring = cancel.clone();
     let reporter = Reporter::channel(tx.clone(), cancel);
-    let runner = BenchmarkRunner::new(
+    let runner = BenchmarkInitializer::new(
         &config,
         run_id.clone(),
         bucket_name,
@@ -416,7 +376,7 @@ pub async fn run_benchmarks_no_tui(
     agent_aarch64: Option<String>,
 ) -> Result<()> {
     let reporter = Reporter::Log;
-    let runner = BenchmarkRunner::new(
+    let runner = BenchmarkInitializer::new(
         &config,
         run_id.clone(),
         bucket_name.clone(),
@@ -648,7 +608,7 @@ pub async fn run_benchmarks_no_tui(
     .await?;
 
     // Print results and write output
-    BenchmarkRunner::report_results(&config, run_id.as_str(), &instances).await?;
+    BenchmarkInitializer::report_results(&config, run_id.as_str(), &instances).await?;
 
     info!("Benchmark run complete");
     Ok(())

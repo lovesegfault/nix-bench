@@ -24,10 +24,10 @@ use crate::tui::InitPhase;
 use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
 use nix_bench_common::RunId;
-use nix_bench_common::jittered_delay_25;
 use nix_bench_common::tls::{
     TlsConfig, generate_agent_cert, generate_ca, generate_coordinator_cert,
 };
+use rand::Rng;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, error, info, instrument};
@@ -287,7 +287,9 @@ impl<'a> BenchmarkInitializer<'a> {
         for (i, instance_type) in self.config.instances.instance_types.iter().enumerate() {
             // Stagger launches after the first instance to avoid thundering herd
             if i > 0 {
-                let delay = jittered_delay_25(Duration::from_millis(LAUNCH_STAGGER_MS));
+                let jitter = rand::rng().random_range(0.0..0.25);
+                let delay =
+                    Duration::from_millis((LAUNCH_STAGGER_MS as f64 * (1.0 + jitter)) as u64);
                 tokio::time::sleep(delay).await;
             }
 

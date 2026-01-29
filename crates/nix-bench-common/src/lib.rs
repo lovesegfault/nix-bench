@@ -132,25 +132,6 @@ pub fn timestamp_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// Add jitter to a duration to prevent thundering herd.
-///
-/// # Arguments
-/// * `base` - Base duration
-/// * `jitter_factor` - Jitter multiplier (0.0 to 1.0). E.g., 0.25 adds 0-25% to base.
-pub fn jittered_delay(base: std::time::Duration, jitter_factor: f64) -> std::time::Duration {
-    use rand::Rng;
-    if jitter_factor <= 0.0 {
-        return base;
-    }
-    let jitter = rand::rng().random_range(0.0..jitter_factor);
-    std::time::Duration::from_secs_f64(base.as_secs_f64() * (1.0 + jitter))
-}
-
-/// Add 0-25% jitter to a duration (standard for retry backoff).
-pub fn jittered_delay_25(base: std::time::Duration) -> std::time::Duration {
-    jittered_delay(base, 0.25)
-}
-
 /// Install the rustls ring crypto provider as the default.
 ///
 /// Must be called before any TLS operations. Panics if installation fails.

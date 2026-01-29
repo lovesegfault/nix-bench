@@ -217,24 +217,31 @@ pub fn theme() -> &'static Theme {
     THEME.get_or_init(Theme::default)
 }
 
-/// Create a themed block with focused styling
-pub fn themed_block_focused(title: &str) -> ratatui::widgets::Block<'_> {
+/// Create a themed block with focus-dependent styling
+pub fn themed_block(title: &str, focused: bool) -> ratatui::widgets::Block<'_> {
     use ratatui::widgets::{Block, Borders};
     let t = theme();
-    Block::default()
+    let mut block = Block::default()
         .title(format!(" {} ", title))
-        .borders(Borders::ALL)
-        .border_style(t.block_focused())
-        .style(ratatui::style::Style::default().bg(t.bg))
+        .borders(Borders::ALL);
+    if focused {
+        block = block
+            .border_style(t.block_focused())
+            .style(ratatui::style::Style::default().bg(t.bg));
+    } else {
+        block = block
+            .title_style(t.title_unfocused())
+            .border_style(t.block_unfocused());
+    }
+    block
+}
+
+/// Create a themed block with focused styling
+pub fn themed_block_focused(title: &str) -> ratatui::widgets::Block<'_> {
+    themed_block(title, true)
 }
 
 /// Create a themed block with unfocused styling
 pub fn themed_block_unfocused(title: &str) -> ratatui::widgets::Block<'_> {
-    use ratatui::widgets::{Block, Borders};
-    let t = theme();
-    Block::default()
-        .title(format!(" {} ", title))
-        .title_style(t.title_unfocused())
-        .borders(Borders::ALL)
-        .border_style(t.block_unfocused())
+    themed_block(title, false)
 }

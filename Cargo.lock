@@ -2341,6 +2341,7 @@ dependencies = [
 name = "nix-bench-proto"
 version = "0.1.0"
 dependencies = [
+ "nix-bench-common",
  "prost",
  "tonic",
  "tonic-prost",

@@ -99,15 +99,8 @@ impl GrpcStatusPoller {
                 let status = response.into_inner();
                 let status_code = StatusCode::from_repr(status.status_code);
 
-                let run_results: Vec<RunResult> = status
-                    .run_results
-                    .iter()
-                    .map(|r| RunResult {
-                        run_number: r.run_number,
-                        duration_secs: r.duration_secs,
-                        success: r.success,
-                    })
-                    .collect();
+                let run_results: Vec<RunResult> =
+                    status.run_results.into_iter().map(Into::into).collect();
 
                 Some((
                     instance_type.to_string(),
@@ -117,21 +110,9 @@ impl GrpcStatusPoller {
                         total_runs: Some(status.total_runs),
                         dropped_log_count: status.dropped_log_count,
                         run_results,
-                        attr: if status.attr.is_empty() {
-                            None
-                        } else {
-                            Some(status.attr)
-                        },
-                        system: if status.system.is_empty() {
-                            None
-                        } else {
-                            Some(status.system)
-                        },
-                        error_message: if status.error_message.is_empty() {
-                            None
-                        } else {
-                            Some(status.error_message)
-                        },
+                        attr: nix_bench_proto::non_empty(status.attr),
+                        system: nix_bench_proto::non_empty(status.system),
+                        error_message: nix_bench_proto::non_empty(status.error_message),
                     },
                 ))
             }

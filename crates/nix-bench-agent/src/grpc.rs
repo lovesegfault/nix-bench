@@ -230,26 +230,9 @@ impl LogStream for LogStreamService {
     ) -> Result<Response<StatusResponse>, Status> {
         let status = self.status.read().await;
 
-        // Convert StatusCode enum to proto enum
-        let proto_status_code = match status.status {
-            StatusCode::Pending => ProtoStatusCode::Pending,
-            StatusCode::Running => ProtoStatusCode::Running,
-            StatusCode::Complete => ProtoStatusCode::Complete,
-            StatusCode::Failed => ProtoStatusCode::Failed,
-            StatusCode::Bootstrap => ProtoStatusCode::Bootstrap,
-            StatusCode::Warmup => ProtoStatusCode::Warmup,
-        };
-
-        // Convert run_results to proto format
-        let run_results: Vec<ProtoRunResult> = status
-            .run_results
-            .iter()
-            .map(|r| ProtoRunResult {
-                run_number: r.run_number,
-                duration_secs: r.duration_secs,
-                success: r.success,
-            })
-            .collect();
+        let proto_status_code: ProtoStatusCode = status.status.into();
+        let run_results: Vec<ProtoRunResult> =
+            status.run_results.iter().cloned().map(Into::into).collect();
 
         Ok(Response::new(StatusResponse {
             status_code: proto_status_code.into(),

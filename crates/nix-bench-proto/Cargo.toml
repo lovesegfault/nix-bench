@@ -10,6 +10,7 @@ description = "Protocol buffer definitions for nix-bench agent-coordinator commu
 prost.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true
+nix-bench-common = { path = "../nix-bench-common" }
 
 [build-dependencies]
 tonic-prost-build.workspace = true

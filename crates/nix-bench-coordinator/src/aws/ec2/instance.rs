@@ -251,7 +251,11 @@ impl Ec2Client {
         }
     }
 
-    /// Inner wait loop without timeout, using exponential backoff (2-15s)
+    /// Inner wait loop without timeout, using exponential backoff (2-15s).
+    ///
+    /// Note: this is wrapped in `tokio::time::timeout` by `wait_for_running`,
+    /// so cancellation happens via the timeout future being dropped when
+    /// the parent `FuturesUnordered` is dropped on Ctrl+C / cancel.
     async fn wait_for_running_inner(&self, instance_id: &str) -> Result<Option<String>> {
         let mut delay = Duration::from_secs(2);
         let max_delay = Duration::from_secs(15);

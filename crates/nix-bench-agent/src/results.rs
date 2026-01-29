@@ -6,6 +6,7 @@ use crate::config::{Config, validate_config};
 use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
 use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 /// Download config from S3, polling until TLS certificates are present.
@@ -28,6 +29,7 @@ pub async fn download_config_with_tls(
     run_id: &str,
     instance_type: &str,
     timeout: Duration,
+    cancel: &CancellationToken,
 ) -> Result<Config> {
     let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .load()
@@ -76,7 +78,12 @@ pub async fn download_config_with_tls(
             }
         }
 
-        tokio::time::sleep(delay).await;
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {}
+            _ = cancel.cancelled() => {
+                anyhow::bail!("Config download cancelled");
+            }
+        }
         delay = (delay * 2).min(max_delay);
     }
 }

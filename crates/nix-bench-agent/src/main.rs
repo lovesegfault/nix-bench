@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
         &args.run_id,
         &args.instance_type,
         tls_timeout,
+        &shutdown_token,
     )
     .await
     {

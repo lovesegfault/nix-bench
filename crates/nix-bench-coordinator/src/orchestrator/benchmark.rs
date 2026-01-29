@@ -97,7 +97,7 @@ impl<'a> BenchmarkRunner<'a> {
         }
         let grpc_handles = start_log_streaming_unified(options);
 
-        // Spawn a monitor task to log any gRPC streaming errors/panics
+        // Spawn a monitor task that logs streaming errors/panics
         tokio::spawn(async move {
             for handle in grpc_handles {
                 match handle.await {

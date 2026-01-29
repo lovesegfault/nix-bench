@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 use super::types::{InstanceState, InstanceStatus};
 use crate::aws::{Ec2Client, IamClient, S3Client, classify_anyhow_error, send_ack_complete};
 use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
+use nix_bench_common::RunId;
 use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
 
 /// Request to cleanup resources
@@ -32,7 +33,7 @@ pub enum CleanupRequest {
     FullCleanup {
         region: String,
         keep: bool,
-        run_id: String,
+        run_id: RunId,
         bucket_name: String,
         instances: HashMap<String, InstanceState>,
         /// Security group ID created by nix-bench (if any)
@@ -44,11 +45,39 @@ pub enum CleanupRequest {
     },
 }
 
-/// Helper to send cleanup progress to TUI
-async fn send_cleanup_progress(tx: &mpsc::Sender<TuiMessage>, progress: CleanupProgress) {
-    let _ = tx
-        .send(TuiMessage::Phase(InitPhase::CleaningUp(progress)))
-        .await;
+/// Reporter for cleanup progress updates.
+///
+/// Matches the `InitProgressReporter` pattern from `orchestrator/progress.rs`.
+pub trait CleanupReporter: Send + Sync {
+    fn report_progress(&self, progress: &CleanupProgress);
+}
+
+/// Reports cleanup progress via TUI channel.
+pub struct ChannelCleanupReporter {
+    tx: mpsc::Sender<TuiMessage>,
+}
+
+impl ChannelCleanupReporter {
+    pub fn new(tx: mpsc::Sender<TuiMessage>) -> Self {
+        Self { tx }
+    }
+}
+
+impl CleanupReporter for ChannelCleanupReporter {
+    fn report_progress(&self, progress: &CleanupProgress) {
+        let _ = self
+            .tx
+            .try_send(TuiMessage::Phase(InitPhase::CleaningUp(progress.clone())));
+    }
+}
+
+/// Reports cleanup progress via tracing logs (for non-TUI mode).
+pub struct LogCleanupReporter;
+
+impl CleanupReporter for LogCleanupReporter {
+    fn report_progress(&self, progress: &CleanupProgress) {
+        info!(step = %progress.current_step, "Cleanup progress");
+    }
 }
 
 /// Unified cleanup executor that handles all cleanup requests
@@ -63,7 +92,7 @@ pub async fn cleanup_executor(
     mut rx: mpsc::Receiver<CleanupRequest>,
     region: String,
     tx: mpsc::Sender<TuiMessage>,
-    run_id: String,
+    run_id: RunId,
     tls_config: Option<nix_bench_common::TlsConfig>,
 ) {
     let ec2 = match Ec2Client::new(&region).await {
@@ -89,7 +118,7 @@ pub async fn cleanup_executor(
 
                 // Send ack to agent before terminating so it can shut down cleanly
                 if let (Some(ip), Some(tls)) = (&public_ip, &tls_config) {
-                    send_ack_complete(ip, DEFAULT_GRPC_PORT, &run_id, tls).await;
+                    send_ack_complete(ip, DEFAULT_GRPC_PORT, run_id.as_str(), tls).await;
                 }
 
                 match ec2.terminate_instance(&instance_id).await {
@@ -138,16 +167,17 @@ pub async fn cleanup_executor(
             } => {
                 info!("Starting full cleanup");
 
-                if let Err(e) = do_full_cleanup(
-                    &cleanup_region,
+                let reporter = ChannelCleanupReporter::new(tx.clone());
+                if let Err(e) = do_full_cleanup(FullCleanupConfig {
+                    region: &cleanup_region,
                     keep,
-                    &bucket_name,
-                    &instances,
-                    security_group_id.as_deref(),
-                    iam_role_name.as_deref(),
-                    &sg_rules,
-                    &tx,
-                )
+                    bucket_name: &bucket_name,
+                    instances: &instances,
+                    security_group_id: security_group_id.as_deref(),
+                    iam_role_name: iam_role_name.as_deref(),
+                    sg_rules: &sg_rules,
+                    reporter: &reporter,
+                })
                 .await
                 {
                     warn!(error = ?e, "Full cleanup failed");
@@ -165,17 +195,30 @@ pub async fn cleanup_executor(
 /// Perform full cleanup of all resources for a run
 ///
 /// Uses in-memory resource tracking (no database) to determine what to clean up.
-#[allow(clippy::too_many_arguments)]
-async fn do_full_cleanup(
-    region: &str,
+/// Parameters for a full cleanup operation.
+struct FullCleanupConfig<'a> {
+    region: &'a str,
     keep: bool,
-    bucket_name: &str,
-    instances: &HashMap<String, InstanceState>,
-    security_group_id: Option<&str>,
-    iam_role_name: Option<&str>,
-    sg_rules: &[String],
-    tx: &mpsc::Sender<TuiMessage>,
-) -> Result<()> {
+    bucket_name: &'a str,
+    instances: &'a HashMap<String, InstanceState>,
+    security_group_id: Option<&'a str>,
+    iam_role_name: Option<&'a str>,
+    sg_rules: &'a [String],
+    reporter: &'a dyn CleanupReporter,
+}
+
+async fn do_full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
+    let FullCleanupConfig {
+        region,
+        keep,
+        bucket_name,
+        instances,
+        security_group_id,
+        iam_role_name,
+        sg_rules,
+        reporter,
+    } = params;
+
     let ec2 = Ec2Client::new(region).await?;
     let s3 = S3Client::new(region).await?;
 
@@ -198,7 +241,7 @@ async fn do_full_cleanup(
         // Terminate EC2 instances in batch
         info!(count = instance_ids.len(), "Terminating instances...");
         progress.current_step = format!("Terminating {} EC2 instances...", instance_ids.len());
-        send_cleanup_progress(tx, progress.clone()).await;
+        reporter.report_progress(&progress);
 
         if !instance_ids.is_empty() {
             if let Err(e) = ec2.terminate_instances(&instance_ids).await {
@@ -206,38 +249,38 @@ async fn do_full_cleanup(
             }
         }
         progress.ec2_instances.0 = instance_ids.len();
-        send_cleanup_progress(tx, progress.clone()).await;
+        reporter.report_progress(&progress);
 
         // Delete S3 bucket
         info!("Deleting S3 bucket...");
         progress.current_step = "Deleting S3 bucket...".to_string();
-        send_cleanup_progress(tx, progress.clone()).await;
+        reporter.report_progress(&progress);
 
         if let Err(e) = s3.delete_bucket(bucket_name).await {
             warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
         }
         progress.s3_bucket = true;
-        send_cleanup_progress(tx, progress.clone()).await;
+        reporter.report_progress(&progress);
 
         // Delete IAM resources
         if let Some(role_name) = iam_role_name {
             info!("Deleting IAM resources...");
             progress.current_step = "Deleting IAM role...".to_string();
-            send_cleanup_progress(tx, progress.clone()).await;
+            reporter.report_progress(&progress);
 
             let iam = IamClient::new(region).await?;
             if let Err(e) = iam.delete_benchmark_role(role_name).await {
                 warn!(role = %role_name, error = ?e, "Failed to delete IAM role");
             }
             progress.iam_roles.0 += 1;
-            send_cleanup_progress(tx, progress.clone()).await;
+            reporter.report_progress(&progress);
         }
 
         // Delete security group rules (for user-provided security groups)
         if !sg_rules.is_empty() {
             info!(count = sg_rules.len(), "Removing security group rules...");
             progress.current_step = format!("Removing {} security group rules...", sg_rules.len());
-            send_cleanup_progress(tx, progress.clone()).await;
+            reporter.report_progress(&progress);
 
             for rule in sg_rules {
                 if let Some((sg_id, cidr_ip)) = rule.split_once(':') {
@@ -246,7 +289,7 @@ async fn do_full_cleanup(
                     }
                 }
                 progress.security_rules.0 += 1;
-                send_cleanup_progress(tx, progress.clone()).await;
+                reporter.report_progress(&progress);
             }
         }
 
@@ -256,14 +299,14 @@ async fn do_full_cleanup(
             if !instance_ids.is_empty() {
                 info!("Waiting for instances to fully terminate before deleting security group...");
                 progress.current_step = "Waiting for instances to terminate...".to_string();
-                send_cleanup_progress(tx, progress.clone()).await;
+                reporter.report_progress(&progress);
 
                 ec2.wait_for_all_terminated(&instance_ids).await?;
             }
 
             info!("Deleting security group...");
             progress.current_step = "Deleting security group...".to_string();
-            send_cleanup_progress(tx, progress.clone()).await;
+            reporter.report_progress(&progress);
 
             if let Err(e) = ec2.delete_security_group(sg_id).await {
                 warn!(sg_id = %sg_id, error = ?e, "Failed to delete security group");
@@ -272,7 +315,7 @@ async fn do_full_cleanup(
 
         // Final progress update
         progress.current_step = "Cleanup complete".to_string();
-        send_cleanup_progress(tx, progress).await;
+        reporter.report_progress(&progress);
     } else {
         info!("Keeping instances, bucket, and IAM resources (--keep specified)");
     }
@@ -280,10 +323,9 @@ async fn do_full_cleanup(
     Ok(())
 }
 
-/// Direct cleanup function for non-TUI mode
+/// Direct cleanup function for non-TUI mode.
 ///
-/// This is a simpler entry point that doesn't require setting up channels.
-/// Progress updates are logged instead of sent to a TUI.
+/// Progress updates are logged via tracing instead of sent to a TUI channel.
 pub async fn cleanup_resources_no_tui(
     config: &crate::config::RunConfig,
     _run_id: &str,
@@ -293,18 +335,17 @@ pub async fn cleanup_resources_no_tui(
     iam_role_name: Option<&str>,
     sg_rules: &[String],
 ) -> Result<()> {
-    // Create a dummy channel that we won't actually use
-    let (tx, _rx) = mpsc::channel::<TuiMessage>(1);
+    let reporter = LogCleanupReporter;
 
-    do_full_cleanup(
-        &config.aws.region,
-        config.flags.keep,
+    do_full_cleanup(FullCleanupConfig {
+        region: &config.aws.region,
+        keep: config.flags.keep,
         bucket_name,
         instances,
         security_group_id,
         iam_role_name,
         sg_rules,
-        &tx,
-    )
+        reporter: &reporter,
+    })
     .await
 }

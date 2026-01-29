@@ -16,7 +16,10 @@ pub mod progress;
 pub mod types;
 
 // Re-export core types
-pub use cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
+pub use cleanup::{
+    ChannelCleanupReporter, CleanupReporter, CleanupRequest, LogCleanupReporter, cleanup_executor,
+    cleanup_resources_no_tui,
+};
 pub use init::{BenchmarkInitializer, InitContext};
 pub use progress::{ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter};
 pub use types::{InstanceState, InstanceStatus};
@@ -134,7 +137,7 @@ pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) 
     }
 
     // Generate run ID (UUIDv7)
-    let run_id = RunId::new().to_string();
+    let run_id = RunId::new();
     let bucket_name = format!("nix-bench-{}", run_id);
 
     // For TUI mode, start TUI immediately and run init in background

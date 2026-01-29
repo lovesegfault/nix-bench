@@ -25,7 +25,7 @@ use crate::aws::{
 };
 use crate::config::RunConfig;
 use crate::tui::{self, InitPhase, LogCapture, TuiMessage};
-use nix_bench_common::{StatusCode, TlsConfig};
+use nix_bench_common::{RunId, StatusCode, TlsConfig};
 
 // ─── Shared Infrastructure ──────────────────────────────────────────────────
 
@@ -35,7 +35,7 @@ use nix_bench_common::{StatusCode, TlsConfig};
 /// for initialization, gRPC streaming setup, and results output.
 pub struct BenchmarkRunner<'a> {
     pub config: &'a RunConfig,
-    pub run_id: String,
+    pub run_id: RunId,
     pub bucket_name: String,
     pub agent_x86_64: Option<String>,
     pub agent_aarch64: Option<String>,
@@ -44,7 +44,7 @@ pub struct BenchmarkRunner<'a> {
 impl<'a> BenchmarkRunner<'a> {
     pub fn new(
         config: &'a RunConfig,
-        run_id: String,
+        run_id: RunId,
         bucket_name: String,
         agent_x86_64: Option<String>,
         agent_aarch64: Option<String>,
@@ -90,8 +90,12 @@ impl<'a> BenchmarkRunner<'a> {
             "Starting gRPC log streaming with mTLS"
         );
 
-        let mut options =
-            LogStreamingOptions::new(instances_with_ips, &self.run_id, GRPC_PORT, tls_config);
+        let mut options = LogStreamingOptions::new(
+            instances_with_ips,
+            self.run_id.as_str(),
+            GRPC_PORT,
+            tls_config,
+        );
         if let Some(tx) = tui_tx {
             options = options.with_channel(tx);
         }
@@ -143,19 +147,6 @@ impl<'a> BenchmarkRunner<'a> {
         });
     }
 
-    /// Extract instance IP pairs from the context.
-    pub fn instances_with_ips(ctx: &InitContext) -> Vec<(String, String)> {
-        ctx.instances
-            .iter()
-            .filter_map(|(instance_type, state)| {
-                state
-                    .public_ip
-                    .as_ref()
-                    .map(|ip| (instance_type.clone(), ip.clone()))
-            })
-            .collect()
-    }
-
     /// Print results and write output file.
     pub async fn report_results(
         config: &RunConfig,
@@ -172,7 +163,7 @@ impl<'a> BenchmarkRunner<'a> {
 /// Run benchmarks with TUI - starts TUI immediately, runs init in background
 pub async fn run_benchmarks_with_tui(
     config: RunConfig,
-    run_id: String,
+    run_id: RunId,
     bucket_name: String,
     agent_x86_64: Option<String>,
     agent_aarch64: Option<String>,
@@ -222,16 +213,16 @@ pub async fn run_benchmarks_with_tui(
 
     // Spawn background initialization task
     let init_handle = tokio::spawn(async move {
-        run_init_task(
-            config_clone,
-            run_id_clone,
-            bucket_name_clone,
+        run_init_task(InitTaskConfig {
+            config: config_clone,
+            run_id: run_id_clone,
+            bucket_name: bucket_name_clone,
             agent_x86_64,
             agent_aarch64,
-            tx_clone,
-            cancel_for_init,
+            tx: tx_clone,
+            cancel: cancel_for_init,
             cleanup_rx,
-        )
+        })
         .await
     });
 
@@ -321,7 +312,7 @@ pub async fn run_benchmarks_with_tui(
     }
 
     // Print results and write output
-    BenchmarkRunner::report_results(&config, &run_id, &instances).await?;
+    BenchmarkRunner::report_results(&config, run_id.as_str(), &instances).await?;
 
     tui_result
 }
@@ -331,18 +322,31 @@ pub struct InitResult {
     pub cleanup_handle: tokio::task::JoinHandle<()>,
 }
 
+/// Parameters for the background initialization task.
+pub struct InitTaskConfig {
+    pub config: RunConfig,
+    pub run_id: RunId,
+    pub bucket_name: String,
+    pub agent_x86_64: Option<String>,
+    pub agent_aarch64: Option<String>,
+    pub tx: mpsc::Sender<TuiMessage>,
+    pub cancel: CancellationToken,
+    pub cleanup_rx: mpsc::Receiver<CleanupRequest>,
+}
+
 /// Background task that runs initialization and sends updates to TUI
-#[allow(clippy::too_many_arguments)]
-pub async fn run_init_task(
-    config: RunConfig,
-    run_id: String,
-    bucket_name: String,
-    agent_x86_64: Option<String>,
-    agent_aarch64: Option<String>,
-    tx: mpsc::Sender<TuiMessage>,
-    cancel: CancellationToken,
-    cleanup_rx: mpsc::Receiver<CleanupRequest>,
-) -> Result<InitResult> {
+pub async fn run_init_task(params: InitTaskConfig) -> Result<InitResult> {
+    let InitTaskConfig {
+        config,
+        run_id,
+        bucket_name,
+        agent_x86_64,
+        agent_aarch64,
+        tx,
+        cancel,
+        cleanup_rx,
+    } = params;
+
     let cancel_for_monitoring = cancel.clone();
     let reporter = ChannelReporter::new(tx.clone(), cancel);
     let runner = BenchmarkRunner::new(
@@ -356,7 +360,7 @@ pub async fn run_init_task(
     let ctx = runner.initialize(&reporter).await?;
 
     // Extract IP pairs before moving fields out of ctx
-    let instances_with_ips = BenchmarkRunner::instances_with_ips(&ctx);
+    let instances_with_ips = ctx.instances_with_ips();
     let instances = ctx.instances;
     let coordinator_tls_config = ctx.coordinator_tls_config;
 
@@ -406,7 +410,7 @@ pub async fn run_init_task(
 /// Run benchmarks without TUI (--no-tui mode)
 pub async fn run_benchmarks_no_tui(
     config: RunConfig,
-    run_id: String,
+    run_id: RunId,
     bucket_name: String,
     agent_x86_64: Option<String>,
     agent_aarch64: Option<String>,
@@ -423,7 +427,7 @@ pub async fn run_benchmarks_no_tui(
     let ctx = runner.initialize(&reporter).await?;
 
     // Extract IP pairs before moving fields out of ctx
-    let instances_with_ips = BenchmarkRunner::instances_with_ips(&ctx);
+    let instances_with_ips = ctx.instances_with_ips();
 
     // Extract what we need from the context
     let mut instances = ctx.instances;
@@ -547,7 +551,8 @@ pub async fn run_benchmarks_no_tui(
                 {
                     if let Some(ip) = &state.public_ip {
                         acked_instances.insert(instance_type.clone());
-                        send_ack_complete(ip, GRPC_PORT, &run_id, &coordinator_tls_config).await;
+                        send_ack_complete(ip, GRPC_PORT, run_id.as_str(), &coordinator_tls_config)
+                            .await;
                     }
                 }
             } else {
@@ -638,7 +643,7 @@ pub async fn run_benchmarks_no_tui(
     // Cleanup
     cleanup_resources_no_tui(
         &config,
-        &run_id,
+        run_id.as_str(),
         &bucket_name,
         &instances,
         security_group_id.as_deref(),
@@ -648,7 +653,7 @@ pub async fn run_benchmarks_no_tui(
     .await?;
 
     // Print results and write output
-    BenchmarkRunner::report_results(&config, &run_id, &instances).await?;
+    BenchmarkRunner::report_results(&config, run_id.as_str(), &instances).await?;
 
     info!("Benchmark run complete");
     Ok(())

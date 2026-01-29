@@ -23,6 +23,7 @@ use crate::log_buffer::LogBuffer;
 use crate::tui::InitPhase;
 use anyhow::{Context, Result};
 use futures::stream::{FuturesUnordered, StreamExt};
+use nix_bench_common::RunId;
 use nix_bench_common::jittered_delay_25;
 use nix_bench_common::tls::{
     TlsConfig, generate_agent_cert, generate_ca, generate_coordinator_cert,
@@ -49,7 +50,7 @@ struct InitServices<'a> {
 
 /// Context holding all resources created during initialization
 pub struct InitContext {
-    pub run_id: String,
+    pub run_id: RunId,
     pub bucket_name: String,
     pub account_id: AccountId,
     pub region: String,
@@ -89,7 +90,7 @@ impl InitContext {
 /// Initializer for benchmark runs
 pub struct BenchmarkInitializer<'a> {
     config: &'a RunConfig,
-    run_id: String,
+    run_id: RunId,
     bucket_name: String,
     agent_x86_64: Option<String>,
     agent_aarch64: Option<String>,
@@ -98,7 +99,7 @@ pub struct BenchmarkInitializer<'a> {
 impl<'a> BenchmarkInitializer<'a> {
     pub fn new(
         config: &'a RunConfig,
-        run_id: String,
+        run_id: RunId,
         bucket_name: String,
         agent_x86_64: Option<String>,
         agent_aarch64: Option<String>,
@@ -115,7 +116,7 @@ impl<'a> BenchmarkInitializer<'a> {
     #[instrument(skip_all, fields(run_id = %self.run_id, bucket = %self.bucket_name))]
     pub async fn initialize<R: InitProgressReporter>(&self, reporter: &R) -> Result<InitContext> {
         reporter.report_phase(InitPhase::Starting);
-        reporter.report_run_info(&self.run_id, &self.bucket_name);
+        reporter.report_run_info(self.run_id.as_str(), &self.bucket_name);
         info!(run_id = %self.run_id, bucket = %self.bucket_name, "Starting benchmark run");
 
         // Phase 1: AWS setup
@@ -134,8 +135,11 @@ impl<'a> BenchmarkInitializer<'a> {
         // Create the cleanup system for RAII resource protection
         let (registry, executor) = create_cleanup_system();
         let executor_handle = tokio::spawn(executor.run());
-        let builder =
-            ResourceGuardBuilder::new(registry.clone(), &self.run_id, &self.config.aws.region);
+        let builder = ResourceGuardBuilder::new(
+            registry.clone(),
+            self.run_id.as_str(),
+            &self.config.aws.region,
+        );
 
         // Track all guards so they aren't dropped until we're done
         let mut guards = ResourceGuards::default();
@@ -143,7 +147,8 @@ impl<'a> BenchmarkInitializer<'a> {
         // Phase 2: Create S3 bucket and apply tags
         reporter.report_phase(InitPhase::CreatingBucket);
         s3.create_bucket(&self.bucket_name).await?;
-        s3.tag_bucket(&self.bucket_name, &self.run_id).await?;
+        s3.tag_bucket(&self.bucket_name, self.run_id.as_str())
+            .await?;
         guards.s3_bucket = Some(builder.s3_bucket(self.bucket_name.clone()));
         debug!(bucket = %self.bucket_name, "S3 bucket created");
 
@@ -154,7 +159,7 @@ impl<'a> BenchmarkInitializer<'a> {
             reporter.report_phase(InitPhase::CreatingIamRole);
             let iam = IamClient::from_context(&aws);
             let (role_name, profile_name) = iam
-                .create_benchmark_role(&self.run_id, &self.bucket_name, None)
+                .create_benchmark_role(self.run_id.as_str(), &self.bucket_name, None)
                 .await?;
             guards.iam_role = Some(builder.iam_role(role_name.clone(), profile_name.clone()));
             debug!(role = %role_name, profile = %profile_name, "IAM role/profile created");
@@ -261,7 +266,7 @@ impl<'a> BenchmarkInitializer<'a> {
             // Create new security group
             match svc
                 .ec2
-                .create_security_group(&self.run_id, &format!("{}/32", ip), None)
+                .create_security_group(self.run_id.as_str(), &format!("{}/32", ip), None)
                 .await
             {
                 Ok(sg_id) => {
@@ -300,11 +305,11 @@ impl<'a> BenchmarkInitializer<'a> {
             let system = detect_system(instance_type);
             let user_data = super::user_data::generate_user_data(
                 &self.bucket_name,
-                &self.run_id,
+                self.run_id.as_str(),
                 instance_type,
             );
             let mut launch_config =
-                LaunchInstanceConfig::new(&self.run_id, instance_type, system, &user_data);
+                LaunchInstanceConfig::new(self.run_id.as_str(), instance_type, system, &user_data);
             if let Some(subnet) = &self.config.aws.subnet_id {
                 launch_config = launch_config.with_subnet(subnet);
             }
@@ -339,7 +344,6 @@ impl<'a> BenchmarkInitializer<'a> {
                             total_runs: self.config.benchmark.runs,
                             public_ip: None,
                             console_output: LogBuffer::default(),
-                            cached_durations: Vec::new(),
                         },
                     );
                 }
@@ -387,7 +391,7 @@ impl<'a> BenchmarkInitializer<'a> {
             anyhow::bail!("No public IPs available - cannot generate TLS certificates");
         }
 
-        let ca = generate_ca(&self.run_id)?;
+        let ca = generate_ca(self.run_id.as_str())?;
         let coordinator_cert = generate_coordinator_cert(&ca.cert_pem, &ca.key_pem)?;
         let coordinator_tls = TlsConfig {
             ca_cert_pem: ca.cert_pem.clone(),
@@ -446,7 +450,7 @@ impl<'a> BenchmarkInitializer<'a> {
                 .unwrap_or((None, None, None));
 
             let agent_config = AgentConfig {
-                run_id: self.run_id.clone(),
+                run_id: self.run_id.to_string(),
                 bucket: self.bucket_name.clone(),
                 region: self.config.aws.region.clone(),
                 attr: self.config.benchmark.attr.clone(),

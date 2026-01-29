@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/nix-bench-proto",
     "crates/nix-bench-common",
     "crates/nix-bench-agent",
     "crates/nix-bench-coordinator",

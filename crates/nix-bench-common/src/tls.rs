@@ -38,7 +38,7 @@ pub struct TlsConfig {
 
 impl TlsConfig {
     /// Create a tonic Identity from the cert/key pair
-    #[cfg(feature = "tonic-tls")]
+
     pub fn identity(&self) -> Result<tonic::transport::Identity> {
         Ok(tonic::transport::Identity::from_pem(
             self.cert_pem.as_bytes(),
@@ -47,7 +47,7 @@ impl TlsConfig {
     }
 
     /// Create a tonic Certificate from the CA cert
-    #[cfg(feature = "tonic-tls")]
+
     pub fn ca_certificate(&self) -> Result<tonic::transport::Certificate> {
         Ok(tonic::transport::Certificate::from_pem(
             self.ca_cert_pem.as_bytes(),
@@ -55,7 +55,7 @@ impl TlsConfig {
     }
 
     /// Configure a tonic server with TLS (for agent)
-    #[cfg(feature = "tonic-tls")]
+
     pub fn server_tls_config(&self) -> Result<tonic::transport::ServerTlsConfig> {
         let identity = self.identity()?;
         let ca_cert = self.ca_certificate()?;
@@ -66,7 +66,7 @@ impl TlsConfig {
     }
 
     /// Configure a tonic client with TLS (for coordinator)
-    #[cfg(feature = "tonic-tls")]
+
     pub fn client_tls_config(&self) -> Result<tonic::transport::ClientTlsConfig> {
         let identity = self.identity()?;
         let ca_cert = self.ca_certificate()?;

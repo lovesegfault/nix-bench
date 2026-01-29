@@ -6,7 +6,7 @@ use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
 use backon::{ExponentialBuilder, Retryable};
 use nix_bench_common::TlsConfig;
-use nix_bench_proto::{LogStreamClient, StatusRequest, StreamLogsRequest};
+use nix_bench_common::proto::{LogStreamClient, StatusRequest, StreamLogsRequest};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -215,7 +215,7 @@ impl GrpcLogClient {
     /// each received log entry. If `on_entry` returns `false`, streaming stops.
     async fn stream_logs_with<F, Fut>(&self, on_entry: F) -> Result<()>
     where
-        F: Fn(nix_bench_proto::LogEntry) -> Fut,
+        F: Fn(nix_bench_common::proto::LogEntry) -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
         let mut client = self

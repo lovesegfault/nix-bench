@@ -1,12 +1,12 @@
 //! gRPC server for real-time log streaming
 
 use anyhow::Result;
-use nix_bench_common::{Architecture, RunResult, TlsConfig};
-use nix_bench_proto::{
+use nix_bench_common::proto::{
     AckCompleteRequest, AckCompleteResponse, CancelBenchmarkRequest, CancelBenchmarkResponse,
     LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult,
     StatusCode as ProtoStatusCode, StatusRequest, StatusResponse, StreamLogsRequest,
 };
+use nix_bench_common::{Architecture, RunResult, TlsConfig};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;

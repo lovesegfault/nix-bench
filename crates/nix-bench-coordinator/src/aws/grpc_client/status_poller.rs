@@ -2,8 +2,8 @@
 
 use super::channel::{ChannelOptions, GrpcChannelBuilder};
 use futures::future::join_all;
+use nix_bench_common::proto::LogStreamClient;
 use nix_bench_common::{RunResult, StatusCode, TlsConfig};
-use nix_bench_proto::LogStreamClient;
 use std::collections::HashMap;
 use tracing::debug;
 
@@ -94,7 +94,10 @@ impl GrpcStatusPoller {
         };
 
         let mut client = LogStreamClient::new(channel);
-        match client.get_status(nix_bench_proto::StatusRequest {}).await {
+        match client
+            .get_status(nix_bench_common::proto::StatusRequest {})
+            .await
+        {
             Ok(response) => {
                 let status = response.into_inner();
                 let status_code = StatusCode::from_repr(status.status_code);
@@ -110,9 +113,9 @@ impl GrpcStatusPoller {
                         total_runs: Some(status.total_runs),
                         dropped_log_count: status.dropped_log_count,
                         run_results,
-                        attr: nix_bench_proto::non_empty(status.attr),
-                        system: nix_bench_proto::non_empty(status.system),
-                        error_message: nix_bench_proto::non_empty(status.error_message),
+                        attr: nix_bench_common::proto::non_empty(status.attr),
+                        system: nix_bench_common::proto::non_empty(status.system),
+                        error_message: nix_bench_common::proto::non_empty(status.error_message),
                     },
                 ))
             }
@@ -150,7 +153,7 @@ pub async fn send_ack_complete(ip: &str, port: u16, run_id: &str, tls_config: &T
     };
 
     let mut client = LogStreamClient::new(channel);
-    let request = nix_bench_proto::AckCompleteRequest {
+    let request = nix_bench_common::proto::AckCompleteRequest {
         run_id: run_id.to_string(),
     };
 

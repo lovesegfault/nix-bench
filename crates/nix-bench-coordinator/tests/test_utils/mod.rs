@@ -1,11 +1,11 @@
 //! Shared test utilities for integration tests
 
 use nix_bench_agent::grpc::{AgentStatus, LogBroadcaster, LogStreamService};
+use nix_bench_common::proto::LogStreamServer;
 use nix_bench_common::tls::{
     TlsConfig, generate_agent_cert, generate_ca, generate_coordinator_cert,
 };
 use nix_bench_coordinator::aws::wait_for_tcp_ready;
-use nix_bench_proto::LogStreamServer;
 use std::net::SocketAddr;
 use std::sync::{Arc, Once};
 use std::time::Duration;

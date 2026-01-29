@@ -1,14 +1,14 @@
 //! Protocol buffer definitions for nix-bench.
 //!
-//! This crate contains the gRPC service definitions and message types
-//! for communication between the coordinator and agent.
+//! Contains gRPC service definitions and message types for communication
+//! between the coordinator and agent.
 
 /// Generated protobuf types and gRPC service definitions.
 pub mod nix_bench {
     tonic::include_proto!("nix_bench");
 }
 
-// Re-export commonly used types at crate root for convenience
+// Re-export commonly used types at module root for convenience
 
 // gRPC server types (used by agent)
 pub use nix_bench::log_stream_server::{LogStream, LogStreamServer};
@@ -24,21 +24,21 @@ pub use nix_bench::{
 
 // --- Proto <-> Domain type conversions ---
 
-impl From<nix_bench_common::StatusCode> for StatusCode {
-    fn from(s: nix_bench_common::StatusCode) -> Self {
+impl From<crate::StatusCode> for StatusCode {
+    fn from(s: crate::StatusCode) -> Self {
         match s {
-            nix_bench_common::StatusCode::Pending => StatusCode::Pending,
-            nix_bench_common::StatusCode::Running => StatusCode::Running,
-            nix_bench_common::StatusCode::Complete => StatusCode::Complete,
-            nix_bench_common::StatusCode::Failed => StatusCode::Failed,
-            nix_bench_common::StatusCode::Bootstrap => StatusCode::Bootstrap,
-            nix_bench_common::StatusCode::Warmup => StatusCode::Warmup,
+            crate::StatusCode::Pending => StatusCode::Pending,
+            crate::StatusCode::Running => StatusCode::Running,
+            crate::StatusCode::Complete => StatusCode::Complete,
+            crate::StatusCode::Failed => StatusCode::Failed,
+            crate::StatusCode::Bootstrap => StatusCode::Bootstrap,
+            crate::StatusCode::Warmup => StatusCode::Warmup,
         }
     }
 }
 
-impl From<nix_bench_common::RunResult> for RunResult {
-    fn from(r: nix_bench_common::RunResult) -> Self {
+impl From<crate::RunResult> for RunResult {
+    fn from(r: crate::RunResult) -> Self {
         RunResult {
             run_number: r.run_number,
             duration_secs: r.duration_secs,
@@ -47,9 +47,9 @@ impl From<nix_bench_common::RunResult> for RunResult {
     }
 }
 
-impl From<RunResult> for nix_bench_common::RunResult {
+impl From<RunResult> for crate::RunResult {
     fn from(r: RunResult) -> Self {
-        nix_bench_common::RunResult {
+        crate::RunResult {
             run_number: r.run_number,
             duration_secs: r.duration_secs,
             success: r.success,

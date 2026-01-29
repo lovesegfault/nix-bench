@@ -14,6 +14,7 @@
 
 pub mod agent_config;
 pub mod defaults;
+pub mod proto;
 pub mod run_result;
 pub mod stats;
 pub mod status;

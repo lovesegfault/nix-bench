@@ -7,9 +7,9 @@ mod test_utils;
 
 use nix_bench_agent::grpc::{AgentStatus, LogBroadcaster, LogStreamService, StatusCode};
 use nix_bench_common::RunResult;
+use nix_bench_common::proto::LogStreamServer;
 use nix_bench_coordinator::aws::{GrpcLogClient, GrpcStatusPoller};
 use nix_bench_coordinator::tui::TuiMessage;
-use nix_bench_proto::LogStreamServer;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

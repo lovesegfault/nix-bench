@@ -519,23 +519,7 @@ pub async fn run_benchmarks_no_tui(
     // Track which instances we've sent ack to
     let mut acked_instances: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Print header
-    println!("\n=== nix-bench-ec2 ===");
-    println!("Run ID: {}", run_id);
-    println!("Instances: {}", config.instances.instance_types.join(", "));
-    println!(
-        "Benchmark: {} ({} runs each)",
-        config.benchmark.attr, config.benchmark.runs
-    );
-    if config.flags.timeout > 0 {
-        println!("Timeout: {}s", config.flags.timeout);
-    }
-    if has_streaming {
-        println!("Log streaming: gRPC (real-time)");
-    } else {
-        println!("Log streaming: unavailable (no instances with public IPs)");
-    }
-    println!("Started: {}\n", start_time.format("%Y-%m-%d %H:%M:%S UTC"));
+    print_no_tui_header(&config, &run_id, has_streaming, start_time);
 
     // Polling loop
     loop {
@@ -543,7 +527,7 @@ pub async fn run_benchmarks_no_tui(
         let elapsed_secs = start_instant.elapsed().as_secs();
         if config.flags.timeout > 0 && elapsed_secs > config.flags.timeout {
             warn!(
-                elapsed_secs = elapsed_secs,
+                elapsed_secs,
                 timeout = config.flags.timeout,
                 "Run timeout exceeded"
             );
@@ -568,47 +552,7 @@ pub async fn run_benchmarks_no_tui(
         )
         .await;
 
-        // Print progress update
-        let elapsed = chrono::Utc::now() - start_time;
-        let elapsed_str = format!(
-            "{:02}:{:02}:{:02}",
-            elapsed.num_hours(),
-            elapsed.num_minutes() % 60,
-            elapsed.num_seconds() % 60
-        );
-
-        println!(
-            "[{}] Progress: {}/{} runs ({:.1}%)",
-            elapsed_str,
-            result.completed_runs,
-            result.total_runs,
-            if result.total_runs > 0 {
-                result.completed_runs as f64 / result.total_runs as f64 * 100.0
-            } else {
-                0.0
-            }
-        );
-
-        for (instance_type, state) in instances.iter() {
-            let durations = state.durations();
-            let avg = if !durations.is_empty() {
-                format!(
-                    " (avg: {:.1}s)",
-                    durations.iter().sum::<f64>() / durations.len() as f64
-                )
-            } else {
-                String::new()
-            };
-            println!(
-                "  {:>10} {}: {}/{}{}",
-                state.status.as_str(),
-                instance_type,
-                state.run_progress,
-                state.total_runs,
-                avg
-            );
-        }
-        println!();
+        print_no_tui_progress(&instances, &result, start_time);
 
         if result.all_complete {
             break;
@@ -634,4 +578,73 @@ pub async fn run_benchmarks_no_tui(
 
     info!("Benchmark run complete");
     Ok(())
+}
+
+fn print_no_tui_header(
+    config: &RunConfig,
+    run_id: &RunId,
+    has_streaming: bool,
+    start_time: chrono::DateTime<chrono::Utc>,
+) {
+    println!("\n=== nix-bench-ec2 ===");
+    println!("Run ID: {}", run_id);
+    println!("Instances: {}", config.instances.instance_types.join(", "));
+    println!(
+        "Benchmark: {} ({} runs each)",
+        config.benchmark.attr, config.benchmark.runs
+    );
+    if config.flags.timeout > 0 {
+        println!("Timeout: {}s", config.flags.timeout);
+    }
+    println!(
+        "Log streaming: {}",
+        if has_streaming {
+            "gRPC (real-time)"
+        } else {
+            "unavailable (no instances with public IPs)"
+        }
+    );
+    println!("Started: {}\n", start_time.format("%Y-%m-%d %H:%M:%S UTC"));
+}
+
+fn print_no_tui_progress(
+    instances: &HashMap<String, InstanceState>,
+    result: &PollResult,
+    start_time: chrono::DateTime<chrono::Utc>,
+) {
+    let elapsed = chrono::Utc::now() - start_time;
+    let pct = if result.total_runs > 0 {
+        result.completed_runs as f64 / result.total_runs as f64 * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "[{:02}:{:02}:{:02}] Progress: {}/{} runs ({:.1}%)",
+        elapsed.num_hours(),
+        elapsed.num_minutes() % 60,
+        elapsed.num_seconds() % 60,
+        result.completed_runs,
+        result.total_runs,
+        pct
+    );
+    for (instance_type, state) in instances.iter() {
+        let durations = state.durations();
+        let avg = if !durations.is_empty() {
+            format!(
+                " (avg: {:.1}s)",
+                durations.iter().sum::<f64>() / durations.len() as f64
+            )
+        } else {
+            String::new()
+        };
+        println!(
+            "  {:>10} {}: {}/{}{}",
+            state.status.as_str(),
+            instance_type,
+            state.run_progress,
+            state.total_runs,
+            avg
+        );
+    }
+    println!();
 }

@@ -16,12 +16,11 @@ pub mod progress;
 pub mod types;
 
 // Re-export core types
-pub use cleanup::{
-    ChannelCleanupReporter, CleanupReporter, CleanupRequest, LogCleanupReporter, cleanup_executor,
-    cleanup_resources_no_tui,
-};
+pub use cleanup::{CleanupRequest, cleanup_executor, cleanup_resources_no_tui};
 pub use init::{BenchmarkInitializer, InitContext};
-pub use progress::{ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter};
+pub use progress::{
+    ChannelReporter, InitProgressReporter, InstanceUpdate, LogReporter, ProgressReporter,
+};
 pub use types::{InstanceState, InstanceStatus};
 
 use crate::config::RunConfig;

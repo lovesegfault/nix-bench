@@ -4,9 +4,15 @@
 //! progress to different outputs (TUI channel, stdout logging).
 
 use super::types::InstanceStatus;
-use crate::tui::{InitPhase, TuiMessage};
+use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
 use tokio::sync::mpsc;
 use tracing::info;
+
+/// Generic progress reporter for sending typed updates to either
+/// a TUI channel or stdout logs.
+pub trait ProgressReporter<T>: Send + Sync {
+    fn report(&self, update: &T);
+}
 
 /// Instance update information for progress reporting
 #[derive(Debug, Clone)]
@@ -100,6 +106,12 @@ impl InitProgressReporter for ChannelReporter {
     }
 }
 
+impl ProgressReporter<CleanupProgress> for ChannelReporter {
+    fn report(&self, progress: &CleanupProgress) {
+        self.send(TuiMessage::Phase(InitPhase::CleaningUp(progress.clone())));
+    }
+}
+
 /// Progress reporter that logs to stdout (for non-TUI mode)
 pub struct LogReporter;
 
@@ -146,5 +158,11 @@ impl InitProgressReporter for LogReporter {
     fn is_cancelled(&self) -> bool {
         // Non-interactive mode doesn't support cancellation during init
         false
+    }
+}
+
+impl ProgressReporter<CleanupProgress> for LogReporter {
+    fn report(&self, progress: &CleanupProgress) {
+        info!(step = %progress.current_step, "Cleanup progress");
     }
 }

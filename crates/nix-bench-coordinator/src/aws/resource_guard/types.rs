@@ -29,42 +29,71 @@ pub enum ResourceId {
     ElasticIp(String),
 }
 
+/// Per-variant metadata for ResourceId
+struct ResourceInfo {
+    priority: u8,
+    kind: &'static str,
+    label: &'static str,
+}
+
 impl ResourceId {
-    /// Get cleanup priority (lower number = cleanup first)
-    ///
-    /// Resources must be cleaned up in dependency order:
-    /// - 0: Terminate EC2 instances / release Elastic IPs
-    /// - 1: S3 objects (before bucket)
-    /// - 2: Delete S3 buckets
-    /// - 3: Delete IAM roles/profiles
-    /// - 4: Delete security group rules (before SG)
-    /// - 5: Delete security groups (must wait for instances to terminate)
-    pub fn cleanup_priority(&self) -> u8 {
+    /// Get per-variant metadata (priority, kind string, human-readable label prefix)
+    fn info(&self) -> ResourceInfo {
         match self {
-            ResourceId::Ec2Instance(_) | ResourceId::ElasticIp(_) => 0,
-            ResourceId::S3Object(_) => 1,
-            ResourceId::S3Bucket(_) => 2,
-            ResourceId::IamRole(_) | ResourceId::IamInstanceProfile(_) => 3,
-            ResourceId::SecurityGroupRule { .. } => 4,
-            ResourceId::SecurityGroup(_) => 5,
+            ResourceId::Ec2Instance(_) => ResourceInfo {
+                priority: 0,
+                kind: "ec2_instance",
+                label: "EC2 instance",
+            },
+            ResourceId::ElasticIp(_) => ResourceInfo {
+                priority: 0,
+                kind: "elastic_ip",
+                label: "Elastic IP",
+            },
+            ResourceId::S3Object(_) => ResourceInfo {
+                priority: 1,
+                kind: "s3_object",
+                label: "S3 object",
+            },
+            ResourceId::S3Bucket(_) => ResourceInfo {
+                priority: 2,
+                kind: "s3_bucket",
+                label: "S3 bucket",
+            },
+            ResourceId::IamRole(_) => ResourceInfo {
+                priority: 3,
+                kind: "iam_role",
+                label: "IAM role",
+            },
+            ResourceId::IamInstanceProfile(_) => ResourceInfo {
+                priority: 3,
+                kind: "iam_instance_profile",
+                label: "Instance profile",
+            },
+            ResourceId::SecurityGroupRule { .. } => ResourceInfo {
+                priority: 4,
+                kind: "security_group_rule",
+                label: "SG rule",
+            },
+            ResourceId::SecurityGroup(_) => ResourceInfo {
+                priority: 5,
+                kind: "security_group",
+                label: "Security group",
+            },
         }
+    }
+
+    /// Get cleanup priority (lower number = cleanup first)
+    pub fn cleanup_priority(&self) -> u8 {
+        self.info().priority
     }
 
     /// Get string representation of the resource kind
     pub fn as_str(&self) -> &'static str {
-        match self {
-            ResourceId::Ec2Instance(_) => "ec2_instance",
-            ResourceId::S3Bucket(_) => "s3_bucket",
-            ResourceId::S3Object(_) => "s3_object",
-            ResourceId::IamRole(_) => "iam_role",
-            ResourceId::IamInstanceProfile(_) => "iam_instance_profile",
-            ResourceId::SecurityGroup(_) => "security_group",
-            ResourceId::SecurityGroupRule { .. } => "security_group_rule",
-            ResourceId::ElasticIp(_) => "elastic_ip",
-        }
+        self.info().kind
     }
 
-    /// Get the raw identifier string for database storage
+    /// Get the raw identifier string
     pub fn raw_id(&self) -> String {
         match self {
             ResourceId::Ec2Instance(id)
@@ -83,29 +112,7 @@ impl ResourceId {
 
     /// Get a human-readable description for logging
     pub fn description(&self) -> String {
-        match self {
-            ResourceId::Ec2Instance(id) => format!("EC2 instance {}", id),
-            ResourceId::SecurityGroup(id) => format!("Security group {}", id),
-            ResourceId::SecurityGroupRule {
-                security_group_id,
-                cidr_ip,
-            } => format!("SG rule {}:{}", security_group_id, cidr_ip),
-            ResourceId::S3Bucket(name) => format!("S3 bucket {}", name),
-            ResourceId::S3Object(key) => format!("S3 object {}", key),
-            ResourceId::IamRole(name) => format!("IAM role {}", name),
-            ResourceId::IamInstanceProfile(name) => format!("Instance profile {}", name),
-            ResourceId::ElasticIp(id) => format!("Elastic IP {}", id),
-        }
-    }
-
-    /// Check if this is an EC2 instance
-    pub fn is_ec2_instance(&self) -> bool {
-        matches!(self, ResourceId::Ec2Instance(_))
-    }
-
-    /// Check if this is a security group
-    pub fn is_security_group(&self) -> bool {
-        matches!(self, ResourceId::SecurityGroup(_))
+        format!("{} {}", self.info().label, self.raw_id())
     }
 }
 

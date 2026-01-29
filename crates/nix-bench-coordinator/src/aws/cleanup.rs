@@ -165,7 +165,9 @@ impl TagBasedCleanup {
                 }
 
                 // Security groups need instances to terminate first
-                if resource.resource.is_security_group() && !terminated_instances.is_empty() {
+                if matches!(resource.resource, ResourceId::SecurityGroup(_))
+                    && !terminated_instances.is_empty()
+                {
                     for instance_id in &terminated_instances {
                         let _ = self.ec2.wait_for_terminated(instance_id).await;
                     }
@@ -174,7 +176,7 @@ impl TagBasedCleanup {
 
                 match delete_resource(&resource.resource, &self.ec2, &self.s3, &self.iam).await {
                     CleanupResult::Deleted => {
-                        if resource.resource.is_ec2_instance() {
+                        if matches!(resource.resource, ResourceId::Ec2Instance(_)) {
                             terminated_instances.push(resource.resource.raw_id());
                         }
                         report.deleted += 1;

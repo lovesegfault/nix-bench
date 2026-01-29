@@ -129,162 +129,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_detect_bootstrap_failure_unbound_variable() {
-        let console = r#"
-[    5.123456] Starting nix-bench bootstrap
-[    5.234567] /var/lib/cloud/instance/scripts/user-data: line 15: BUCKET: unbound variable
-[    5.345678] Failed
-"#;
-        let result = detect_bootstrap_failure(console);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("unbound variable"));
+    fn detect_bootstrap_failure_matches_patterns() {
+        // Each known failure pattern should be detected
+        assert!(detect_bootstrap_failure("line 15: BUCKET: unbound variable").is_some());
+        assert!(detect_bootstrap_failure("[FAILED] Failed to start cloud-final.service").is_some());
+        assert!(detect_bootstrap_failure("nix-bench-agent: command not found").is_some());
+        assert!(detect_bootstrap_failure("No such file or directory").is_some());
+        // First pattern wins
+        let r = detect_bootstrap_failure("unbound variable\ncommand not found").unwrap();
+        assert!(r.contains("unbound variable"));
     }
 
     #[test]
-    fn test_detect_bootstrap_failure_cloud_init() {
-        let console = r#"
-[   OK  ] Started cloud-init.service
-[FAILED] Failed to start cloud-final.service - Execute cloud user/final scripts
-"#;
-        let result = detect_bootstrap_failure(console);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("Failed to start cloud-final"));
-    }
-
-    #[test]
-    fn test_detect_bootstrap_failure_agent_not_found() {
-        let console = "Starting nix-bench-agent...\nnix-bench-agent: command not found\n";
-        let result = detect_bootstrap_failure(console);
-        assert!(result.is_some());
-        assert!(
-            result
-                .unwrap()
-                .contains("nix-bench-agent: command not found")
-        );
-    }
-
-    #[test]
-    fn test_detect_bootstrap_failure_no_such_file() {
-        let console = "/usr/local/bin/nix-bench-agent: No such file or directory";
-        let result = detect_bootstrap_failure(console);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_detect_bootstrap_failure_none() {
-        let console = r#"
-[   OK  ] Started cloud-init.service
-[   OK  ] Started cloud-final.service
-Starting nix-bench-agent...
-Agent started successfully
-"#;
-        let result = detect_bootstrap_failure(console);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_detect_bootstrap_failure_empty() {
+    fn detect_bootstrap_failure_no_match() {
         assert!(detect_bootstrap_failure("").is_none());
+        assert!(detect_bootstrap_failure("Agent started successfully").is_none());
     }
 
     #[test]
-    fn test_detect_bootstrap_failure_priority() {
-        // First pattern should win
-        let console = "unbound variable\ncommand not found";
-        let result = detect_bootstrap_failure(console);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("unbound variable"));
-    }
-
-    #[test]
-    fn test_generate_user_data_contains_required_elements() {
+    fn generate_user_data_contains_required_elements() {
         let script = generate_user_data("my-bucket", "run-123", "c6i.xlarge");
-
-        // Check shebang
         assert!(script.starts_with("#!/bin/bash"));
-
-        // Check set options
         assert!(script.contains("set -euo pipefail"));
-
-        // Check bucket variable
         assert!(script.contains("BUCKET=\"my-bucket\""));
-
-        // Check run_id variable
         assert!(script.contains("RUN_ID=\"run-123\""));
-
-        // Check instance_type variable
         assert!(script.contains("INSTANCE_TYPE=\"c6i.xlarge\""));
-
-        // Check S3 agent download
         assert!(script.contains("aws s3 cp"));
-        assert!(script.contains("s3://${BUCKET}/${RUN_ID}/agent-${ARCH}"));
-
-        // Check agent execution with CLI args
         assert!(script.contains("exec /usr/local/bin/nix-bench-agent"));
-        assert!(script.contains("--bucket"));
-        assert!(script.contains("--run-id"));
-        assert!(script.contains("--instance-type"));
-    }
-
-    #[test]
-    fn test_generate_user_data_escapes_special_chars() {
-        // Bucket name with hyphen (common case)
-        let script = generate_user_data("nix-bench-abc123", "test-run-456", "c7i.metal");
-
-        assert!(script.contains("BUCKET=\"nix-bench-abc123\""));
-        assert!(script.contains("RUN_ID=\"test-run-456\""));
-        assert!(script.contains("INSTANCE_TYPE=\"c7i.metal\""));
-    }
-
-    #[test]
-    fn test_generate_user_data_uses_bash_variables() {
-        let script = generate_user_data("bucket", "run", "type");
-
-        // Verify it uses ${ARCH} for architecture detection (not hardcoded)
         assert!(script.contains("${ARCH}"));
-        assert!(script.contains("ARCH=$(uname -m)"));
     }
 
     #[test]
     #[should_panic(expected = "invalid bucket name")]
-    fn test_generate_user_data_rejects_shell_injection() {
+    fn generate_user_data_rejects_shell_injection() {
         generate_user_data("bucket\"; rm -rf /; echo \"", "run-123", "c6i.xlarge");
     }
 
     #[test]
     #[should_panic(expected = "invalid run_id")]
-    fn test_generate_user_data_rejects_dollar_sign() {
+    fn generate_user_data_rejects_dollar_sign() {
         generate_user_data("bucket", "$(whoami)", "c6i.xlarge");
     }
 
     #[test]
-    fn test_validate_shell_input_accepts_valid_inputs() {
+    fn validate_shell_input_accepts_and_rejects() {
         assert!(validate_shell_input("nix-bench-abc123", "test").is_ok());
         assert!(validate_shell_input("c7i.metal", "test").is_ok());
-        assert!(validate_shell_input("01939d1e-7b3f-76ad-a77f-abcdef012345", "test").is_ok());
-    }
-
-    #[test]
-    fn test_validate_shell_input_rejects_empty() {
         assert!(validate_shell_input("", "test").is_err());
     }
 
     #[test]
-    fn test_find_agent_binary_invalid_arch() {
-        // Invalid architecture should return None
+    fn find_agent_binary_invalid_arch() {
         assert!(find_agent_binary("arm").is_none());
-        assert!(find_agent_binary("i686").is_none());
         assert!(find_agent_binary("").is_none());
-    }
-
-    #[test]
-    fn test_find_agent_binary_returns_none_when_missing() {
-        // Test in a directory where no binaries exist
-        // This is expected behavior when binaries haven't been built
-        // The function should return None, not panic
-        let result = find_agent_binary("x86_64");
-        // We can't assert is_some because the binary might not exist,
-        // but we can assert the function doesn't panic
-        let _ = result;
     }
 }

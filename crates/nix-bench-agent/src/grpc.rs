@@ -16,7 +16,7 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 // Re-export StatusCode from common for convenience
 pub use nix_bench_common::StatusCode;
@@ -208,7 +208,6 @@ impl LogStream for LogStreamService {
                 tokio::select! {
                     biased;
                     _ = shutdown_token.cancelled() => {
-                        debug!("Shutdown signal received, terminating stream");
                         break;
                     }
                     item = tokio_stream::StreamExt::next(&mut output_stream) => {

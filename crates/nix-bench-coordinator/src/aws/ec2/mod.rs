@@ -193,23 +193,33 @@ fn extract_invalid_types(error_str: &str) -> Vec<String> {
 
 /// Get the public IP address of the coordinator (this machine)
 ///
-/// Uses AWS checkip service to get the public IP.
+/// Uses AWS checkip service via raw HTTP/1.1 to avoid the reqwest dependency.
 pub async fn get_coordinator_public_ip() -> Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .context("Failed to build HTTP client")?;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let response = client
-        .get("https://checkip.amazonaws.com")
-        .send()
+    let mut stream = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::net::TcpStream::connect("checkip.amazonaws.com:80").await
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("Timeout connecting to checkip.amazonaws.com"))?
+    .context("Failed to connect to checkip.amazonaws.com")?;
+
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: checkip.amazonaws.com\r\nConnection: close\r\n\r\n")
         .await
-        .context("Failed to fetch public IP from checkip.amazonaws.com")?;
+        .context("Failed to send HTTP request")?;
 
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .context("Failed to read response")?;
+
+    // Extract body from HTTP response (after \r\n\r\n)
     let ip = response
-        .text()
-        .await
-        .context("Failed to read response body")?
+        .split("\r\n\r\n")
+        .nth(1)
+        .context("Invalid HTTP response")?
         .trim()
         .to_string();
 

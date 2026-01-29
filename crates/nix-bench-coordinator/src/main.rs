@@ -128,18 +128,18 @@ async fn run() -> Result<()> {
 
     if use_tui {
         // Initialize tui-logger for TUI mode
-        tui_logger::init_logger(log::LevelFilter::Info)?;
-        tui_logger::set_default_level(log::LevelFilter::Info);
+        tui_logger::init_logger(tui_logger::LevelFilter::Info)?;
+        tui_logger::set_default_level(tui_logger::LevelFilter::Info);
 
         // Configure explicit targets to show coordinator logs
-        tui_logger::set_level_for_target("nix_bench", log::LevelFilter::Info);
-        tui_logger::set_level_for_target("nix_bench::orchestrator", log::LevelFilter::Info);
-        tui_logger::set_level_for_target("nix_bench::aws", log::LevelFilter::Info);
+        tui_logger::set_level_for_target("nix_bench", tui_logger::LevelFilter::Info);
+        tui_logger::set_level_for_target("nix_bench::orchestrator", tui_logger::LevelFilter::Info);
+        tui_logger::set_level_for_target("nix_bench::aws", tui_logger::LevelFilter::Info);
 
         // Reduce noise from AWS SDK (show only warnings and errors)
-        tui_logger::set_level_for_target("aws_config", log::LevelFilter::Warn);
-        tui_logger::set_level_for_target("aws_sdk", log::LevelFilter::Warn);
-        tui_logger::set_level_for_target("aws_smithy", log::LevelFilter::Warn);
+        tui_logger::set_level_for_target("aws_config", tui_logger::LevelFilter::Warn);
+        tui_logger::set_level_for_target("aws_sdk", tui_logger::LevelFilter::Warn);
+        tui_logger::set_level_for_target("aws_smithy", tui_logger::LevelFilter::Warn);
 
         // Set up tracing to route to tui-logger and log capture
         use tracing_subscriber::prelude::*;

@@ -37,7 +37,6 @@ futures.workspace = true
 tui-logger.workspace = true
 throbber-widgets-tui.workspace = true
 tui-scrollview.workspace = true
-log.workspace = true
 
 # CLI
 clap.workspace = true
@@ -65,7 +64,6 @@ derive_more.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 base64.workspace = true
-reqwest.workspace = true
 rand.workspace = true
 
 # TLS crypto provider

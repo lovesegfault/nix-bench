@@ -168,6 +168,30 @@ pub fn jittered_delay_25(base: std::time::Duration) -> std::time::Duration {
     jittered_delay(base, 0.25)
 }
 
+/// Install the rustls ring crypto provider as the default.
+///
+/// Must be called before any TLS operations. Panics if installation fails.
+#[cfg(feature = "init")]
+pub fn init_rustls() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+}
+
+/// Initialize a standard tracing subscriber with env filter and INFO default.
+///
+/// Suitable for CLI binaries that log to stdout. For TUI applications,
+/// use a custom subscriber setup instead.
+#[cfg(feature = "init")]
+pub fn init_tracing_default() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
+        .init();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

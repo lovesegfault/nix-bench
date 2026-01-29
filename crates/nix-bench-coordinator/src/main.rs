@@ -239,11 +239,7 @@ fn print_error(e: &anyhow::Error) {
 }
 
 async fn run() -> Result<()> {
-    // Install rustls crypto provider before any TLS operations
-    // Required for rustls 0.23+ when using tonic with TLS
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("Failed to install rustls crypto provider");
+    nix_bench_common::init_rustls();
 
     // Filter out bare "--" args that cargo-make may pass
     let filtered_args: Vec<String> = std::env::args().filter(|a| a != "--").collect();

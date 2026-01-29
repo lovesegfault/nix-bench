@@ -42,7 +42,6 @@ impl App {
                     state.run_progress = progress;
                 }
                 state.run_results = status.run_results.clone();
-                state.refresh_cache();
 
                 // Append error message to console output when agent reports failure
                 if state.status == InstanceStatus::Failed && !was_failed {

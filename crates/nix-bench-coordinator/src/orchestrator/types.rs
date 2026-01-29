@@ -27,8 +27,6 @@ pub struct InstanceState {
     pub public_ip: Option<String>,
     /// Console/build output buffer (ring buffer capped at 10,000 lines)
     pub console_output: LogBuffer,
-    /// Cached successful durations — call `refresh_cache()` after updating `run_results`
-    pub cached_durations: Vec<f64>,
 }
 
 impl InstanceState {
@@ -44,7 +42,6 @@ impl InstanceState {
             run_results: Vec::new(),
             public_ip: None,
             console_output: LogBuffer::new(10_000),
-            cached_durations: Vec::new(),
         }
     }
 
@@ -55,14 +52,6 @@ impl InstanceState {
             .filter(|r| r.success)
             .map(|r| r.duration_secs)
             .collect()
-    }
-
-    /// Refresh the cached durations from current run_results.
-    ///
-    /// Call this after modifying `run_results` to update the cache
-    /// used by the TUI render path.
-    pub fn refresh_cache(&mut self) {
-        self.cached_durations = self.durations();
     }
 
     /// Check if this instance has completed (successfully or with failure)

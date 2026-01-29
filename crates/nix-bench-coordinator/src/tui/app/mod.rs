@@ -66,7 +66,6 @@ impl App {
                     run_results: Vec::new(),
                     public_ip: None,
                     console_output: LogBuffer::default(),
-                    cached_durations: Vec::new(),
                 },
             );
         }

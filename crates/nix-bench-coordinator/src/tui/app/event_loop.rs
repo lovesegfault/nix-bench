@@ -296,7 +296,6 @@ impl App {
                                 nix_bench_common::RunResult::success((i + 1) as u32, dur)
                             })
                             .collect();
-                        state.refresh_cache();
                     }
                 }
                 // Re-sort instances by average duration (fastest first)

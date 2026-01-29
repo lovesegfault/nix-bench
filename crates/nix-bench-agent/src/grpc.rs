@@ -461,9 +461,13 @@ mod tests {
             }))
             .await;
 
-        let err = result.unwrap_err();
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("Instance type mismatch"));
+        match result {
+            Err(status) => {
+                assert_eq!(status.code(), tonic::Code::InvalidArgument);
+                assert!(status.message().contains("Instance type mismatch"));
+            }
+            Ok(_) => panic!("Expected error for wrong instance type"),
+        }
     }
 
     #[tokio::test]

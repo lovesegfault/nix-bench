@@ -43,7 +43,7 @@ async fn test_connect_with_retry_succeeds_when_server_available() {
 }
 
 #[tokio::test]
-async fn test_stream_to_channel_receives_logs() {
+async fn test_stream_to_channel_direct_receives_logs() {
     let fixture = GrpcTestFixture::new().await;
 
     let client = GrpcLogClient::new(
@@ -59,7 +59,7 @@ async fn test_stream_to_channel_receives_logs() {
     // Spawn streaming task (use inner method to skip wait_for_ready)
     let stream_handle = tokio::spawn({
         let client = client.clone();
-        async move { client.stream_to_channel(tx).await }
+        async move { client.stream_to_channel_direct(tx).await }
     });
 
     // Give time for connection to establish
@@ -111,7 +111,7 @@ async fn test_stream_to_channel_receives_logs() {
 }
 
 #[tokio::test]
-async fn test_stream_to_channel_exits_gracefully_on_channel_close() {
+async fn test_stream_to_channel_direct_exits_gracefully_on_channel_close() {
     let fixture = GrpcTestFixture::new().await;
 
     let client = GrpcLogClient::new(
@@ -127,7 +127,7 @@ async fn test_stream_to_channel_exits_gracefully_on_channel_close() {
     // Spawn streaming task
     let stream_handle = tokio::spawn({
         let client = client.clone();
-        async move { client.stream_to_channel(tx).await }
+        async move { client.stream_to_channel_direct(tx).await }
     });
 
     // Give time for connection to establish
@@ -269,7 +269,7 @@ async fn test_bootstrap_streaming_integration() {
     // Start streaming in background
     let stream_handle = tokio::spawn({
         let client = client.clone();
-        async move { client.stream_to_channel(tx).await }
+        async move { client.stream_to_channel_direct(tx).await }
     });
 
     // Wait for connection to establish

@@ -179,6 +179,11 @@ impl GrpcLogClient {
             .await
             .context("Agent not ready for streaming")?;
 
+        self.stream_to_channel_direct(tx).await
+    }
+
+    /// Stream logs to channel without wait_for_ready (for testing with local servers)
+    pub async fn stream_to_channel_direct(&self, tx: mpsc::Sender<TuiMessage>) -> Result<()> {
         self.stream_logs_with(|log_entry| {
             let msg = TuiMessage::ConsoleOutputAppend {
                 instance_type: self.instance_type.clone(),

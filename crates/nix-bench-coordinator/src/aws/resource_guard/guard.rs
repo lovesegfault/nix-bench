@@ -121,7 +121,7 @@ impl<T> ResourceGuard<T> {
         }
     }
 
-    /// Commit this resource - no cleanup on drop.
+    /// Commit (or detach) this resource - no cleanup on drop.
     pub fn commit(mut self) -> T {
         self.committed = true;
         self.registry.commit(&self.resource_id);
@@ -130,6 +130,11 @@ impl<T> ResourceGuard<T> {
         let value = unsafe { ManuallyDrop::take(&mut self.value) };
         std::mem::forget(self);
         value
+    }
+
+    /// Alias for `commit` - detach from registry without triggering cleanup.
+    pub fn detach(self) -> T {
+        self.commit()
     }
 
     pub fn inner(&self) -> &T {
@@ -142,16 +147,6 @@ impl<T> ResourceGuard<T> {
 
     pub fn meta(&self) -> &ResourceMeta {
         &self.meta
-    }
-
-    /// Detach from registry without triggering cleanup.
-    pub fn detach(mut self) -> T {
-        self.committed = true;
-        self.registry.commit(&self.resource_id);
-        // SAFETY: Same as commit().
-        let value = unsafe { ManuallyDrop::take(&mut self.value) };
-        std::mem::forget(self);
-        value
     }
 }
 
@@ -211,34 +206,23 @@ impl ResourceGuardBuilder {
         ResourceMeta::new(self.run_id.clone(), self.region.clone())
     }
 
-    pub fn ec2_instance(&self, instance_id: impl Into<String>) -> Ec2InstanceGuard {
-        let id = instance_id.into();
-        ResourceGuard::new(
-            id.clone(),
-            ResourceId::Ec2Instance(id),
-            self.meta(),
-            self.registry.clone(),
-        )
+    fn guard<T>(&self, value: T, resource_id: ResourceId) -> ResourceGuard<T> {
+        ResourceGuard::new(value, resource_id, self.meta(), self.registry.clone())
     }
 
-    pub fn security_group(&self, sg_id: impl Into<String>) -> SecurityGroupGuard {
-        let id = sg_id.into();
-        ResourceGuard::new(
-            id.clone(),
-            ResourceId::SecurityGroup(id),
-            self.meta(),
-            self.registry.clone(),
-        )
+    pub fn ec2_instance(&self, id: impl Into<String>) -> Ec2InstanceGuard {
+        let id = id.into();
+        self.guard(id.clone(), ResourceId::Ec2Instance(id))
     }
 
-    pub fn s3_bucket(&self, bucket_name: impl Into<String>) -> S3BucketGuard {
-        let name = bucket_name.into();
-        ResourceGuard::new(
-            name.clone(),
-            ResourceId::S3Bucket(name),
-            self.meta(),
-            self.registry.clone(),
-        )
+    pub fn security_group(&self, id: impl Into<String>) -> SecurityGroupGuard {
+        let id = id.into();
+        self.guard(id.clone(), ResourceId::SecurityGroup(id))
+    }
+
+    pub fn s3_bucket(&self, name: impl Into<String>) -> S3BucketGuard {
+        let name = name.into();
+        self.guard(name.clone(), ResourceId::S3Bucket(name))
     }
 
     pub fn iam_role(
@@ -248,29 +232,22 @@ impl ResourceGuardBuilder {
     ) -> IamRoleGuard {
         let role = role_name.into();
         let profile = profile_name.into();
-        ResourceGuard::new(
-            (role.clone(), profile),
-            ResourceId::IamRole(role),
-            self.meta(),
-            self.registry.clone(),
-        )
+        self.guard((role.clone(), profile), ResourceId::IamRole(role))
     }
 
     pub fn security_group_rule(
         &self,
-        security_group_id: impl Into<String>,
-        cidr_ip: impl Into<String>,
+        sg_id: impl Into<String>,
+        cidr: impl Into<String>,
     ) -> SecurityGroupRuleGuard {
-        let sg_id = security_group_id.into();
-        let cidr = cidr_ip.into();
-        ResourceGuard::new(
+        let sg_id = sg_id.into();
+        let cidr = cidr.into();
+        self.guard(
             (),
             ResourceId::SecurityGroupRule {
                 security_group_id: sg_id,
                 cidr_ip: cidr,
             },
-            self.meta(),
-            self.registry.clone(),
         )
     }
 }
@@ -282,21 +259,20 @@ struct CleanupItem {
     meta: ResourceMeta,
 }
 
+impl Eq for CleanupItem {}
 impl PartialEq for CleanupItem {
     fn eq(&self, other: &Self) -> bool {
-        self.resource.cleanup_priority() == other.resource.cleanup_priority()
+        self.cmp(other) == Ordering::Equal
     }
 }
-impl Eq for CleanupItem {}
-
 impl PartialOrd for CleanupItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for CleanupItem {
     fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse ordering for BinaryHeap (lowest priority first)
         other
             .resource
             .cleanup_priority()

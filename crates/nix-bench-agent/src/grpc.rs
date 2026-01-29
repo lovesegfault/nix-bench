@@ -382,15 +382,23 @@ mod tests {
     use std::time::Duration;
     use tokio::time::timeout;
 
+    fn test_service(instance_type: &str, run_id: &str) -> LogStreamService {
+        LogStreamService::new(
+            Arc::new(LogBroadcaster::new(100)),
+            run_id.to_string(),
+            instance_type.to_string(),
+            Arc::new(RwLock::new(AgentStatus::default())),
+            CancellationToken::new(),
+        )
+    }
+
     #[tokio::test]
     async fn test_log_broadcaster_single_subscriber() {
         let broadcaster = LogBroadcaster::new(100);
         let mut receiver = broadcaster.subscribe();
 
-        // Broadcast a message
         broadcaster.broadcast(1000, "test message".to_string());
 
-        // Subscriber should receive it
         let result = timeout(Duration::from_millis(100), receiver.recv()).await;
         assert!(result.is_ok(), "Should receive message within timeout");
 
@@ -405,18 +413,16 @@ mod tests {
         let mut receiver1 = broadcaster.subscribe();
         let mut receiver2 = broadcaster.subscribe();
 
-        // Broadcast a message
         broadcaster.broadcast(2000, "shared message".to_string());
 
-        // Both subscribers should receive it
-        let result1 = timeout(Duration::from_millis(100), receiver1.recv()).await;
-        let result2 = timeout(Duration::from_millis(100), receiver2.recv()).await;
-
-        assert!(result1.is_ok());
-        assert!(result2.is_ok());
-
-        let entry1 = result1.unwrap().unwrap();
-        let entry2 = result2.unwrap().unwrap();
+        let entry1 = timeout(Duration::from_millis(100), receiver1.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let entry2 = timeout(Duration::from_millis(100), receiver2.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(entry1.message, "shared message");
         assert_eq!(entry2.message, "shared message");
@@ -424,85 +430,53 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_returns_current_status() {
-        let broadcaster = Arc::new(LogBroadcaster::new(100));
-        let status = Arc::new(RwLock::new(AgentStatus {
-            status: StatusCode::Running,
-            run_progress: 3,
-            total_runs: 10,
-            run_results: Vec::new(),
-            attr: "shallow.hello".to_string(),
-            system: Architecture::X86_64,
-            error_message: String::new(),
-        }));
+        let service = test_service("c6i.xlarge", "test-run-123");
+        {
+            let mut status = service.status.write().await;
+            status.status = StatusCode::Running;
+            status.run_progress = 3;
+            status.total_runs = 10;
+        }
 
-        let shutdown_token = CancellationToken::new();
-        let service = LogStreamService::new(
-            broadcaster,
-            "test-run-123".to_string(),
-            "c6i.xlarge".to_string(),
-            status,
-            shutdown_token,
-        );
-
-        let request = Request::new(StatusRequest {});
-        let response = service.get_status(request).await.unwrap();
+        let response = service
+            .get_status(Request::new(StatusRequest {}))
+            .await
+            .unwrap();
         let inner = response.into_inner();
 
         assert_eq!(inner.status_code, ProtoStatusCode::Running as i32);
         assert_eq!(inner.run_progress, 3);
         assert_eq!(inner.total_runs, 10);
-        assert_eq!(inner.dropped_log_count, 0); // No dropped messages yet
+        assert_eq!(inner.dropped_log_count, 0);
     }
 
     #[tokio::test]
     async fn test_stream_logs_validates_instance_type() {
-        let broadcaster = Arc::new(LogBroadcaster::new(100));
-        let status = Arc::new(RwLock::new(AgentStatus::default()));
-        let shutdown_token = CancellationToken::new();
+        let service = test_service("c6i.xlarge", "test-run-123");
 
-        let service = LogStreamService::new(
-            broadcaster,
-            "test-run-123".to_string(),
-            "c6i.xlarge".to_string(),
-            status,
-            shutdown_token,
-        );
+        let result = service
+            .stream_logs(Request::new(StreamLogsRequest {
+                instance_type: "wrong-instance-type".to_string(),
+                run_id: "test-run-123".to_string(),
+            }))
+            .await;
 
-        let request = Request::new(StreamLogsRequest {
-            instance_type: "wrong-instance-type".to_string(),
-            run_id: "test-run-123".to_string(),
-        });
-
-        let result = service.stream_logs(request).await;
-        match result {
-            Err(status) => {
-                assert_eq!(status.code(), tonic::Code::InvalidArgument);
-                assert!(status.message().contains("Instance type mismatch"));
-            }
-            Ok(_) => panic!("Expected error for wrong instance type"),
-        }
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("Instance type mismatch"));
     }
 
     #[tokio::test]
     async fn test_stream_logs_accepts_valid_request() {
-        let broadcaster = Arc::new(LogBroadcaster::new(100));
-        let status = Arc::new(RwLock::new(AgentStatus::default()));
-        let shutdown_token = CancellationToken::new();
+        let service = test_service("c6i.xlarge", "test-run-123");
 
-        let service = LogStreamService::new(
-            broadcaster,
-            "test-run-123".to_string(),
-            "c6i.xlarge".to_string(),
-            status,
-            shutdown_token,
-        );
+        let result = service
+            .stream_logs(Request::new(StreamLogsRequest {
+                instance_type: "c6i.xlarge".to_string(),
+                run_id: "test-run-123".to_string(),
+            }))
+            .await;
 
-        let request = Request::new(StreamLogsRequest {
-            instance_type: "c6i.xlarge".to_string(),
-            run_id: "test-run-123".to_string(),
-        });
-
-        let result = service.stream_logs(request).await;
         assert!(result.is_ok(), "Valid request should be accepted");
     }
 }

@@ -5,7 +5,6 @@ use crate::aws::context::AwsContext;
 use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
 use aws_sdk_iam::Client;
-use aws_sdk_iam::error::ProvideErrorMetadata;
 use chrono::Utc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -322,27 +321,16 @@ impl IamClient {
         }
 
         // Delete the instance profile
-        match self
+        let result = self
             .client
             .delete_instance_profile()
             .instance_profile_name(profile_name)
             .send()
-            .await
-        {
-            Ok(_) => {
-                info!(profile_name = %profile_name, "Instance profile deleted");
-                Ok(())
-            }
-            Err(e) => {
-                // Check if it's a "not found" error (already deleted)
-                let err_code = e.code().unwrap_or_default();
-                if err_code == "NoSuchEntity" {
-                    debug!(profile_name = %profile_name, "Instance profile already deleted");
-                    Ok(())
-                } else {
-                    Err(anyhow::anyhow!("Failed to delete instance profile: {}", e))
-                }
-            }
+            .await;
+        match crate::aws::error::ignore_not_found(result)? {
+            Some(_) => info!(profile_name = %profile_name, "Instance profile deleted"),
+            None => debug!(profile_name = %profile_name, "Instance profile already deleted"),
         }
+        Ok(())
     }
 }

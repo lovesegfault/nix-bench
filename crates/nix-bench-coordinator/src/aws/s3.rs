@@ -2,7 +2,7 @@
 
 use super::tags;
 use crate::aws::context::AwsContext;
-use crate::aws::error::classify_aws_error;
+use crate::aws::error::{classify_aws_error, ignore_not_found};
 use anyhow::{Context, Result};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::{Client, primitives::ByteStream};
@@ -193,19 +193,11 @@ impl S3Client {
         }
 
         // Delete the bucket itself
-        match self.client.delete_bucket().bucket(bucket).send().await {
-            Ok(_) => {
-                info!(bucket = %bucket, "Bucket deleted");
-                Ok(())
-            }
-            Err(sdk_error) => {
-                if classify_aws_error(sdk_error.code(), sdk_error.message()).is_not_found() {
-                    debug!(bucket = %bucket, "Bucket already deleted or doesn't exist");
-                    Ok(())
-                } else {
-                    Err(anyhow::Error::from(sdk_error).context("Failed to delete bucket"))
-                }
-            }
+        let result = self.client.delete_bucket().bucket(bucket).send().await;
+        match ignore_not_found(result).context("Failed to delete bucket")? {
+            Some(_) => info!(bucket = %bucket, "Bucket deleted"),
+            None => debug!(bucket = %bucket, "Bucket already deleted"),
         }
+        Ok(())
     }
 }

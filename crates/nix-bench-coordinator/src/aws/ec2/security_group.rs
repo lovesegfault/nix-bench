@@ -1,10 +1,9 @@
 //! Security group management
 
 use super::Ec2Client;
-use crate::aws::error::{classify_anyhow_error, classify_aws_error};
+use crate::aws::error::classify_anyhow_error;
 use crate::aws::tags;
 use anyhow::{Context, Result};
-use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{Filter, IpPermission, IpRange, ResourceType};
 use backon::{ExponentialBuilder, Retryable};
 use std::time::Duration;
@@ -123,34 +122,24 @@ impl Ec2Client {
     /// Returns Ok(()) if the security group was deleted or if it doesn't exist (idempotent for cleanup).
     /// Retries on DependencyViolation errors (e.g., when ENIs are still releasing after instance termination).
     pub async fn delete_security_group(&self, security_group_id: &str) -> Result<()> {
+        use crate::aws::error::ignore_not_found;
         info!(sg_id = %security_group_id, "Deleting security group");
 
         let sg_id = security_group_id.to_string();
         let sg_id_for_log = sg_id.clone();
 
         (|| async {
-            match self
+            let result = self
                 .client
                 .delete_security_group()
                 .group_id(&sg_id)
                 .send()
-                .await
-            {
-                Ok(_) => {
-                    info!(sg_id = %sg_id, "Security group deleted");
-                    Ok(())
-                }
-                Err(sdk_error) => {
-                    let aws_error = classify_aws_error(sdk_error.code(), sdk_error.message());
-                    if aws_error.is_not_found() {
-                        debug!(sg_id = %sg_id, "Security group already deleted or doesn't exist");
-                        Ok(())
-                    } else {
-                        Err(anyhow::Error::from(sdk_error)
-                            .context("Failed to delete security group"))
-                    }
-                }
+                .await;
+            match ignore_not_found(result).context("Failed to delete security group")? {
+                Some(_) => info!(sg_id = %sg_id, "Security group deleted"),
+                None => debug!(sg_id = %sg_id, "Security group already deleted"),
             }
+            Ok(())
         })
         .retry(
             ExponentialBuilder::default()
@@ -215,6 +204,7 @@ impl Ec2Client {
         security_group_id: &str,
         cidr_ip: &str,
     ) -> Result<()> {
+        use crate::aws::error::ignore_not_found;
         info!(
             security_group_id = %security_group_id,
             cidr_ip = %cidr_ip,
@@ -228,31 +218,22 @@ impl Ec2Client {
             .ip_ranges(IpRange::builder().cidr_ip(cidr_ip).build())
             .build();
 
-        match self
+        let result = self
             .client
             .revoke_security_group_ingress()
             .group_id(security_group_id)
             .ip_permissions(ip_permission)
             .send()
-            .await
-        {
-            Ok(_) => {
-                debug!(security_group_id = %security_group_id, "Successfully removed gRPC ingress rule");
-                Ok(())
+            .await;
+
+        match ignore_not_found(result).context("Failed to remove gRPC ingress rule")? {
+            Some(_) => {
+                debug!(security_group_id = %security_group_id, "Successfully removed gRPC ingress rule")
             }
-            Err(sdk_error) => {
-                if classify_aws_error(sdk_error.code(), sdk_error.message()).is_not_found() {
-                    debug!(
-                        security_group_id = %security_group_id,
-                        cidr_ip = %cidr_ip,
-                        "Security group rule already removed or doesn't exist"
-                    );
-                    Ok(())
-                } else {
-                    Err(anyhow::Error::from(sdk_error)
-                        .context("Failed to remove gRPC ingress rule"))
-                }
+            None => {
+                debug!(security_group_id = %security_group_id, cidr_ip = %cidr_ip, "Security group rule already removed")
             }
         }
+        Ok(())
     }
 }

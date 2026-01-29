@@ -2,11 +2,10 @@
 
 use super::Ec2Client;
 use super::types::{LaunchInstanceConfig, LaunchedInstance};
-use crate::aws::error::{AwsError, classify_anyhow_error, classify_aws_error};
+use crate::aws::error::{AwsError, classify_anyhow_error};
 use crate::aws::tags;
 use crate::wait::{WaitConfig, wait_for_resource};
 use anyhow::{Context, Result};
-use aws_sdk_ec2::error::ProvideErrorMetadata;
 use aws_sdk_ec2::types::{InstanceStateName, InstanceType, ResourceType};
 use backon::{ExponentialBuilder, Retryable};
 use std::time::Duration;
@@ -452,27 +451,20 @@ impl Ec2Client {
     ///
     /// Returns Ok(()) if the EIP was released or if it doesn't exist (idempotent for cleanup).
     pub async fn release_elastic_ip(&self, allocation_id: &str) -> Result<()> {
+        use crate::aws::error::ignore_not_found;
         info!(allocation_id = %allocation_id, "Releasing Elastic IP");
 
-        match self
+        let result = self
             .client
             .release_address()
             .allocation_id(allocation_id)
             .send()
-            .await
-        {
-            Ok(_) => {
-                info!(allocation_id = %allocation_id, "Released Elastic IP");
-                Ok(())
-            }
-            Err(e) => {
-                if classify_aws_error(e.code(), e.message()).is_not_found() {
-                    info!(allocation_id = %allocation_id, "Elastic IP already released");
-                    Ok(())
-                } else {
-                    Err(anyhow::anyhow!("Failed to release Elastic IP: {}", e))
-                }
-            }
+            .await;
+
+        match ignore_not_found(result)? {
+            Some(_) => info!(allocation_id = %allocation_id, "Released Elastic IP"),
+            None => info!(allocation_id = %allocation_id, "Elastic IP already released"),
         }
+        Ok(())
     }
 }

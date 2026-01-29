@@ -27,7 +27,7 @@ pub use iam::IamClient;
 pub use s3::S3Client;
 
 // Error handling
-pub use error::{AwsError, classify_anyhow_error, classify_aws_error};
+pub use error::{AwsError, classify_anyhow_error, classify_aws_error, ignore_not_found};
 
 // Cleanup utilities
 pub use cleanup::{CleanupResult, delete_resource};

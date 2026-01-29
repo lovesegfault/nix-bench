@@ -220,6 +220,27 @@ const ERROR_CODES: &[ErrorCodeEntry] = &[
     },
 ];
 
+/// Convert an AWS SDK result into Ok(None) if the error is "not found",
+/// Ok(Some(value)) on success, or propagate other errors.
+///
+/// Use this for idempotent cleanup operations where "not found" means
+/// the resource was already deleted.
+pub fn ignore_not_found<T, E>(result: Result<T, E>) -> anyhow::Result<Option<T>>
+where
+    E: aws_sdk_ec2::error::ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => {
+            if classify_aws_error(e.code(), e.message()).is_not_found() {
+                Ok(None)
+            } else {
+                Err(anyhow::Error::from(e))
+            }
+        }
+    }
+}
+
 /// Classify an AWS SDK error using the error code.
 pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError {
     let message = message.unwrap_or("Unknown error").to_string();

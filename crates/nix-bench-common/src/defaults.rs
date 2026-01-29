@@ -26,17 +26,8 @@ pub const DEFAULT_ACK_TIMEOUT_SECS: u64 = 120;
 /// Default timeout for waiting for TLS config from S3 (seconds)
 pub const DEFAULT_TLS_CONFIG_TIMEOUT_SECS: u64 = 300;
 
-/// Default timeout for waiting for instance to be running (seconds)
-pub const DEFAULT_INSTANCE_WAIT_TIMEOUT_SECS: u64 = 600;
-
 /// Default timeout for waiting for instance termination (seconds)
 pub const DEFAULT_TERMINATION_WAIT_TIMEOUT_SECS: u64 = 300;
-
-/// Default bootstrap command timeout (seconds)
-pub const DEFAULT_BOOTSTRAP_TIMEOUT_SECS: u64 = 600;
-
-/// Default GC timeout (seconds)
-pub const DEFAULT_GC_TIMEOUT_SECS: u64 = 600;
 
 /// Default root EBS volume size in GiB for benchmark instances
 pub const DEFAULT_ROOT_VOLUME_SIZE_GIB: i32 = 100;

@@ -215,13 +215,9 @@ mod tests {
     }
 
     #[test]
-    fn test_architecture_as_str() {
+    fn test_architecture_str_and_display() {
         assert_eq!(Architecture::X86_64.as_str(), "x86_64-linux");
         assert_eq!(Architecture::Aarch64.as_str(), "aarch64-linux");
-    }
-
-    #[test]
-    fn test_architecture_display() {
         assert_eq!(format!("{}", Architecture::X86_64), "x86_64-linux");
         assert_eq!(format!("{}", Architecture::Aarch64), "aarch64-linux");
     }

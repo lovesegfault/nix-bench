@@ -118,6 +118,119 @@ impl<'a> BenchmarkInitializer<'a> {
     }
 }
 
+/// Poll gRPC status for all instances with public IPs.
+async fn poll_grpc_status(
+    instances: &HashMap<String, InstanceState>,
+    tls_config: &TlsConfig,
+) -> HashMap<String, crate::aws::GrpcInstanceStatus> {
+    let poll_ips: Vec<(String, String)> = instances
+        .iter()
+        .filter_map(|(instance_type, state)| {
+            state
+                .public_ip
+                .as_ref()
+                .map(|ip| (instance_type.clone(), ip.clone()))
+        })
+        .collect();
+
+    if poll_ips.is_empty() {
+        return HashMap::new();
+    }
+
+    GrpcStatusPoller::new(&poll_ips, GRPC_PORT, tls_config.clone())
+        .poll_status()
+        .await
+}
+
+/// Result from a single status poll cycle.
+struct PollResult {
+    all_complete: bool,
+    total_runs: u32,
+    completed_runs: u32,
+}
+
+/// Apply polled gRPC status to instance states, handle acks and bootstrap failure detection.
+async fn apply_status_updates(
+    instances: &mut HashMap<String, InstanceState>,
+    status_map: &HashMap<String, crate::aws::GrpcInstanceStatus>,
+    acked: &mut std::collections::HashSet<String>,
+    run_id: &str,
+    tls_config: &TlsConfig,
+    ec2: Option<&crate::aws::Ec2Client>,
+) -> PollResult {
+    let mut all_complete = true;
+    let mut total_runs = 0u32;
+    let mut completed_runs = 0u32;
+
+    for (instance_type, state) in instances.iter_mut() {
+        if state.is_terminal() && acked.contains(instance_type) {
+            total_runs += state.total_runs;
+            completed_runs += state.run_progress;
+            continue;
+        }
+
+        if let Some(grpc_status) = status_map.get(instance_type) {
+            let was_failed = state.status == InstanceStatus::Failed;
+
+            if let Some(status_code) = grpc_status.status {
+                state.status = match status_code {
+                    StatusCode::Complete => InstanceStatus::Complete,
+                    StatusCode::Failed => InstanceStatus::Failed,
+                    StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
+                        InstanceStatus::Running
+                    }
+                    StatusCode::Pending => InstanceStatus::Pending,
+                };
+            }
+            if let Some(progress) = grpc_status.run_progress {
+                state.run_progress = progress;
+            }
+            state.run_results = grpc_status.run_results.clone();
+
+            if state.status == InstanceStatus::Failed && !was_failed {
+                if let Some(ref msg) = grpc_status.error_message {
+                    println!("\n  {} FAILED: {}", instance_type, msg);
+                }
+            }
+
+            if state.is_terminal() && !acked.contains(instance_type) {
+                if let Some(ip) = &state.public_ip {
+                    acked.insert(instance_type.clone());
+                    send_ack_complete(ip, GRPC_PORT, run_id, tls_config).await;
+                }
+            }
+        } else if let Some(ec2) = ec2 {
+            // No gRPC status - check console output for bootstrap failures
+            if !state.instance_id.is_empty() && state.status == InstanceStatus::Running {
+                if let Ok(Some(console_output)) = ec2.get_console_output(&state.instance_id).await {
+                    if let Some(pattern) = detect_bootstrap_failure(&console_output) {
+                        error!(
+                            instance_type = %instance_type,
+                            instance_id = %state.instance_id,
+                            pattern = %pattern,
+                            "Bootstrap failure detected"
+                        );
+                        println!("\n  Bootstrap failure on {}: {}", instance_type, pattern);
+                        state.status = InstanceStatus::Failed;
+                    }
+                }
+            }
+        }
+
+        if !state.is_terminal() {
+            all_complete = false;
+        }
+        total_runs += state.total_runs;
+        completed_runs += state.run_progress;
+    }
+
+    PollResult {
+        all_complete,
+        total_runs,
+        completed_runs,
+    }
+}
+
 // ─── TUI Mode ───────────────────────────────────────────────────────────────
 
 /// Run benchmarks with TUI - starts TUI immediately, runs init in background
@@ -436,9 +549,7 @@ pub async fn run_benchmarks_no_tui(
             );
             println!("\n  TIMEOUT: Run exceeded {}s limit", config.flags.timeout);
             for (instance_type, state) in instances.iter_mut() {
-                if state.status != InstanceStatus::Complete
-                    && state.status != InstanceStatus::Failed
-                {
+                if !state.is_terminal() {
                     error!(instance_type = %instance_type, "Instance timed out");
                     state.status = InstanceStatus::Failed;
                 }
@@ -446,105 +557,16 @@ pub async fn run_benchmarks_no_tui(
             break;
         }
 
-        // Poll gRPC GetStatus from agents with IPs
-        let poll_ips: Vec<(String, String)> = instances
-            .iter()
-            .filter_map(|(instance_type, state)| {
-                state
-                    .public_ip
-                    .as_ref()
-                    .map(|ip| (instance_type.clone(), ip.clone()))
-            })
-            .collect();
-
-        let status_map = if !poll_ips.is_empty() {
-            let poller =
-                GrpcStatusPoller::new(&poll_ips, GRPC_PORT, coordinator_tls_config.clone());
-            poller.poll_status().await
-        } else {
-            std::collections::HashMap::new()
-        };
-
-        let mut all_complete = true;
-        let mut total_runs = 0u32;
-        let mut completed_runs = 0u32;
-
-        for (instance_type, state) in instances.iter_mut() {
-            // Skip instances already in a terminal state that have been acked
-            if (state.status == InstanceStatus::Failed || state.status == InstanceStatus::Complete)
-                && acked_instances.contains(instance_type)
-            {
-                total_runs += state.total_runs;
-                completed_runs += state.run_progress;
-                continue;
-            }
-
-            if let Some(grpc_status) = status_map.get(instance_type) {
-                let was_failed = state.status == InstanceStatus::Failed;
-
-                if let Some(status_code) = grpc_status.status {
-                    state.status = match status_code {
-                        StatusCode::Complete => InstanceStatus::Complete,
-                        StatusCode::Failed => InstanceStatus::Failed,
-                        StatusCode::Running | StatusCode::Bootstrap | StatusCode::Warmup => {
-                            InstanceStatus::Running
-                        }
-                        StatusCode::Pending => InstanceStatus::Pending,
-                    };
-                }
-                if let Some(progress) = grpc_status.run_progress {
-                    state.run_progress = progress;
-                }
-                state.run_results = grpc_status.run_results.clone();
-
-                // Print error message when agent reports failure
-                if state.status == InstanceStatus::Failed && !was_failed {
-                    if let Some(ref msg) = grpc_status.error_message {
-                        println!("\n  {} FAILED: {}", instance_type, msg);
-                    }
-                }
-
-                // Send ack when instance first transitions to Complete/Failed
-                if (state.status == InstanceStatus::Complete
-                    || state.status == InstanceStatus::Failed)
-                    && !acked_instances.contains(instance_type)
-                {
-                    if let Some(ip) = &state.public_ip {
-                        acked_instances.insert(instance_type.clone());
-                        send_ack_complete(ip, GRPC_PORT, run_id.as_str(), &coordinator_tls_config)
-                            .await;
-                    }
-                }
-            } else {
-                // No gRPC status yet - check console output for bootstrap failures
-                if !state.instance_id.is_empty() && state.status == InstanceStatus::Running {
-                    if let Ok(Some(console_output)) =
-                        ec2.get_console_output(&state.instance_id).await
-                    {
-                        if let Some(failure_pattern) = detect_bootstrap_failure(&console_output) {
-                            error!(
-                                instance_type = %instance_type,
-                                instance_id = %state.instance_id,
-                                pattern = %failure_pattern,
-                                "Bootstrap failure detected"
-                            );
-                            println!(
-                                "\n  Bootstrap failure on {}: {}",
-                                instance_type, failure_pattern
-                            );
-                            state.status = InstanceStatus::Failed;
-                        }
-                    }
-                }
-            }
-
-            if state.status != InstanceStatus::Complete && state.status != InstanceStatus::Failed {
-                all_complete = false;
-            }
-
-            total_runs += state.total_runs;
-            completed_runs += state.run_progress;
-        }
+        let status_map = poll_grpc_status(&instances, &coordinator_tls_config).await;
+        let result = apply_status_updates(
+            &mut instances,
+            &status_map,
+            &mut acked_instances,
+            run_id.as_str(),
+            &coordinator_tls_config,
+            Some(&ec2),
+        )
+        .await;
 
         // Print progress update
         let elapsed = chrono::Utc::now() - start_time;
@@ -558,10 +580,10 @@ pub async fn run_benchmarks_no_tui(
         println!(
             "[{}] Progress: {}/{} runs ({:.1}%)",
             elapsed_str,
-            completed_runs,
-            total_runs,
-            if total_runs > 0 {
-                completed_runs as f64 / total_runs as f64 * 100.0
+            result.completed_runs,
+            result.total_runs,
+            if result.total_runs > 0 {
+                result.completed_runs as f64 / result.total_runs as f64 * 100.0
             } else {
                 0.0
             }
@@ -588,7 +610,7 @@ pub async fn run_benchmarks_no_tui(
         }
         println!();
 
-        if all_complete {
+        if result.all_complete {
             break;
         }
 

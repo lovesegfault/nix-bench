@@ -1,6 +1,6 @@
 # Cargo configuration for nix-bench
 #
-# Build commands now use cargo-make. Run: cargo make --list-all-steps
+# Build tasks use cargo-make. Run: cargo make --list-all-steps
 
 # Static linking configuration for musl targets
 [target.x86_64-unknown-linux-musl]

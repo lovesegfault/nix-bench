@@ -1,11 +1,11 @@
-# cargo-make configuration for nix-bench workspace
-# Run tasks with: cargo make <task>
+# cargo-make tasks for nix-bench
+# Run: cargo make <task>
 
 [config]
 default_to_workspace = false
 
 # ============================================================================
-# Agent Build Tasks
+# Build
 # ============================================================================
 
 [tasks.agent]
@@ -19,184 +19,48 @@ args = [
     "--target", "aarch64-unknown-linux-musl",
 ]
 
-[tasks.agent-x86]
-description = "Build agent for x86_64 only"
-command = "cargo"
-args = [
-    "build",
-    "-p", "nix-bench-agent",
-    "--release",
-    "--target", "x86_64-unknown-linux-musl",
-]
-
-[tasks.agent-aarch64]
-description = "Build agent for aarch64 only"
-command = "cargo"
-args = [
-    "build",
-    "-p", "nix-bench-agent",
-    "--release",
-    "--target", "aarch64-unknown-linux-musl",
-]
-
-# ============================================================================
-# Coordinator Build/Run Tasks
-# ============================================================================
+[tasks.build]
+description = "Build agents and coordinator in parallel"
+run_task = { name = ["agent", "build-coordinator"], parallel = true }
 
 [tasks.build-coordinator]
 description = "Build coordinator in release mode"
+private = true
 command = "cargo"
-args = [
-    "build",
-    "-p", "nix-bench-coordinator",
-    "--release",
-]
+args = ["build", "-p", "nix-bench-coordinator", "--release"]
 
-[tasks.b]
-description = "Build agents (musl) and coordinator in parallel"
-run_task = { name = ["agent", "build-coordinator"], parallel = true }
+# ============================================================================
+# Run
+# ============================================================================
 
-[tasks.build]
-description = "Build agents and coordinator in parallel"
-alias = "b"
-
-[tasks.run-coordinator]
-description = "Run coordinator (pass args after --)"
-command = "cargo"
-args = ["run", "-p", "nix-bench-coordinator", "--release", "--"]
-
-[tasks.r]
-description = "Build agents and coordinator, then run with 'run' subcommand"
-dependencies = ["b"]
+[tasks.run]
+description = "Build all, then run coordinator with 'run' subcommand (pass args after --)"
+dependencies = ["build"]
 command = "./target/release/nix-bench-coordinator"
 args = ["run", "${@}"]
 
-[tasks.run]
-description = "Build agents then run coordinator"
-alias = "r"
-
 [tasks.coord]
-description = "Run coordinator with any subcommand (pass subcommand after --)"
+description = "Build coordinator, run any subcommand (pass args after --)"
 dependencies = ["build-coordinator"]
 command = "./target/release/nix-bench-coordinator"
 args = ["${@}"]
 
-[tasks.scan]
-description = "Scan AWS for nix-bench resources using tags"
-dependencies = ["build-coordinator"]
-command = "./target/release/nix-bench-coordinator"
-args = ["scan", "${@}"]
-
-[tasks.cleanup-orphans]
-description = "Clean up orphaned AWS resources (dry-run by default)"
-dependencies = ["build-coordinator"]
-command = "./target/release/nix-bench-coordinator"
-args = ["cleanup-orphans", "${@}"]
-
 # ============================================================================
-# Test Tasks
+# Test
 # ============================================================================
 
-[tasks.t]
+[tasks.test]
 description = "Run tests with nextest"
 command = "cargo"
 args = ["nextest", "run"]
 
-[tasks.test]
-description = "Run tests with nextest"
-alias = "t"
-
-[tasks.ta]
+[tasks.test-all]
 description = "Run all tests including AWS integration"
 command = "cargo"
 args = ["nextest", "run", "--run-ignored", "all"]
 
-[tasks.test-all]
-description = "Run all tests including AWS integration"
-alias = "ta"
-
-[tasks.t-agent]
-description = "Run agent tests only"
-command = "cargo"
-args = ["nextest", "run", "-p", "nix-bench-agent"]
-
-[tasks.t-coordinator]
-description = "Run coordinator tests only"
-command = "cargo"
-args = ["nextest", "run", "-p", "nix-bench-coordinator"]
-
-[tasks.t-common]
-description = "Run common crate tests only"
-command = "cargo"
-args = ["nextest", "run", "-p", "nix-bench-common"]
-
-[tasks.t-utils]
-description = "Run test utilities crate tests"
-command = "cargo"
-args = ["nextest", "run", "-p", "nix-bench-test-utils"]
-
 [tasks.e2e]
-description = "Run full agent E2E test (requires AWS creds and built agents)"
+description = "Build agents then run full E2E test"
 dependencies = ["agent"]
 command = "cargo"
 args = ["test", "--test", "agent_e2e_integration", "--", "--ignored", "--nocapture"]
-
-[tasks.e2e-infra]
-description = "Run infrastructure-only E2E test (no agent required)"
-command = "cargo"
-args = ["test", "--test", "agent_e2e_integration", "test_infrastructure_setup_only", "--", "--ignored", "--nocapture"]
-
-# ============================================================================
-# Check/Lint Tasks
-# ============================================================================
-
-[tasks.c]
-description = "Cargo check"
-command = "cargo"
-args = ["check"]
-
-[tasks.check]
-alias = "c"
-
-[tasks.cl]
-description = "Cargo clippy"
-command = "cargo"
-args = ["clippy"]
-
-[tasks.clippy]
-alias = "cl"
-
-# ============================================================================
-# Development Helpers
-# ============================================================================
-
-[tasks.build-coordinator-debug]
-description = "Build coordinator in debug mode"
-command = "cargo"
-args = ["build", "-p", "nix-bench-coordinator"]
-
-[tasks.dev]
-description = "Build agents then run coordinator in dev mode (debug build)"
-dependencies = ["agent", "build-coordinator-debug"]
-command = "./target/debug/nix-bench-coordinator"
-args = ["run", "${@}"]
-
-[tasks.clean]
-description = "Clean build artifacts"
-command = "cargo"
-args = ["clean"]
-
-[tasks.docs]
-description = "Build and open documentation"
-command = "cargo"
-args = ["doc", "--workspace", "--no-deps", "--open"]
-
-[tasks.fmt]
-description = "Format code"
-command = "cargo"
-args = ["fmt"]
-
-[tasks.fmt-check]
-description = "Check formatting"
-command = "cargo"
-args = ["fmt", "--check"]

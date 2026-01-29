@@ -303,11 +303,13 @@
                   ${config.pre-commit.installationScript}
                   echo "nix-bench dev shell"
                   echo ""
-                  echo "  cargo make agent - Build agents (x86_64 + aarch64, static musl)"
-                  echo "  cargo make b     - Build agents then coordinator"
-                  echo "  cargo make r     - Build agents then run coordinator"
-                  echo "  cargo make t     - Run tests with nextest"
-                  echo "  cargo make ta    - Run all tests including AWS"
+                  echo "  cargo make agent     - Build agents (x86_64 + aarch64, static musl)"
+                  echo "  cargo make build     - Build agents + coordinator in parallel"
+                  echo "  cargo make run       - Build all, run coordinator (pass args after --)"
+                  echo "  cargo make coord     - Build coordinator, run any subcommand (pass args after --)"
+                  echo "  cargo make test      - Run tests with nextest"
+                  echo "  cargo make test-all  - Run all tests including AWS integration"
+                  echo "  cargo make e2e       - Build agents then run full E2E test"
                   echo ""
                 '';
 

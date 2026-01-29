@@ -197,87 +197,68 @@ pub async fn full_cleanup(params: FullCleanupConfig<'_>) -> Result<()> {
 
         let mut progress = CleanupProgress::new(
             instance_ids.len(),
-            0, // No EIPs to release
+            0,
             if iam_role_name.is_some() { 1 } else { 0 },
             sg_rules.len(),
         );
+        let step = |msg: String, progress: &CleanupProgress| {
+            info!("{}", msg);
+            reporter.report_cleanup(progress);
+        };
 
-        // Terminate EC2 instances in batch
-        info!(count = instance_ids.len(), "Terminating instances...");
+        // Terminate EC2 instances
         progress.current_step = format!("Terminating {} EC2 instances...", instance_ids.len());
-        reporter.report_cleanup(&progress);
-
+        step(progress.current_step.clone(), &progress);
         if !instance_ids.is_empty() {
             if let Err(e) = ec2.terminate_instances(&instance_ids).await {
                 warn!(error = ?e, "Failed to terminate instances in batch");
             }
         }
         progress.ec2_instances.0 = instance_ids.len();
-        reporter.report_cleanup(&progress);
 
         // Delete S3 bucket
-        info!("Deleting S3 bucket...");
         progress.current_step = "Deleting S3 bucket...".to_string();
-        reporter.report_cleanup(&progress);
-
+        step(progress.current_step.clone(), &progress);
         if let Err(e) = s3.delete_bucket(bucket_name).await {
             warn!(bucket = %bucket_name, error = ?e, "Failed to delete bucket");
         }
         progress.s3_bucket = true;
-        reporter.report_cleanup(&progress);
 
         // Delete IAM resources
         if let Some(role_name) = iam_role_name {
-            info!("Deleting IAM resources...");
             progress.current_step = "Deleting IAM role...".to_string();
-            reporter.report_cleanup(&progress);
-
+            step(progress.current_step.clone(), &progress);
             let iam = IamClient::from_context(&ctx);
             if let Err(e) = iam.delete_benchmark_role(role_name).await {
                 warn!(role = %role_name, error = ?e, "Failed to delete IAM role");
             }
             progress.iam_roles.0 += 1;
-            reporter.report_cleanup(&progress);
         }
 
-        // Delete security group rules (for user-provided security groups)
-        if !sg_rules.is_empty() {
-            info!(count = sg_rules.len(), "Removing security group rules...");
-            progress.current_step = format!("Removing {} security group rules...", sg_rules.len());
-            reporter.report_cleanup(&progress);
-
-            for rule in sg_rules {
-                if let Some((sg_id, cidr_ip)) = rule.split_once(':') {
-                    if let Err(e) = ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await {
-                        warn!(security_group = %sg_id, cidr_ip = %cidr_ip, error = ?e, "Failed to remove security group rule");
-                    }
+        // Delete security group rules
+        for rule in sg_rules {
+            if let Some((sg_id, cidr_ip)) = rule.split_once(':') {
+                if let Err(e) = ec2.remove_grpc_ingress_rule(sg_id, cidr_ip).await {
+                    warn!(security_group = %sg_id, cidr_ip = %cidr_ip, error = ?e, "Failed to remove SG rule");
                 }
-                progress.security_rules.0 += 1;
-                reporter.report_cleanup(&progress);
             }
+            progress.security_rules.0 += 1;
         }
 
-        // Delete security groups (for nix-bench-created security groups)
-        // Must wait for instances to fully terminate first
+        // Delete security group (must wait for instances to terminate first)
         if let Some(sg_id) = security_group_id {
             if !instance_ids.is_empty() {
-                info!("Waiting for instances to fully terminate before deleting security group...");
                 progress.current_step = "Waiting for instances to terminate...".to_string();
-                reporter.report_cleanup(&progress);
-
+                step(progress.current_step.clone(), &progress);
                 ec2.wait_for_all_terminated(&instance_ids).await?;
             }
-
-            info!("Deleting security group...");
             progress.current_step = "Deleting security group...".to_string();
-            reporter.report_cleanup(&progress);
-
+            step(progress.current_step.clone(), &progress);
             if let Err(e) = ec2.delete_security_group(sg_id).await {
                 warn!(sg_id = %sg_id, error = ?e, "Failed to delete security group");
             }
         }
 
-        // Final progress update
         progress.current_step = "Cleanup complete".to_string();
         reporter.report_cleanup(&progress);
     } else {

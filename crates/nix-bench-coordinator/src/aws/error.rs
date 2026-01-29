@@ -121,68 +121,37 @@ pub fn classify_aws_error(code: Option<&str>, message: Option<&str>) -> AwsError
     }
 }
 
+/// Try to classify an error cause by downcasting to known AWS SDK error types.
+macro_rules! try_classify_sdk_errors {
+    ($cause:expr, $($error_type:ty),+ $(,)?) => {
+        $(
+            if let Some(e) = $cause.downcast_ref::<aws_sdk_ec2::error::SdkError<$error_type>>() {
+                let meta = aws_sdk_ec2::error::ProvideErrorMetadata::meta(e);
+                return classify_aws_error(meta.code(), meta.message());
+            }
+        )+
+    };
+}
+
 /// Classify an error from an anyhow::Error by extracting the AWS error code.
 ///
 /// Walks the error chain using `ProvideErrorMetadata` to extract `.code()` and
 /// `.message()` from any AWS SDK error. Falls back to string matching on the
 /// Debug representation if no typed error is found.
 pub fn classify_anyhow_error(error: &anyhow::Error) -> AwsError {
-    use aws_sdk_ec2::error::ProvideErrorMetadata;
-
-    // Walk the error chain looking for any type that implements ProvideErrorMetadata.
-    // AWS SDK operation errors (e.g., RunInstancesError) implement this trait directly.
     for cause in error.chain() {
-        // Try EC2 operation errors
-        if let Some(e) =
-            cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
-                aws_sdk_ec2::operation::run_instances::RunInstancesError,
-            >>()
-        {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        if let Some(e) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
+        try_classify_sdk_errors!(
+            cause,
+            aws_sdk_ec2::operation::run_instances::RunInstancesError,
             aws_sdk_ec2::operation::describe_instances::DescribeInstancesError,
-        >>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        if let Some(e) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
             aws_sdk_ec2::operation::terminate_instances::TerminateInstancesError,
-        >>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        if let Some(e) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
             aws_sdk_ec2::operation::create_security_group::CreateSecurityGroupError,
-        >>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        if let Some(e) = cause.downcast_ref::<aws_sdk_ec2::error::SdkError<
             aws_sdk_ec2::operation::delete_security_group::DeleteSecurityGroupError,
-        >>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        // Try S3 operation errors
-        if let Some(e) = cause.downcast_ref::<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::delete_bucket::DeleteBucketError>>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        if let Some(e) = cause.downcast_ref::<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::create_bucket::CreateBucketError>>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        // Try IAM operation errors
-        if let Some(e) = cause.downcast_ref::<aws_sdk_iam::error::SdkError<aws_sdk_iam::operation::create_role::CreateRoleError>>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
-        if let Some(e) = cause.downcast_ref::<aws_sdk_iam::error::SdkError<aws_sdk_iam::operation::delete_role::DeleteRoleError>>() {
-            let meta = ProvideErrorMetadata::meta(e);
-            return classify_aws_error(meta.code(), meta.message());
-        }
+            aws_sdk_s3::operation::delete_bucket::DeleteBucketError,
+            aws_sdk_s3::operation::create_bucket::CreateBucketError,
+            aws_sdk_iam::operation::create_role::CreateRoleError,
+            aws_sdk_iam::operation::delete_role::DeleteRoleError,
+        );
     }
 
     // Fallback: extract error code from debug string representation

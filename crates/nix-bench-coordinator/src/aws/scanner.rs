@@ -114,13 +114,7 @@ impl ResourceScanner {
 
     /// Scan EC2 instances by tag filter
     pub async fn scan_ec2_instances(&self, config: &ScanConfig) -> Result<Vec<DiscoveredResource>> {
-        let client = self.ctx.ec2_client();
-
-        let mut filters = vec![
-            Filter::builder()
-                .name(format!("tag:{}", TAG_TOOL))
-                .values(TAG_TOOL_VALUE)
-                .build(),
+        let extra_filters = vec![
             // Exclude terminated instances
             Filter::builder()
                 .name("instance-state-name")
@@ -131,47 +125,22 @@ impl ResourceScanner {
                 .build(),
         ];
 
-        if let Some(ref run_id) = config.run_id {
-            filters.push(
-                Filter::builder()
-                    .name(format!("tag:{}", TAG_RUN_ID))
-                    .values(run_id)
-                    .build(),
-            );
-        }
-
-        let response = client
+        let response = self
+            .ctx
+            .ec2_client()
             .describe_instances()
-            .set_filters(Some(filters))
+            .set_filters(Some(build_tag_filters(config, extra_filters)))
             .send()
             .await?;
 
-        let mut resources = Vec::new();
-        let now = Utc::now();
+        let items: Vec<_> = response
+            .reservations()
+            .iter()
+            .flat_map(|r| r.instances())
+            .filter_map(|i| Some((extract_ec2_tags(i.tags()), i.instance_id()?.to_string())))
+            .collect();
 
-        for reservation in response.reservations() {
-            for instance in reservation.instances() {
-                let tags = extract_ec2_tags(instance.tags());
-
-                if !self.should_include(&tags, config, now) {
-                    continue;
-                }
-
-                if let Some(instance_id) = instance.instance_id() {
-                    if let Some(run_id) = tags.get(TAG_RUN_ID) {
-                        resources.push(DiscoveredResource {
-                            resource: ResourceId::Ec2Instance(instance_id.to_string()),
-                            region: self.region.clone(),
-                            run_id: run_id.clone(),
-                            created_at: parse_created_at(&tags),
-                            status: tags.get(TAG_STATUS).cloned().unwrap_or_default(),
-                            tags,
-                        });
-                    }
-                }
-            }
-        }
-
+        let resources = self.collect_tagged_resources(&items, ResourceId::Ec2Instance, config);
         debug!(count = resources.len(), "Found EC2 instances");
         Ok(resources)
     }
@@ -181,56 +150,49 @@ impl ResourceScanner {
         &self,
         config: &ScanConfig,
     ) -> Result<Vec<DiscoveredResource>> {
-        let client = self.ctx.ec2_client();
-
-        let mut filters = vec![
-            Filter::builder()
-                .name(format!("tag:{}", TAG_TOOL))
-                .values(TAG_TOOL_VALUE)
-                .build(),
-        ];
-
-        if let Some(ref run_id) = config.run_id {
-            filters.push(
-                Filter::builder()
-                    .name(format!("tag:{}", TAG_RUN_ID))
-                    .values(run_id)
-                    .build(),
-            );
-        }
-
-        let response = client
+        let response = self
+            .ctx
+            .ec2_client()
             .describe_security_groups()
-            .set_filters(Some(filters))
+            .set_filters(Some(build_tag_filters(config, vec![])))
             .send()
             .await?;
 
-        let mut resources = Vec::new();
-        let now = Utc::now();
+        let items: Vec<_> = response
+            .security_groups()
+            .iter()
+            .filter_map(|sg| Some((extract_ec2_tags(sg.tags()), sg.group_id()?.to_string())))
+            .collect();
 
-        for sg in response.security_groups() {
-            let tags = extract_ec2_tags(sg.tags());
-
-            if !self.should_include(&tags, config, now) {
-                continue;
-            }
-
-            if let Some(sg_id) = sg.group_id() {
-                if let Some(run_id) = tags.get(TAG_RUN_ID) {
-                    resources.push(DiscoveredResource {
-                        resource: ResourceId::SecurityGroup(sg_id.to_string()),
-                        region: self.region.clone(),
-                        run_id: run_id.clone(),
-                        created_at: parse_created_at(&tags),
-                        status: tags.get(TAG_STATUS).cloned().unwrap_or_default(),
-                        tags,
-                    });
-                }
-            }
-        }
-
+        let resources = self.collect_tagged_resources(&items, ResourceId::SecurityGroup, config);
         debug!(count = resources.len(), "Found security groups");
         Ok(resources)
+    }
+
+    /// Collect DiscoveredResources from a list of (tags, id) pairs,
+    /// applying the standard tag filters.
+    fn collect_tagged_resources(
+        &self,
+        items: &[(HashMap<String, String>, String)],
+        make_resource: fn(String) -> ResourceId,
+        config: &ScanConfig,
+    ) -> Vec<DiscoveredResource> {
+        let now = Utc::now();
+        items
+            .iter()
+            .filter(|(tags, _)| self.should_include(tags, config, now))
+            .filter_map(|(tags, id)| {
+                let run_id = tags.get(TAG_RUN_ID)?;
+                Some(DiscoveredResource {
+                    resource: make_resource(id.clone()),
+                    region: self.region.clone(),
+                    run_id: run_id.clone(),
+                    created_at: parse_created_at(tags),
+                    status: tags.get(TAG_STATUS).cloned().unwrap_or_default(),
+                    tags: tags.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Scan S3 buckets by listing and checking tags
@@ -547,6 +509,26 @@ impl ResourceScanner {
 
         true
     }
+}
+
+/// Build standard nix-bench tag filters with optional extra filters.
+fn build_tag_filters(config: &ScanConfig, extra: Vec<Filter>) -> Vec<Filter> {
+    let mut filters = vec![
+        Filter::builder()
+            .name(format!("tag:{}", TAG_TOOL))
+            .values(TAG_TOOL_VALUE)
+            .build(),
+    ];
+    filters.extend(extra);
+    if let Some(ref run_id) = config.run_id {
+        filters.push(
+            Filter::builder()
+                .name(format!("tag:{}", TAG_RUN_ID))
+                .values(run_id)
+                .build(),
+        );
+    }
+    filters
 }
 
 /// Extract tags from any AWS tag type into a HashMap.

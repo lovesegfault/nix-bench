@@ -59,6 +59,7 @@ tracing-subscriber.workspace = true
 
 # Derive macros
 strum.workspace = true
+derive_more.workspace = true
 
 # Utilities
 chrono.workspace = true

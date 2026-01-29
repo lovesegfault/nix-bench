@@ -56,9 +56,4 @@ impl StatusCode {
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Failed)
     }
-
-    /// Parse from string, returning None for unknown values
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
 }

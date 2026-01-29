@@ -87,7 +87,6 @@ impl Architecture {
 /// Unique identifier for a benchmark run (UUIDv7).
 ///
 /// Wraps a UUIDv7 string to provide type safety for run identifiers.
-/// Implements `Display`, `AsRef<str>`, and serde traits for ergonomic use.
 #[derive(
     Debug,
     Clone,
@@ -98,6 +97,8 @@ impl Architecture {
     Deserialize,
     derive_more::Display,
     derive_more::From,
+    derive_more::AsRef,
+    derive_more::Deref,
 )]
 #[serde(transparent)]
 pub struct RunId(String);
@@ -117,12 +118,6 @@ impl RunId {
 impl Default for RunId {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl AsRef<str> for RunId {
-    fn as_ref(&self) -> &str {
-        &self.0
     }
 }
 

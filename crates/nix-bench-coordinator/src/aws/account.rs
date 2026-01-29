@@ -1,32 +1,20 @@
 //! AWS account validation and identity
 
 use anyhow::{Context, Result};
-use std::fmt;
 use tracing::info;
 
 /// Strongly-typed AWS account ID (12-digit string)
 ///
 /// This newtype prevents accidentally mixing account IDs with other strings
 /// and ensures account validation happens at specific points in the code.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::Display, derive_more::Deref)]
 pub struct AccountId(String);
 
 impl AccountId {
-    /// Get the account ID as a string slice
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
     /// Create an AccountId for testing purposes
     #[cfg(test)]
     pub fn new(s: String) -> Self {
         AccountId(s)
-    }
-}
-
-impl fmt::Display for AccountId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 

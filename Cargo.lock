@@ -2310,6 +2310,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "crossterm",
+ "derive_more",
  "futures",
  "log",
  "nix-bench-agent",

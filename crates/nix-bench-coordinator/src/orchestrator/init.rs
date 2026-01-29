@@ -116,7 +116,7 @@ impl<'a> BenchmarkInitializer<'a> {
         .await;
         let account_id = get_current_account_id(aws.sdk_config()).await?;
         info!(account_id = %account_id, "AWS account validated");
-        reporter.report_account_info(account_id.as_str());
+        reporter.report_account_info(&account_id);
 
         let ec2 = Ec2Client::from_context(&aws);
         let s3 = S3Client::from_context(&aws);

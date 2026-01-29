@@ -59,7 +59,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v7"] }
 backon = { version = "1", features = ["tokio-sleep"] }
 strum = { version = "0.27", features = ["derive"] }
-derive_more = { version = "2", features = ["display", "from"] }
+derive_more = { version = "2", features = ["display", "from", "deref", "as_ref"] }
 
 # TUI (coordinator-only)
 ratatui = "0.30"

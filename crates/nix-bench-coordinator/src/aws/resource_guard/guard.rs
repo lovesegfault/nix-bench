@@ -1,6 +1,8 @@
 //! RAII guards, registry, builder, and cleanup executor for AWS resources
 
 use super::types::{ResourceId, ResourceMeta};
+use crate::aws::cleanup::{CleanupResult, delete_resource};
+use crate::aws::context::AwsContext;
 use crate::aws::{Ec2Client, IamClient, S3Client};
 use anyhow::Result;
 use std::cmp::Ordering;
@@ -359,87 +361,39 @@ impl CleanupExecutor {
     }
 
     async fn cleanup_region(&self, region: &str, items: Vec<CleanupItem>) -> Result<()> {
-        let ec2 = Ec2Client::new(region).await?;
-        let s3 = S3Client::new(region).await?;
-        let iam = IamClient::new(region).await?;
-
-        let mut terminated_instances: Vec<String> = Vec::new();
+        let ctx = AwsContext::new(region).await;
+        let ec2 = Ec2Client::from_context(&ctx);
+        let s3 = S3Client::from_context(&ctx);
+        let iam = IamClient::from_context(&ctx);
 
         for item in items {
-            let result = self
-                .cleanup_resource(&ec2, &s3, &iam, &item.resource, &mut terminated_instances)
-                .await;
-
+            let result = delete_resource(&item.resource, &ec2, &s3, &iam).await;
             match result {
-                Ok(()) => {
+                CleanupResult::Deleted => {
                     info!(
                         resource = %item.resource.description(),
                         run_id = %item.meta.run_id,
                         "Cleaned up dropped resource"
                     );
                 }
-                Err(e) => {
-                    let error_str = format!("{:?}", e);
-                    if is_not_found_error(&error_str) {
-                        debug!(
-                            resource = %item.resource.description(),
-                            "Resource already deleted"
-                        );
-                    } else {
-                        warn!(
-                            resource = %item.resource.description(),
-                            error = ?e,
-                            "Failed to cleanup dropped resource"
-                        );
-                    }
+                CleanupResult::AlreadyDeleted => {
+                    debug!(
+                        resource = %item.resource.description(),
+                        "Resource already deleted"
+                    );
                 }
+                CleanupResult::Failed => {
+                    warn!(
+                        resource = %item.resource.description(),
+                        "Failed to cleanup dropped resource"
+                    );
+                }
+                CleanupResult::Skipped => {}
             }
         }
 
         Ok(())
     }
-
-    async fn cleanup_resource(
-        &self,
-        ec2: &Ec2Client,
-        s3: &S3Client,
-        iam: &IamClient,
-        resource: &ResourceId,
-        terminated_instances: &mut Vec<String>,
-    ) -> Result<()> {
-        match resource {
-            ResourceId::Ec2Instance(id) => {
-                terminated_instances.push(id.clone());
-                ec2.terminate_instance(id).await
-            }
-            ResourceId::ElasticIp(id) => ec2.release_elastic_ip(id).await,
-            ResourceId::S3Bucket(name) => s3.delete_bucket(name).await,
-            ResourceId::S3Object(_) => Ok(()),
-            ResourceId::IamRole(name) => iam.delete_benchmark_role(name).await,
-            ResourceId::IamInstanceProfile(_) => Ok(()),
-            ResourceId::SecurityGroupRule {
-                security_group_id,
-                cidr_ip,
-            } => {
-                ec2.remove_grpc_ingress_rule(security_group_id, cidr_ip)
-                    .await
-            }
-            ResourceId::SecurityGroup(id) => {
-                for instance_id in terminated_instances.iter() {
-                    let _ = ec2.wait_for_terminated(instance_id).await;
-                }
-                ec2.delete_security_group(id).await
-            }
-        }
-    }
-}
-
-fn is_not_found_error(error_str: &str) -> bool {
-    error_str.contains("NotFound")
-        || error_str.contains("NoSuchBucket")
-        || error_str.contains("NoSuchEntity")
-        || error_str.contains("InvalidInstanceID")
-        || error_str.contains("InvalidGroup")
 }
 
 /// Create a registry and executor pair

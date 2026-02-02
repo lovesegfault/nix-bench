@@ -3,7 +3,6 @@
 use super::types::InstanceStatus;
 use crate::tui::{CleanupProgress, InitPhase, TuiMessage};
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// Instance update information for progress reporting
@@ -17,20 +16,17 @@ pub struct InstanceUpdate {
 
 /// Unified progress reporter for TUI and non-TUI modes
 pub enum Reporter {
-    Channel {
-        tx: mpsc::Sender<TuiMessage>,
-        cancel: CancellationToken,
-    },
+    Channel { tx: mpsc::Sender<TuiMessage> },
     Log,
 }
 
 impl Reporter {
-    pub fn channel(tx: mpsc::Sender<TuiMessage>, cancel: CancellationToken) -> Self {
-        Self::Channel { tx, cancel }
+    pub fn channel(tx: mpsc::Sender<TuiMessage>) -> Self {
+        Self::Channel { tx }
     }
 
     fn send(&self, msg: TuiMessage) {
-        if let Reporter::Channel { tx, .. } = self {
+        if let Reporter::Channel { tx } = self {
             let _ = tx.try_send(msg);
         }
     }
@@ -53,20 +49,6 @@ impl Reporter {
         }
     }
 
-    pub fn report_run_info(&self, run_id: &str, bucket_name: &str) {
-        match self {
-            Reporter::Channel { .. } => {
-                self.send(TuiMessage::RunInfo {
-                    run_id: run_id.to_string(),
-                    bucket_name: bucket_name.to_string(),
-                });
-            }
-            Reporter::Log => {
-                info!(run_id = %run_id, bucket_name = %bucket_name, "Run initialized")
-            }
-        }
-    }
-
     pub fn report_instance_update(&self, update: InstanceUpdate) {
         match self {
             Reporter::Channel { .. } => {
@@ -76,7 +58,6 @@ impl Reporter {
                     status: update.status,
                     public_ip: update.public_ip,
                     run_progress: None,
-                    durations: None,
                 });
             }
             Reporter::Log => {
@@ -109,13 +90,6 @@ impl Reporter {
                 self.send(TuiMessage::Phase(InitPhase::CleaningUp(progress.clone())));
             }
             Reporter::Log => info!(step = %progress.current_step, "Cleanup progress"),
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        match self {
-            Reporter::Channel { cancel, .. } => cancel.is_cancelled(),
-            Reporter::Log => false,
         }
     }
 }

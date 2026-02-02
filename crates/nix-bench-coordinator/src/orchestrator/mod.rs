@@ -7,7 +7,8 @@
 // Submodules
 mod benchmark;
 mod cleanup;
-mod monitoring;
+pub mod engine;
+pub mod events;
 mod results;
 mod user_data;
 
@@ -16,20 +17,18 @@ pub mod progress;
 pub mod types;
 
 // Re-export core types
-pub use cleanup::{CleanupRequest, FullCleanupConfig, cleanup_executor, full_cleanup};
-pub use init::BenchmarkInitializer;
+pub use cleanup::{FullCleanupConfig, full_cleanup};
+pub use engine::{PollRequest, RunEngine};
+pub use events::RunEvent;
+pub use init::initialize;
 pub use progress::{InstanceUpdate, Reporter};
 pub use types::{InstanceState, InstanceStatus};
 
 use crate::config::RunConfig;
 use crate::tui::LogCapture;
 use anyhow::Result;
-use nix_bench_common::defaults::DEFAULT_GRPC_PORT;
 use nix_bench_common::{Architecture, RunId};
 use tracing::info;
-
-/// gRPC port for agent communication (from common defaults)
-pub(crate) const GRPC_PORT: u16 = DEFAULT_GRPC_PORT;
 
 /// Run benchmarks on the specified instances
 pub async fn run_benchmarks(config: RunConfig, log_capture: Option<LogCapture>) -> Result<()> {

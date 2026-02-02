@@ -1,19 +1,18 @@
 //! TUI application state and main loop
 
 mod event_loop;
-mod grpc_polling;
 mod lifecycle;
 mod mouse;
 mod state;
 
 pub use crate::log_buffer::LogBuffer;
 pub use lifecycle::{CleanupProgress, InitPhase, LifecycleState};
-pub use state::{InstancesState, PanelFocus, RunContext, ScrollState, UiState};
+pub use state::{InstancesState, PanelFocus, ScrollState, UiState};
 
-use crate::orchestrator::{InstanceState, InstanceStatus};
+use crate::orchestrator::{InstanceState, InstanceStatus, RunEngine};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Ensures the Ctrl+C signal handler is only spawned once per process.
 static CTRLC_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -23,31 +22,35 @@ use tui_scrollview::ScrollViewState;
 /// Application state
 ///
 /// Organized into focused sub-structs:
-/// - `instances`: Instance data and selection
+/// - `engine`: The orchestration engine (set when init completes)
+/// - `instances`: Instance data and selection (pre-init placeholder state)
 /// - `ui`: Display state (focus, popups, areas)
 /// - `scroll`: Scroll positions and animations
-/// - `context`: Run metadata and timing
 /// - `lifecycle`: Quit and phase state
 pub struct App {
+    /// The orchestration engine (None until init completes)
+    pub engine: Option<RunEngine>,
     /// Instance data and selection state
     pub instances: InstancesState,
     /// UI display state
     pub ui: UiState,
     /// Scroll and animation state
     pub scroll: ScrollState,
-    /// Run context and timing
-    pub context: RunContext,
     /// Lifecycle state
     pub lifecycle: LifecycleState,
+    /// AWS account ID
+    pub aws_account_id: Option<String>,
+    /// Total runs per instance
+    pub total_runs: u32,
+    /// When the run started
+    pub start_time: Instant,
+    /// When all instances completed
+    pub completion_time: Option<Instant>,
 }
 
 impl App {
     /// Create a new app in early/loading state
-    pub fn new_loading(
-        instance_types: &[String],
-        total_runs: u32,
-        tls_config: Option<nix_bench_common::TlsConfig>,
-    ) -> Self {
+    pub fn new_loading(instance_types: &[String], total_runs: u32) -> Self {
         // Create placeholder instances
         let mut data = HashMap::new();
         let mut order = Vec::new();
@@ -73,6 +76,7 @@ impl App {
         order.sort();
 
         Self {
+            engine: None,
             instances: InstancesState {
                 data,
                 order,
@@ -80,8 +84,11 @@ impl App {
             },
             ui: UiState::default(),
             scroll: ScrollState::new(),
-            context: RunContext::new(total_runs, tls_config),
             lifecycle: LifecycleState::default(),
+            aws_account_id: None,
+            total_runs,
+            start_time: Instant::now(),
+            completion_time: None,
         }
     }
 
@@ -104,7 +111,67 @@ impl App {
     /// Get total runs
     #[inline]
     pub fn total_runs(&self) -> u32 {
-        self.context.total_runs
+        self.total_runs
+    }
+
+    /// Get instance data from the appropriate source.
+    ///
+    /// Returns engine data when available (post-init), otherwise falls back
+    /// to the pre-init placeholder data in `instances.data`.
+    pub fn instance_data(&self) -> &HashMap<String, InstanceState> {
+        match &self.engine {
+            Some(engine) => engine.instances(),
+            None => &self.instances.data,
+        }
+    }
+
+    /// Re-sort instance display order by average duration (fastest first).
+    ///
+    /// Reads from the appropriate data source (engine post-init, app pre-init)
+    /// and sorts `instances.order` accordingly.
+    pub fn sort_instances_by_duration(&mut self) {
+        let selected_type = self
+            .instances
+            .order
+            .get(self.instances.selected_index)
+            .cloned();
+
+        // Pre-compute averages (borrows self via instance_data(), released after collect)
+        let averages: HashMap<String, Option<f64>> = self
+            .instance_data()
+            .iter()
+            .map(|(k, v)| {
+                let durations = v.durations();
+                let avg = if durations.is_empty() {
+                    None
+                } else {
+                    Some(durations.iter().sum::<f64>() / durations.len() as f64)
+                };
+                (k.clone(), avg)
+            })
+            .collect();
+
+        self.instances.order.sort_by(|a, b| {
+            let avg_a = averages.get(a).and_then(|v| *v);
+            let avg_b = averages.get(b).and_then(|v| *v);
+            match (avg_a, avg_b) {
+                (Some(a_val), Some(b_val)) => a_val
+                    .partial_cmp(&b_val)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.cmp(b),
+            }
+        });
+
+        if let Some(selected) = selected_type {
+            self.instances.selected_index = self
+                .instances
+                .order
+                .iter()
+                .position(|t| t == &selected)
+                .unwrap_or(0);
+        }
     }
 
     /// Check if we're still initializing
@@ -125,7 +192,7 @@ impl App {
 
     /// Get elapsed time since start
     pub fn elapsed(&self) -> Duration {
-        self.context.start_time.elapsed()
+        self.start_time.elapsed()
     }
 
     /// Format elapsed time as HH:MM:SS
@@ -139,8 +206,9 @@ impl App {
 
     /// Calculate completion percentage
     pub fn completion_percentage(&self) -> f64 {
-        let total: u32 = (self.instances.data.len() as u32).saturating_mul(self.context.total_runs);
-        let completed: u32 = self.instances.data.values().map(|s| s.run_progress).sum();
+        let data = self.instance_data();
+        let total: u32 = (data.len() as u32).saturating_mul(self.total_runs);
+        let completed: u32 = data.values().map(|s| s.run_progress).sum();
         if total == 0 {
             0.0
         } else {
@@ -196,10 +264,6 @@ impl App {
         };
     }
 
-    pub fn selected_instance(&self) -> Option<&InstanceState> {
-        self.instances.selected()
-    }
-
     pub fn select_next(&mut self) {
         if self.instances.selected_index < self.instances.order.len().saturating_sub(1) {
             self.instances.selected_index += 1;
@@ -213,7 +277,7 @@ impl App {
     }
 
     pub fn all_complete(&self) -> bool {
-        self.instances.data.values().all(|s| {
+        self.instance_data().values().all(|s| {
             matches!(
                 s.status,
                 InstanceStatus::Complete | InstanceStatus::Failed | InstanceStatus::Terminated
@@ -228,7 +292,7 @@ impl App {
     /// against the race where we see Complete status before the final duration
     /// is polled.
     pub fn all_results_captured(&self) -> bool {
-        self.instances.data.values().all(|s| {
+        self.instance_data().values().all(|s| {
             match s.status {
                 // Complete instances must have all their durations
                 InstanceStatus::Complete => s.durations().len() as u32 >= s.run_progress,
@@ -330,14 +394,25 @@ impl App {
 
     /// Advance all throbber animations (call on tick)
     pub fn tick_throbbers(&mut self) {
+        // Collect instance statuses before mutation (instance_data() borrows self)
+        let statuses: Vec<(String, InstanceStatus)> = self
+            .instance_data()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.status))
+            .collect();
+
+        let running: std::collections::HashSet<&str> = statuses
+            .iter()
+            .filter(|(_, s)| *s == InstanceStatus::Running)
+            .map(|(k, _)| k.as_str())
+            .collect();
+
         // Add throbber states for running instances
-        for (instance_type, state) in &self.instances.data {
-            if state.status == InstanceStatus::Running {
-                self.scroll
-                    .throbber_states
-                    .entry(instance_type.clone())
-                    .or_default();
-            }
+        for instance_type in &running {
+            self.scroll
+                .throbber_states
+                .entry((*instance_type).to_string())
+                .or_default();
         }
 
         // Advance all throbber states
@@ -346,18 +421,16 @@ impl App {
         }
 
         // Remove throbber states for non-running instances
-        self.scroll.throbber_states.retain(|instance_type, _| {
-            self.instances
-                .data
-                .get(instance_type)
-                .map(|s| s.status == InstanceStatus::Running)
-                .unwrap_or(false)
-        });
+        self.scroll
+            .throbber_states
+            .retain(|k, _| running.contains(k.as_str()));
 
         // Clean up scroll states for removed instances
+        let all_keys: std::collections::HashSet<&str> =
+            statuses.iter().map(|(k, _)| k.as_str()).collect();
         self.scroll
             .log_scroll_states
-            .retain(|k, _| self.instances.data.contains_key(k));
+            .retain(|k, _| all_keys.contains(k.as_str()));
     }
 
     /// Get throbber state for an instance (if running)
@@ -372,19 +445,19 @@ mod tests {
 
     #[test]
     fn test_completion_percentage_zero_instances() {
-        let app = App::new_loading(&[], 5, None);
+        let app = App::new_loading(&[], 5);
         assert_eq!(app.completion_percentage(), 0.0);
     }
 
     #[test]
     fn test_completion_percentage_zero_runs() {
-        let app = App::new_loading(&["m5.large".to_string()], 0, None);
+        let app = App::new_loading(&["m5.large".to_string()], 0);
         assert_eq!(app.completion_percentage(), 0.0);
     }
 
     #[test]
     fn test_completion_percentage_normal() {
-        let mut app = App::new_loading(&["m5.large".to_string(), "c5.large".to_string()], 10, None);
+        let mut app = App::new_loading(&["m5.large".to_string(), "c5.large".to_string()], 10);
 
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.run_progress = 5;
@@ -398,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_tick_throbbers_adds_running_instance() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
 
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Running;
@@ -410,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_tick_throbbers_removes_completed_instance() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
 
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Running;
@@ -427,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_tick_throbbers_cleanup_orphaned_states() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
 
         app.scroll
             .throbber_states
@@ -445,7 +518,7 @@ mod tests {
 
     #[test]
     fn test_all_results_captured_complete_with_all_durations() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
 
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Complete;
@@ -462,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_all_results_captured_complete_missing_duration() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
 
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Complete;
@@ -480,7 +553,7 @@ mod tests {
 
     #[test]
     fn test_all_results_captured_failed_instance() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
 
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Failed;
@@ -498,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_all_results_captured_running_instance() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
 
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             state.status = InstanceStatus::Running;

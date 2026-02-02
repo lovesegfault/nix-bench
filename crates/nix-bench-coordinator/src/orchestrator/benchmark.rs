@@ -5,200 +5,19 @@
 //! `BenchmarkInitializer`.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
-use super::GRPC_PORT;
-use super::cleanup::{CleanupRequest, FullCleanupConfig, cleanup_executor, full_cleanup};
-use super::init::BenchmarkInitializer;
-use super::monitoring::poll_bootstrap_status;
 use super::progress::Reporter;
 use super::results::{print_results_summary, write_results};
-use super::types::{InstanceState, InstanceStatus, instances_with_ips};
-use super::user_data::detect_bootstrap_failure;
-use crate::aws::{
-    GrpcStatusPoller, LogStreamingOptions, send_ack_complete, start_log_streaming_unified,
-};
+use super::types::InstanceState;
 use crate::config::RunConfig;
-use crate::tui::{self, InitPhase, LogCapture, TuiMessage};
-use nix_bench_common::{RunId, TlsConfig};
-
-// ─── Shared Infrastructure ──────────────────────────────────────────────────
-
-impl<'a> BenchmarkInitializer<'a> {
-    /// Start gRPC log streaming for instances with public IPs.
-    ///
-    /// If `tui_tx` is provided, logs are forwarded to the TUI channel.
-    /// Otherwise, logs are printed to stdout.
-    pub fn start_streaming(
-        &self,
-        instances_with_ips: &[(String, String)],
-        tls_config: TlsConfig,
-        tui_tx: Option<mpsc::Sender<TuiMessage>>,
-    ) {
-        if instances_with_ips.is_empty() {
-            warn!("No instances have public IPs, gRPC streaming not available");
-            return;
-        }
-
-        info!(
-            count = instances_with_ips.len(),
-            "Starting gRPC log streaming with mTLS"
-        );
-
-        let mut options = LogStreamingOptions::new(
-            instances_with_ips,
-            self.run_id.as_str(),
-            GRPC_PORT,
-            tls_config,
-        );
-        if let Some(tx) = tui_tx {
-            options = options.with_channel(tx);
-        }
-        let grpc_handles = start_log_streaming_unified(options);
-
-        // Spawn a monitor task that logs streaming errors/panics
-        tokio::spawn(async move {
-            for handle in grpc_handles {
-                match handle.await {
-                    Ok(Ok(())) => {
-                        debug!("gRPC streaming task completed successfully");
-                    }
-                    Ok(Err(e)) => {
-                        warn!(error = ?e, "gRPC streaming task failed");
-                    }
-                    Err(e) => {
-                        if e.is_panic() {
-                            error!(error = ?e, "gRPC streaming task panicked");
-                        } else {
-                            debug!(error = ?e, "gRPC streaming task cancelled");
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    /// Start bootstrap failure monitoring via EC2 console output.
-    pub fn start_bootstrap_monitoring(
-        &self,
-        instances: &HashMap<String, InstanceState>,
-        tx: mpsc::Sender<TuiMessage>,
-        cancel: CancellationToken,
-    ) {
-        let instances_for_logs = instances.clone();
-        let region = self.config.aws.region.clone();
-        let timeout_secs = self.config.flags.timeout;
-        let start_time = Instant::now();
-        tokio::spawn(async move {
-            poll_bootstrap_status(
-                instances_for_logs,
-                tx,
-                region,
-                timeout_secs,
-                start_time,
-                cancel,
-            )
-            .await;
-        });
-    }
-
-    /// Print results and write output file.
-    pub async fn report_results(
-        config: &RunConfig,
-        run_id: &str,
-        instances: &HashMap<String, InstanceState>,
-    ) -> Result<()> {
-        print_results_summary(instances);
-        write_results(config, run_id, instances).await
-    }
-}
-
-/// Result from a single status poll cycle.
-struct PollResult {
-    all_complete: bool,
-    total_runs: u32,
-    completed_runs: u32,
-}
-
-/// Apply polled gRPC status to instance states, handle acks and bootstrap failure detection.
-async fn apply_status_updates(
-    instances: &mut HashMap<String, InstanceState>,
-    status_map: &HashMap<String, crate::aws::GrpcInstanceStatus>,
-    acked: &mut std::collections::HashSet<String>,
-    run_id: &str,
-    tls_config: &TlsConfig,
-    ec2: Option<&crate::aws::Ec2Client>,
-) -> PollResult {
-    let mut all_complete = true;
-    let mut total_runs = 0u32;
-    let mut completed_runs = 0u32;
-
-    for (instance_type, state) in instances.iter_mut() {
-        if state.is_terminal() && acked.contains(instance_type) {
-            total_runs += state.total_runs;
-            completed_runs += state.run_progress;
-            continue;
-        }
-
-        if let Some(grpc_status) = status_map.get(instance_type) {
-            let was_failed = state.status == InstanceStatus::Failed;
-
-            if let Some(status_code) = grpc_status.status {
-                state.status = InstanceStatus::from_status_code(status_code);
-            }
-            if let Some(progress) = grpc_status.run_progress {
-                state.run_progress = progress;
-            }
-            state.run_results = grpc_status.run_results.clone();
-
-            if state.status == InstanceStatus::Failed && !was_failed {
-                if let Some(ref msg) = grpc_status.error_message {
-                    println!("\n  {} FAILED: {}", instance_type, msg);
-                }
-            }
-
-            if state.is_terminal() && !acked.contains(instance_type) {
-                if let Some(ip) = &state.public_ip {
-                    acked.insert(instance_type.clone());
-                    send_ack_complete(ip, GRPC_PORT, run_id, tls_config).await;
-                }
-            }
-        } else if let Some(ec2) = ec2 {
-            // No gRPC status - check console output for bootstrap failures
-            if !state.instance_id.is_empty() && state.status == InstanceStatus::Running {
-                if let Ok(Some(console_output)) = ec2.get_console_output(&state.instance_id).await {
-                    if let Some(pattern) = detect_bootstrap_failure(&console_output) {
-                        error!(
-                            instance_type = %instance_type,
-                            instance_id = %state.instance_id,
-                            pattern = %pattern,
-                            "Bootstrap failure detected"
-                        );
-                        println!("\n  Bootstrap failure on {}: {}", instance_type, pattern);
-                        state.status = InstanceStatus::Failed;
-                    }
-                }
-            }
-        }
-
-        if !state.is_terminal() {
-            all_complete = false;
-        }
-        total_runs += state.total_runs;
-        completed_runs += state.run_progress;
-    }
-
-    PollResult {
-        all_complete,
-        total_runs,
-        completed_runs,
-    }
-}
+use crate::tui::{self, LogCapture, TuiMessage};
+use nix_bench_common::RunId;
 
 // ─── TUI Mode ───────────────────────────────────────────────────────────────
 
@@ -222,9 +41,6 @@ pub async fn run_benchmarks_with_tui(
     // Create channel for TUI updates
     let (tx, mut rx) = mpsc::channel::<TuiMessage>(100);
 
-    // Create channel for cleanup requests (TUI -> cleanup executor)
-    let (cleanup_tx, cleanup_rx) = mpsc::channel::<CleanupRequest>(100);
-
     // Setup terminal FIRST
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -232,112 +48,53 @@ pub async fn run_benchmarks_with_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create empty instances map - will be filled by background task
-    let mut instances: HashMap<String, InstanceState> = HashMap::new();
-
-    // Create app state in loading mode (TLS config is sent via channel later)
-    let mut app = tui::App::new_loading(
-        &config.instances.instance_types,
-        config.benchmark.runs,
-        None,
-    );
+    // Create app state in loading mode
+    let mut app = tui::App::new_loading(&config.instances.instance_types, config.benchmark.runs);
 
     // Create cancellation token shared between TUI and init task
     let cancel_token = CancellationToken::new();
-    let cancel_for_init = cancel_token.clone();
     let cancel_for_tui = cancel_token.clone();
 
-    // Clone what we need for the background task
+    // Spawn background initialization task
     let config_clone = config.clone();
     let run_id_clone = run_id.clone();
-    let bucket_name_clone = bucket_name.clone();
     let tx_clone = tx;
 
-    // Spawn background initialization task
     let init_handle = tokio::spawn(async move {
         run_init_task(InitTaskConfig {
             config: config_clone,
             run_id: run_id_clone,
-            bucket_name: bucket_name_clone,
+            bucket_name: bucket_name.clone(),
             agent_x86_64,
             agent_aarch64,
             tx: tx_clone,
-            cancel: cancel_for_init,
-            cleanup_rx,
         })
         .await
     });
 
-    // Run the TUI with channel (gRPC status polling happens inside the TUI)
+    // Run the TUI event loop (gRPC status polling happens via engine inside)
     let tui_result = app
-        .run_with_channel(
-            &mut terminal,
-            &mut rx,
-            cancel_for_tui,
-            Some(cleanup_tx.clone()),
-        )
+        .run_with_channel(&mut terminal, &mut rx, cancel_for_tui)
         .await;
 
-    // If user cancelled, abort init task early instead of waiting for it
-    let init_result = if cancel_token.is_cancelled() {
+    // If user cancelled, abort init task early
+    if cancel_token.is_cancelled() {
         info!("User cancelled, aborting initialization task");
         init_handle.abort();
-        // Brief wait for abort to take effect, then continue to cleanup
-        match tokio::time::timeout(Duration::from_millis(500), init_handle).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Ok(InitResult {
-                cleanup_handle: tokio::spawn(async {}),
-            }),
-            Err(_) => Ok(InitResult {
-                cleanup_handle: tokio::spawn(async {}),
-            }),
-        }
-    } else {
-        init_handle.await?
-    };
-
-    // Update instances from app state (TUI may have more recent data)
-    for (instance_type, state) in &app.instances.data {
-        instances.insert(instance_type.clone(), state.clone());
-    }
-
-    // Log any initialization errors
-    if let Err(e) = &init_result {
+        let _ = tokio::time::timeout(Duration::from_millis(500), init_handle).await;
+    } else if let Err(e) = init_handle.await? {
         error!(error = ?e, "Initialization failed");
     }
 
-    // Get the cleanup handle (consuming init_result)
-    let cleanup_handle = match init_result {
-        Ok(result) => result.cleanup_handle,
-        Err(_) => tokio::spawn(async {}),
-    };
+    // Take engine out of app (we need ownership for spawning cleanup)
+    if let Some(engine) = app.engine.take() {
+        let cleanup_join =
+            tokio::spawn(async move { engine.cleanup(|p| info!("{}", p.current_step)).await });
 
-    // Send full cleanup request to the cleanup executor
-    let _ = cleanup_tx
-        .send(CleanupRequest::FullCleanup {
-            region: config.aws.region.clone(),
-            keep: config.flags.keep,
-            run_id: run_id.clone(),
-            bucket_name: bucket_name.clone(),
-            instances: instances.clone(),
-            security_group_id: None,
-            iam_role_name: None,
-            sg_rules: Vec::new(),
-        })
-        .await;
-
-    // Drop the sender so the cleanup executor knows no more requests are coming
-    drop(cleanup_tx);
-
-    // Wrap the cleanup handle to match expected signature
-    let cleanup_handle_wrapped = tokio::spawn(async move {
-        let _ = cleanup_handle.await;
-        Ok::<(), anyhow::Error>(())
-    });
-
-    // Run cleanup phase TUI loop (shows progress until cleanup completes)
-    app.run_cleanup_phase(&mut terminal, cleanup_handle_wrapped, rx)
-        .await?;
+        // Show cleanup phase TUI while cleanup runs
+        app.run_cleanup_phase(&mut terminal, cleanup_join, rx)
+            .await?;
+    }
 
     // Restore terminal
     disable_raw_mode()?;
@@ -354,30 +111,29 @@ pub async fn run_benchmarks_with_tui(
     }
 
     // Print results and write output
-    BenchmarkInitializer::report_results(&config, run_id.as_str(), &instances).await?;
+    // (engine was consumed by cleanup, use app.instances which has synced state)
+    print_results_summary(&app.instances.data);
+    write_results(&config, run_id.as_str(), &app.instances.data).await?;
 
     tui_result
 }
 
-/// Result from initialization task
-pub struct InitResult {
-    pub cleanup_handle: tokio::task::JoinHandle<()>,
-}
-
 /// Parameters for the background initialization task.
-pub struct InitTaskConfig {
-    pub config: RunConfig,
-    pub run_id: RunId,
-    pub bucket_name: String,
-    pub agent_x86_64: Option<String>,
-    pub agent_aarch64: Option<String>,
-    pub tx: mpsc::Sender<TuiMessage>,
-    pub cancel: CancellationToken,
-    pub cleanup_rx: mpsc::Receiver<CleanupRequest>,
+struct InitTaskConfig {
+    config: RunConfig,
+    run_id: RunId,
+    bucket_name: String,
+    agent_x86_64: Option<String>,
+    agent_aarch64: Option<String>,
+    tx: mpsc::Sender<TuiMessage>,
 }
 
-/// Background task that runs initialization and sends updates to TUI
-pub async fn run_init_task(params: InitTaskConfig) -> Result<InitResult> {
+/// Background task that runs initialization and sends updates to TUI.
+///
+/// When initialization succeeds, sends `TuiMessage::InitComplete(engine)`.
+/// gRPC log streaming is started before sending the engine, so logs
+/// flow to the TUI via `ConsoleOutputAppend` messages.
+async fn run_init_task(params: InitTaskConfig) -> Result<()> {
     let InitTaskConfig {
         config,
         run_id,
@@ -385,61 +141,26 @@ pub async fn run_init_task(params: InitTaskConfig) -> Result<InitResult> {
         agent_x86_64,
         agent_aarch64,
         tx,
-        cancel,
-        cleanup_rx,
     } = params;
 
-    let cancel_for_monitoring = cancel.clone();
-    let reporter = Reporter::channel(tx.clone(), cancel);
-    let runner = BenchmarkInitializer::new(
+    let reporter = Reporter::channel(tx.clone());
+    let engine = super::init::initialize(
         &config,
-        run_id.clone(),
+        run_id,
         bucket_name,
         agent_x86_64,
         agent_aarch64,
-    );
+        &reporter,
+    )
+    .await?;
 
-    let ctx = runner.initialize(&reporter).await?;
+    // Start gRPC log streaming (sends ConsoleOutputAppend to TUI channel)
+    engine.start_streaming(Some(tx.clone()));
 
-    let instances = ctx.instances;
-    let init_ips = instances_with_ips(&instances);
-    let coordinator_tls_config = ctx.coordinator_tls_config;
+    // Send the engine to the TUI (this transitions to Running phase)
+    let _ = tx.send(TuiMessage::InitComplete(Box::new(engine))).await;
 
-    // Send TLS config to TUI for status polling
-    let _ = tx
-        .send(TuiMessage::TlsConfig {
-            config: coordinator_tls_config.clone(),
-        })
-        .await;
-
-    // Switch to running phase
-    let _ = tx.send(TuiMessage::Phase(InitPhase::Running)).await;
-
-    // Clone TLS config for cleanup executor before moving into streaming
-    let tls_for_cleanup = Some(coordinator_tls_config.clone());
-
-    // Start gRPC log streaming via shared runner
-    runner.start_streaming(&init_ips, coordinator_tls_config, Some(tx.clone()));
-
-    // Start bootstrap failure monitoring via shared runner
-    runner.start_bootstrap_monitoring(&instances, tx.clone(), cancel_for_monitoring);
-
-    // Spawn cleanup executor to handle cleanup requests from TUI
-    let region_for_cleanup = config.aws.region.clone();
-    let run_id_for_cleanup = run_id.clone();
-    let tx_for_cleanup = tx.clone();
-    let cleanup_handle = tokio::spawn(async move {
-        cleanup_executor(
-            cleanup_rx,
-            region_for_cleanup,
-            tx_for_cleanup,
-            run_id_for_cleanup,
-            tls_for_cleanup,
-        )
-        .await;
-    });
-
-    Ok(InitResult { cleanup_handle })
+    Ok(())
 }
 
 // ─── CLI (no-TUI) Mode ─────────────────────────────────────────────────────
@@ -452,78 +173,73 @@ pub async fn run_benchmarks_no_tui(
     agent_x86_64: Option<String>,
     agent_aarch64: Option<String>,
 ) -> Result<()> {
+    use super::events::RunEvent;
+
     let reporter = Reporter::Log;
-    let runner = BenchmarkInitializer::new(
+    let mut engine = super::init::initialize(
         &config,
         run_id.clone(),
         bucket_name.clone(),
         agent_x86_64,
         agent_aarch64,
-    );
+        &reporter,
+    )
+    .await?;
+    let has_streaming = !engine.instances_with_ips().is_empty();
+    engine.start_streaming(None);
 
-    let ctx = runner.initialize(&reporter).await?;
-
-    // Extract what we need from the context
-    let mut instances = ctx.instances;
-    let coordinator_tls_config = ctx.coordinator_tls_config;
-    let ec2 = ctx.ec2;
-    let security_group_id = ctx.security_group_id;
-    let iam_role_name = ctx.iam_role_name;
-    let sg_rules = ctx.sg_rules;
-    let init_ips = instances_with_ips(&instances);
-    let has_streaming = !init_ips.is_empty();
-    runner.start_streaming(&init_ips, coordinator_tls_config.clone(), None);
-
-    // Track start time for reporting and timeout
     let start_time = chrono::Utc::now();
-    let start_instant = Instant::now();
-
-    // Track which instances we've sent ack to
-    let mut acked_instances: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     print_no_tui_header(&config, &run_id, has_streaming, start_time);
 
-    // Polling loop
+    // Polling loop — driven by RunEngine
     loop {
-        // Check for timeout
-        let elapsed_secs = start_instant.elapsed().as_secs();
-        if config.flags.timeout > 0 && elapsed_secs > config.flags.timeout {
-            warn!(
-                elapsed_secs,
-                timeout = config.flags.timeout,
-                "Run timeout exceeded"
-            );
-            println!("\n  TIMEOUT: Run exceeded {}s limit", config.flags.timeout);
-            for (instance_type, state) in instances.iter_mut() {
-                if !state.is_terminal() {
-                    error!(instance_type = %instance_type, "Instance timed out");
-                    state.status = InstanceStatus::Failed;
-                }
+        // Check timeout
+        let timeout_events = engine.check_timeout();
+        for event in &timeout_events {
+            if let RunEvent::Timeout { instance_type } = event {
+                println!("\n  TIMEOUT: {} exceeded limit", instance_type);
             }
+        }
+        if !timeout_events.is_empty() {
             break;
         }
 
-        let poll_ips = instances_with_ips(&instances);
-        let status_map = if poll_ips.is_empty() {
-            HashMap::new()
-        } else {
-            GrpcStatusPoller::new(&poll_ips, GRPC_PORT, coordinator_tls_config.clone())
-                .poll_status()
-                .await
-        };
-        let result = apply_status_updates(
-            &mut instances,
-            &status_map,
-            &mut acked_instances,
-            run_id.as_str(),
-            &coordinator_tls_config,
-            Some(&ec2),
-        )
-        .await;
+        // Poll gRPC status
+        if let Some(req) = engine.prepare_poll() {
+            let status_map = req.execute().await;
+            let events = engine.apply_poll_results(status_map).await;
+            for event in &events {
+                match event {
+                    RunEvent::InstanceTerminal { instance_type } => {
+                        info!(instance_type = %instance_type, "Instance completed, auto-terminating");
+                    }
+                    RunEvent::BootstrapFailure {
+                        instance_type,
+                        pattern,
+                    } => {
+                        println!("\n  Bootstrap failure on {}: {}", instance_type, pattern);
+                    }
+                    _ => {}
+                }
+            }
+        }
 
-        print_no_tui_progress(&instances, &result, start_time);
+        // Check bootstrap failures for instances not yet responding to gRPC
+        let bootstrap_events = engine.check_bootstrap_failures().await;
+        for event in &bootstrap_events {
+            if let RunEvent::BootstrapFailure {
+                instance_type,
+                pattern,
+            } = event
+            {
+                println!("\n  Bootstrap failure on {}: {}", instance_type, pattern);
+            }
+        }
 
-        if result.all_complete {
+        print_no_tui_progress(engine.instances(), start_time);
+
+        if engine.is_all_complete() {
             break;
         }
 
@@ -531,20 +247,10 @@ pub async fn run_benchmarks_no_tui(
     }
 
     // Cleanup
-    full_cleanup(FullCleanupConfig {
-        region: &config.aws.region,
-        keep: config.flags.keep,
-        bucket_name: &bucket_name,
-        instances: &instances,
-        security_group_id: security_group_id.as_deref(),
-        iam_role_name: iam_role_name.as_deref(),
-        sg_rules: &sg_rules,
-        reporter: &reporter,
-    })
-    .await?;
+    engine.cleanup(|p| info!("{}", p.current_step)).await?;
 
     // Print results and write output
-    BenchmarkInitializer::report_results(&config, run_id.as_str(), &instances).await?;
+    engine.report_results().await?;
 
     info!("Benchmark run complete");
     Ok(())
@@ -579,12 +285,13 @@ fn print_no_tui_header(
 
 fn print_no_tui_progress(
     instances: &HashMap<String, InstanceState>,
-    result: &PollResult,
     start_time: chrono::DateTime<chrono::Utc>,
 ) {
+    let total_runs: u32 = instances.values().map(|s| s.total_runs).sum();
+    let completed_runs: u32 = instances.values().map(|s| s.run_progress).sum();
     let elapsed = chrono::Utc::now() - start_time;
-    let pct = if result.total_runs > 0 {
-        result.completed_runs as f64 / result.total_runs as f64 * 100.0
+    let pct = if total_runs > 0 {
+        completed_runs as f64 / total_runs as f64 * 100.0
     } else {
         0.0
     };
@@ -593,8 +300,8 @@ fn print_no_tui_progress(
         elapsed.num_hours(),
         elapsed.num_minutes() % 60,
         elapsed.num_seconds() % 60,
-        result.completed_runs,
-        result.total_runs,
+        completed_runs,
+        total_runs,
         pct
     );
     for (instance_type, state) in instances.iter() {

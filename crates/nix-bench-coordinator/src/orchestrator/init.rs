@@ -15,7 +15,7 @@ use crate::aws::resource_guard::{
     SecurityGroupRuleGuard, create_cleanup_system,
 };
 use crate::aws::{
-    AccountId, Ec2Client, IamClient, S3Client, classify_anyhow_error, get_coordinator_public_ip,
+    Ec2Client, IamClient, S3Client, classify_anyhow_error, get_coordinator_public_ip,
     get_current_account_id,
 };
 use crate::config::{Architecture, RunConfig};
@@ -48,64 +48,56 @@ struct InitServices<'a> {
     guards: &'a mut ResourceGuards,
 }
 
-/// Context holding all resources created during initialization
-pub struct InitContext {
-    pub run_id: RunId,
-    pub bucket_name: String,
-    pub account_id: AccountId,
-    pub region: String,
-    pub ec2: Ec2Client,
-    pub s3: S3Client,
-    pub instance_profile_name: Option<String>,
-    pub security_group_id: Option<String>,
-    pub coordinator_ip: Option<String>,
-    pub agent_certs: HashMap<String, (String, String, String)>,
-    /// TLS configuration for coordinator (required for mTLS)
-    pub coordinator_tls_config: TlsConfig,
-    pub instances: HashMap<String, InstanceState>,
-    /// IAM role name created by nix-bench (for cleanup)
-    pub iam_role_name: Option<String>,
-    /// Security group rules added by nix-bench (sg_id:cidr pairs, for cleanup)
-    pub sg_rules: Vec<String>,
+/// Initialize all AWS resources and return a `RunEngine` ready to run benchmarks.
+///
+/// This is the single entry point for benchmark initialization. It creates
+/// S3 buckets, IAM roles, security groups, launches EC2 instances, generates
+/// TLS certificates, and uploads agent configs — reporting progress through
+/// `reporter` along the way.
+#[instrument(skip_all, fields(run_id = %run_id, bucket = %bucket_name))]
+pub async fn initialize(
+    config: &RunConfig,
+    run_id: RunId,
+    bucket_name: String,
+    agent_x86_64: Option<String>,
+    agent_aarch64: Option<String>,
+    reporter: &Reporter,
+) -> Result<super::RunEngine> {
+    let init = Initializer {
+        config,
+        run_id,
+        bucket_name,
+        agent_x86_64,
+        agent_aarch64,
+    };
+    let ctx = init.run(reporter).await?;
+    Ok(super::RunEngine::from_init_context(config, ctx))
 }
 
-impl InitContext {
-    pub fn has_instances(&self) -> bool {
-        !self.instances.is_empty()
-    }
+/// Context holding all resources created during initialization (internal)
+pub(super) struct InitContext {
+    pub(super) run_id: RunId,
+    pub(super) bucket_name: String,
+    pub(super) ec2: Ec2Client,
+    pub(super) security_group_id: Option<String>,
+    pub(super) coordinator_tls_config: TlsConfig,
+    pub(super) instances: HashMap<String, InstanceState>,
+    pub(super) iam_role_name: Option<String>,
+    pub(super) sg_rules: Vec<String>,
 }
 
-/// Benchmark runner that handles initialization and provides context
-/// for both TUI and non-TUI execution modes.
-pub struct BenchmarkInitializer<'a> {
-    pub config: &'a RunConfig,
-    pub run_id: RunId,
-    pub bucket_name: String,
-    pub agent_x86_64: Option<String>,
-    pub agent_aarch64: Option<String>,
+/// Internal initializer that handles AWS resource setup.
+struct Initializer<'a> {
+    config: &'a RunConfig,
+    run_id: RunId,
+    bucket_name: String,
+    agent_x86_64: Option<String>,
+    agent_aarch64: Option<String>,
 }
 
-impl<'a> BenchmarkInitializer<'a> {
-    pub fn new(
-        config: &'a RunConfig,
-        run_id: RunId,
-        bucket_name: String,
-        agent_x86_64: Option<String>,
-        agent_aarch64: Option<String>,
-    ) -> Self {
-        Self {
-            config,
-            run_id,
-            bucket_name,
-            agent_x86_64,
-            agent_aarch64,
-        }
-    }
-
-    #[instrument(skip_all, fields(run_id = %self.run_id, bucket = %self.bucket_name))]
-    pub async fn initialize(&self, reporter: &Reporter) -> Result<InitContext> {
+impl<'a> Initializer<'a> {
+    async fn run(&self, reporter: &Reporter) -> Result<InitContext> {
         reporter.report_phase(InitPhase::Starting);
-        reporter.report_run_info(self.run_id.as_str(), &self.bucket_name);
         info!(run_id = %self.run_id, bucket = %self.bucket_name, "Starting benchmark run");
 
         // Phase 1: AWS setup
@@ -165,7 +157,7 @@ impl<'a> BenchmarkInitializer<'a> {
             builder: &builder,
             guards: &mut guards,
         };
-        let (security_group_id, coordinator_ip, sg_rule_ids) =
+        let (security_group_id, _coordinator_ip, sg_rule_ids) =
             self.setup_security_group(&mut services).await?;
 
         // Phase 6: Launch instances
@@ -215,14 +207,8 @@ impl<'a> BenchmarkInitializer<'a> {
         Ok(InitContext {
             run_id: self.run_id.clone(),
             bucket_name: self.bucket_name.clone(),
-            account_id,
-            region: self.config.aws.region.clone(),
             ec2,
-            s3,
-            instance_profile_name,
             security_group_id,
-            coordinator_ip,
-            agent_certs,
             coordinator_tls_config,
             instances,
             iam_role_name,

@@ -3,7 +3,6 @@
 use super::{App, InitPhase};
 use crate::aws::GrpcInstanceStatus;
 use crate::config::RunConfig;
-use crate::orchestrator::CleanupRequest;
 use crate::tui::ui;
 use anyhow::Result;
 use crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
@@ -25,7 +24,7 @@ impl App {
     ) -> Result<()> {
         let (_tx, mut rx) = tokio::sync::mpsc::channel(1);
         let cancel = CancellationToken::new();
-        self.run_with_channel(terminal, &mut rx, cancel, None).await
+        self.run_with_channel(terminal, &mut rx, cancel).await
     }
 
     /// Main event loop with channel for receiving updates
@@ -34,7 +33,6 @@ impl App {
         terminal: &mut Terminal<B>,
         rx: &mut tokio::sync::mpsc::Receiver<crate::tui::TuiMessage>,
         cancel: CancellationToken,
-        cleanup_tx: Option<tokio::sync::mpsc::Sender<CleanupRequest>>,
     ) -> Result<()> {
         // Set up Ctrl+C handler (only once per process)
         if !CTRLC_HANDLER_INSTALLED.swap(true, Ordering::SeqCst) {
@@ -98,20 +96,24 @@ impl App {
                 _ = tick_interval.tick() => {
                     self.tick_throbbers();
 
-                    // Only transition to Completed when all instances are done AND
-                    // we've captured all their results. This prevents exiting before
-                    // the final duration is polled.
+                    // Use engine for completion detection when available
+                    let (all_complete, all_captured) = if let Some(engine) = &self.engine {
+                        (engine.is_all_complete(), engine.all_results_captured())
+                    } else {
+                        (self.all_complete(), self.all_results_captured())
+                    };
+
                     if matches!(self.lifecycle.init_phase, InitPhase::Running)
-                        && self.all_complete()
-                        && self.all_results_captured()
+                        && all_complete
+                        && all_captured
                     {
                         self.lifecycle.init_phase = InitPhase::Completed;
-                        if self.context.completion_time.is_none() {
-                            self.context.completion_time = Some(std::time::Instant::now());
+                        if self.completion_time.is_none() {
+                            self.completion_time = Some(std::time::Instant::now());
                         }
                     }
 
-                    if let Some(completed_at) = self.context.completion_time {
+                    if let Some(completed_at) = self.completion_time {
                         if completed_at.elapsed() >= Duration::from_secs(2) {
                             self.lifecycle.should_quit = true;
                         }
@@ -127,21 +129,25 @@ impl App {
                 // Receive gRPC status updates from background polling task
                 Some(status_map) = grpc_rx.recv() => {
                     if !status_map.is_empty() {
-                        let to_cleanup = self.update_from_grpc_status(&status_map);
-                        // Send cleanup requests for newly completed instances
-                        if let Some(ref tx) = cleanup_tx {
-                            for request in to_cleanup {
-                                // Use try_send to avoid blocking the TUI
-                                let _ = tx.try_send(request);
-                            }
+                        if let Some(engine) = &mut self.engine {
+                            let events = engine.apply_poll_results(status_map).await;
+                            self.handle_run_events(events);
                         }
                     }
                 }
 
-                // Trigger background gRPC polling (non-blocking spawn)
+                // Trigger background gRPC polling via engine (non-blocking spawn)
                 _ = grpc_poll_interval.tick() => {
                     if matches!(self.lifecycle.init_phase, InitPhase::Running) {
-                        self.spawn_grpc_poll(grpc_tx.clone());
+                        if let Some(engine) = &self.engine {
+                            if let Some(req) = engine.prepare_poll() {
+                                let tx = grpc_tx.clone();
+                                tokio::spawn(async move {
+                                    let results = req.execute().await;
+                                    let _ = tx.send(results).await;
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -256,17 +262,11 @@ impl App {
                 self.lifecycle.init_phase = phase;
             }
             TuiMessage::AccountInfo { account_id } => {
-                self.context.aws_account_id = Some(account_id);
+                self.aws_account_id = Some(account_id);
             }
-            TuiMessage::RunInfo {
-                run_id,
-                bucket_name,
-            } => {
-                self.context.run_id = Some(run_id);
-                self.context.bucket_name = Some(bucket_name);
-            }
-            TuiMessage::TlsConfig { config } => {
-                self.context.tls_config = Some(config);
+            TuiMessage::InitComplete(engine) => {
+                self.engine = Some(*engine);
+                self.lifecycle.init_phase = InitPhase::Running;
             }
             TuiMessage::InstanceUpdate {
                 instance_type,
@@ -274,7 +274,6 @@ impl App {
                 status,
                 public_ip,
                 run_progress,
-                durations,
             } => {
                 if let Some(state) = self.instances.data.get_mut(&instance_type) {
                     state.instance_id = instance_id;
@@ -288,24 +287,19 @@ impl App {
                     if let Some(rp) = run_progress {
                         state.run_progress = rp;
                     }
-                    if let Some(d) = durations {
-                        state.run_results = d
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &dur)| {
-                                nix_bench_common::RunResult::success((i + 1) as u32, dur)
-                            })
-                            .collect();
-                    }
                 }
                 // Re-sort instances by average duration (fastest first)
-                self.instances.sort_by_average_duration();
+                self.sort_instances_by_duration();
             }
             TuiMessage::ConsoleOutput {
                 instance_type,
                 output,
             } => {
-                if let Some(state) = self.instances.data.get_mut(&instance_type) {
+                if let Some(engine) = &mut self.engine {
+                    if let Some(state) = engine.instances_mut().get_mut(&instance_type) {
+                        state.console_output.replace(&output);
+                    }
+                } else if let Some(state) = self.instances.data.get_mut(&instance_type) {
                     state.console_output.replace(&output);
                 }
             }
@@ -313,10 +307,21 @@ impl App {
                 instance_type,
                 line,
             } => {
-                if let Some(state) = self.instances.data.get_mut(&instance_type) {
+                if let Some(engine) = &mut self.engine {
+                    if let Some(state) = engine.instances_mut().get_mut(&instance_type) {
+                        state.console_output.push_line(line);
+                    }
+                } else if let Some(state) = self.instances.data.get_mut(&instance_type) {
                     state.console_output.push_line(line);
                 }
             }
+        }
+    }
+
+    /// Handle events from the RunEngine, updating the App's view state.
+    fn handle_run_events(&mut self, events: Vec<crate::orchestrator::RunEvent>) {
+        if !events.is_empty() {
+            self.sort_instances_by_duration();
         }
     }
 }

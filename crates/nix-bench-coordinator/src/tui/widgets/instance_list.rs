@@ -57,22 +57,23 @@ fn format_trend_time(durations: &[f64]) -> (&'static str, Color, String) {
 pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
     let t = theme::theme();
 
+    // Read from engine (post-init) or pre-init placeholder data.
+    // Use inline field access to allow split borrows with app.scroll.
+    let instance_data = match &app.engine {
+        Some(engine) => engine.instances(),
+        None => &app.instances.data,
+    };
+
     // Calculate R/C/F counts for title bar
-    let running = app
-        .instances
-        .data
+    let running = instance_data
         .values()
         .filter(|s| s.status == InstanceStatus::Running)
         .count();
-    let complete = app
-        .instances
-        .data
+    let complete = instance_data
         .values()
         .filter(|s| s.status == InstanceStatus::Complete)
         .count();
-    let failed = app
-        .instances
-        .data
+    let failed = instance_data
         .values()
         .filter(|s| s.status == InstanceStatus::Failed)
         .count();
@@ -88,7 +89,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
         .order
         .iter()
         .filter_map(|instance_type| {
-            let state = app.instances.data.get(instance_type)?;
+            let state = instance_data.get(instance_type)?;
             // Use space for running instances (throbber rendered separately)
             let symbol = if state.status == InstanceStatus::Running {
                 " "
@@ -126,7 +127,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
     // Title with R/C/F counts
     let title = format!(
         " Instances ({}) │ R:{} C:{} F:{} ",
-        app.instances.data.len(),
+        instance_data.len(),
         running,
         complete,
         failed
@@ -158,12 +159,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) -> usize {
         if i < scroll_offset || i >= scroll_offset + visible_count {
             continue; // Not visible
         }
-        let state = match app.instances.data.get(instance_type) {
-            Some(s) => s,
-            None => continue,
+        // Check running status using a scoped borrow to avoid conflicting with app.scroll
+        let is_running = {
+            let data = match &app.engine {
+                Some(engine) => engine.instances(),
+                None => &app.instances.data,
+            };
+            data.get(instance_type)
+                .map(|s| s.status == InstanceStatus::Running)
+                .unwrap_or(false)
         };
-        if state.status != InstanceStatus::Running {
-            continue; // Not running
+        if !is_running {
+            continue;
         }
 
         let row_y = inner_y + (i - scroll_offset) as u16;

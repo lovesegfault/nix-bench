@@ -58,13 +58,19 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         // Ensure scroll state exists for this instance
         app.ensure_scroll_state(&instance_key);
 
-        if let Some(instance) = app.instances.data.get(&instance_key) {
+        // Read from engine (post-init) or pre-init placeholder data.
+        // Use inline field access to allow split borrows with app.scroll.
+        let instance_data = match &app.engine {
+            Some(engine) => engine.instances(),
+            None => &app.instances.data,
+        };
+        if let Some(instance) = instance_data.get(&instance_key) {
             let scroll_state = app.scroll.log_scroll_states.get_mut(&instance_key).unwrap();
             let logs_area = instance_detail::render(
                 frame,
                 main_chunks[1],
                 instance,
-                app.context.total_runs,
+                app.total_runs,
                 scroll_state,
                 app.scroll.log_auto_follow,
                 app.ui.focus,
@@ -111,7 +117,6 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
     // Format account ID display (show last 4 digits if available)
     let account_display = app
-        .context
         .aws_account_id
         .as_ref()
         .map(|id: &String| format!("AWS:…{}", &id[id.len().saturating_sub(4)..]))
@@ -466,17 +471,17 @@ mod tests {
     #[test]
     fn render_does_not_panic_various_states() {
         // Empty state
-        render_ok(80, 24, &mut App::new_loading(&[], 0, None));
+        render_ok(80, 24, &mut App::new_loading(&[], 0));
         // Normal instances
         let instances = vec!["m5.large".to_string(), "c5.xlarge".to_string()];
-        render_ok(80, 24, &mut App::new_loading(&instances, 10, None));
+        render_ok(80, 24, &mut App::new_loading(&instances, 10));
         // Tiny terminal
-        render_ok(10, 5, &mut App::new_loading(&["m5.large".into()], 5, None));
+        render_ok(10, 5, &mut App::new_loading(&["m5.large".into()], 5));
     }
 
     #[test]
     fn render_does_not_panic_popups() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
         app.ui.show_help = true;
         render_ok(80, 24, &mut app);
 
@@ -487,7 +492,7 @@ mod tests {
 
     #[test]
     fn render_does_not_panic_with_large_log_buffer() {
-        let mut app = App::new_loading(&["m5.large".to_string()], 5, None);
+        let mut app = App::new_loading(&["m5.large".to_string()], 5);
         if let Some(state) = app.instances.data.get_mut("m5.large") {
             for i in 0..1000 {
                 state.console_output.push_line(format!("Log line {i}"));

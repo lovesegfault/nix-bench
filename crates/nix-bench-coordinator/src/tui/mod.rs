@@ -9,7 +9,7 @@ pub mod widgets;
 
 pub use app::{
     App, CleanupProgress, InitPhase, InstancesState, LifecycleState, LogBuffer, PanelFocus,
-    RunContext, ScrollState, UiState,
+    ScrollState, UiState,
 };
 pub use input::{KeyHandler, KeyResult};
 pub use log_capture::{LogCapture, LogCaptureLayer};
@@ -33,16 +33,18 @@ pub fn truncate_str(s: &str, max_width: usize) -> String {
 }
 
 /// Message sent to TUI to update state
-#[derive(Debug, Clone)]
+///
+/// During init, the background task sends phase/account/run messages.
+/// When init completes, it sends `InitComplete` with the `RunEngine`.
+/// After that, log streaming messages may still arrive via `ConsoleOutputAppend`.
+#[derive(Debug)]
 pub enum TuiMessage {
     /// Update init phase
     Phase(InitPhase),
     /// Set AWS account info
     AccountInfo { account_id: String },
-    /// Set run ID and bucket name
-    RunInfo { run_id: String, bucket_name: String },
-    /// Set TLS configuration for gRPC status polling
-    TlsConfig { config: nix_bench_common::TlsConfig },
+    /// Background init completed — here is the engine
+    InitComplete(Box<crate::orchestrator::RunEngine>),
     /// Update instance state
     InstanceUpdate {
         instance_type: String,
@@ -50,7 +52,6 @@ pub enum TuiMessage {
         status: crate::orchestrator::InstanceStatus,
         public_ip: Option<String>,
         run_progress: Option<u32>,
-        durations: Option<Vec<f64>>,
     },
     /// Update console output for an instance (full replacement)
     ConsoleOutput {

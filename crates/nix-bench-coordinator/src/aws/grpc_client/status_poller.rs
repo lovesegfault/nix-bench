@@ -100,10 +100,7 @@ impl GrpcStatusPoller {
         {
             Ok(response) => {
                 let status = response.into_inner();
-                let status_code = StatusCode::from_repr(status.status_code);
-
-                let run_results: Vec<RunResult> =
-                    status.run_results.into_iter().map(Into::into).collect();
+                let status_code = StatusCode::try_from(status.status_code).ok();
 
                 Some((
                     instance_type.to_string(),
@@ -112,7 +109,7 @@ impl GrpcStatusPoller {
                         run_progress: Some(status.run_progress),
                         total_runs: Some(status.total_runs),
                         dropped_log_count: status.dropped_log_count,
-                        run_results,
+                        run_results: status.run_results,
                         attr: nix_bench_common::proto::non_empty(status.attr),
                         system: nix_bench_common::proto::non_empty(status.system),
                         error_message: nix_bench_common::proto::non_empty(status.error_message),

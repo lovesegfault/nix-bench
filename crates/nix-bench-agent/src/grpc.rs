@@ -1,12 +1,12 @@
 //! gRPC server for real-time log streaming
 
 use anyhow::Result;
+use nix_bench_common::RunResult;
 use nix_bench_common::proto::{
     AckCompleteRequest, AckCompleteResponse, CancelBenchmarkRequest, CancelBenchmarkResponse,
-    LogEntry, LogStream, LogStreamServer, RunResult as ProtoRunResult,
-    StatusCode as ProtoStatusCode, StatusRequest, StatusResponse, StreamLogsRequest,
+    LogEntry, LogStream, LogStreamServer, StatusRequest, StatusResponse, StreamLogsRequest,
 };
-use nix_bench_common::{Architecture, RunResult, TlsConfig};
+use nix_bench_common::{Architecture, TlsConfig};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
-// Re-export StatusCode from common for convenience
+// Re-export StatusCode for convenience (used by benchmark.rs, main.rs)
 pub use nix_bench_common::StatusCode;
 
 /// Agent status for gRPC queries
@@ -229,16 +229,12 @@ impl LogStream for LogStreamService {
     ) -> Result<Response<StatusResponse>, Status> {
         let status = self.status.read().await;
 
-        let proto_status_code: ProtoStatusCode = status.status.into();
-        let run_results: Vec<ProtoRunResult> =
-            status.run_results.iter().cloned().map(Into::into).collect();
-
         Ok(Response::new(StatusResponse {
-            status_code: proto_status_code.into(),
+            status_code: status.status.into(),
             run_progress: status.run_progress,
             total_runs: status.total_runs,
             dropped_log_count: self.dropped_messages.load(Ordering::Relaxed),
-            run_results,
+            run_results: status.run_results.clone(),
             attr: status.attr.clone(),
             system: status.system.to_string(),
             protocol_version: 1,
@@ -426,7 +422,7 @@ mod tests {
             .unwrap();
         let inner = response.into_inner();
 
-        assert_eq!(inner.status_code, ProtoStatusCode::Running as i32);
+        assert_eq!(inner.status_code, StatusCode::Running as i32);
         assert_eq!(inner.run_progress, 3);
         assert_eq!(inner.total_runs, 10);
         assert_eq!(inner.dropped_log_count, 0);

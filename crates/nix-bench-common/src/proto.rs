@@ -22,37 +22,29 @@ pub use nix_bench::{
     LogEntry, RunResult, StatusCode, StatusRequest, StatusResponse, StreamLogsRequest,
 };
 
-// --- Proto <-> Domain type conversions ---
-
-impl From<crate::StatusCode> for StatusCode {
-    fn from(s: crate::StatusCode) -> Self {
-        match s {
-            crate::StatusCode::Pending => StatusCode::Pending,
-            crate::StatusCode::Running => StatusCode::Running,
-            crate::StatusCode::Complete => StatusCode::Complete,
-            crate::StatusCode::Failed => StatusCode::Failed,
-            crate::StatusCode::Bootstrap => StatusCode::Bootstrap,
-            crate::StatusCode::Warmup => StatusCode::Warmup,
-        }
+impl StatusCode {
+    /// Check if the status represents a terminal state
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Complete | Self::Failed)
     }
 }
 
-impl From<crate::RunResult> for RunResult {
-    fn from(r: crate::RunResult) -> Self {
-        RunResult {
-            run_number: r.run_number,
-            duration_secs: r.duration_secs,
-            success: r.success,
+impl RunResult {
+    /// Create a successful run result
+    pub fn success(run_number: u32, duration_secs: f64) -> Self {
+        Self {
+            run_number,
+            duration_secs,
+            success: true,
         }
     }
-}
 
-impl From<RunResult> for crate::RunResult {
-    fn from(r: RunResult) -> Self {
-        crate::RunResult {
-            run_number: r.run_number,
-            duration_secs: r.duration_secs,
-            success: r.success,
+    /// Create a failed run result
+    pub fn failure(run_number: u32) -> Self {
+        Self {
+            run_number,
+            duration_secs: 0.0,
+            success: false,
         }
     }
 }

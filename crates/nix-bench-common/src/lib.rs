@@ -7,24 +7,20 @@
 //!
 //! - [`agent_config`]: Agent configuration for benchmark runs
 //! - [`defaults`]: Default configuration values
-//! - [`run_result`]: Benchmark run result type
+//! - [`proto`]: Protocol buffer types and gRPC service definitions
 //! - [`stats`]: Duration statistics (min/avg/max)
-//! - [`status`]: Canonical status codes for gRPC communication
 //! - [`tls`]: TLS certificate generation for mTLS
 
 pub mod agent_config;
 pub mod defaults;
 pub mod proto;
-pub mod run_result;
 pub mod stats;
-pub mod status;
 pub mod tls;
 
 // Re-export commonly used types
 pub use agent_config::AgentConfig;
-pub use run_result::RunResult;
+pub use proto::{RunResult, StatusCode};
 pub use stats::DurationStats;
-pub use status::StatusCode;
 pub use tls::{CertKeyPair, TlsConfig};
 
 // Re-export RunId for ergonomic use

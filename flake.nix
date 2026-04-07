@@ -90,6 +90,7 @@
               ];
               nativeBuildInputs = with pkgs; [
                 pkg-config
+                protobuf
               ];
             };
 
@@ -155,6 +156,7 @@
                     ];
                     nativeBuildInputs = with pkgs; [
                       pkg-config
+                      protobuf
                     ];
                     depsBuildBuild = with pkgs; [
                       stdenv.cc
@@ -287,6 +289,7 @@
                     # Rust development
                     rustToolchain
                     pkg-config
+                    protobuf
                     openssl
                     cargo-nextest
                     cargo-make

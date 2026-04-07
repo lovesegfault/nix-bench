@@ -36,7 +36,7 @@ async-stream = "0.3"
 # TLS
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rcgen = { version = "0.14", features = ["x509-parser"] }
-rand = "0.9"
+rand = "0.10"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -61,7 +61,7 @@ garde = { version = "0.22", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v7"] }
 backon = { version = "1", features = ["tokio-sleep"] }
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 derive_more = { version = "2", features = ["display", "from", "deref", "as_ref"] }
 
 # TUI (coordinator-only)
@@ -69,7 +69,7 @@ ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 tui-logger = { version = "0.18", features = ["tracing-support"] }
-throbber-widgets-tui = "0.10"
+throbber-widgets-tui = "0.11"
 tui-scrollview = "0.6"
 # State management (coordinator-only)
 comfy-table = "7"

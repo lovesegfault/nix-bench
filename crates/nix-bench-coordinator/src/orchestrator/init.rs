@@ -27,7 +27,7 @@ use nix_bench_common::RunId;
 use nix_bench_common::tls::{
     TlsConfig, generate_agent_cert, generate_ca, generate_coordinator_cert,
 };
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, error, info, instrument};
